@@ -1,0 +1,17 @@
+{
+  "name": "@quickrent/provider-web",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev -p 3003",
+    "build": "next build",
+    "start": "next start -p 3003",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "15.0.4",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  }
+}

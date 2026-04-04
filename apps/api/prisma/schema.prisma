@@ -1,0 +1,857 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleCode {
+  TENANT
+  LANDLORD
+  ADMIN
+  PROVIDER
+  COMMAND_CENTER
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum PropertyStatus {
+  DRAFT
+  PUBLISHED
+  RESERVED
+  BOOKED
+  OCCUPIED
+  INACTIVE
+}
+
+enum UnifiedRequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  QUEUED
+  ASSIGNED
+  EN_ROUTE
+  IN_PROGRESS
+  AWAITING_PAYMENT
+  COMPLETED
+  CANCELLED
+  REJECTED
+  FAILED
+  ESCALATED
+}
+
+enum RequestPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+  CRITICAL
+}
+
+enum CommandCenterStatus {
+  VISIBLE
+  ACTION_REQUIRED
+  MONITORING
+  RESOLVED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  WAIVED
+}
+
+enum BookingStatus {
+  DRAFT
+  RESERVED
+  CONFIRMED
+  CONTRACT_PENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIALLY_PAID
+  VOID
+  OVERDUE
+}
+
+enum ServiceRequestStatus {
+  PENDING
+  APPROVED
+  SCHEDULED
+  ASSIGNED
+  EN_ROUTE
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum InsuranceSubscriptionStatus {
+  PENDING
+  ACTIVE
+  LAPSED
+  CANCELLED
+}
+
+enum InsuranceClaimStatus {
+  FILED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum RewardTransactionType {
+  EARN
+  REDEEM
+  ADJUSTMENT
+  EXPIRE
+  BONUS
+}
+
+enum OfferType {
+  BOOKING
+  SERVICE
+  REWARD
+  INSURANCE
+}
+
+enum CommunityModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FLAGGED
+}
+
+enum NotificationChannel {
+  PUSH
+  EMAIL
+  SMS
+  IN_APP
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum ProviderType {
+  MOVING
+  MAINTENANCE
+  CLEANING
+  AIRPORT_TRANSFER
+  RIDE_HAILING
+  FOOD_DELIVERY
+  GROCERY
+  LAUNDRY
+  UTILITY_SUPPORT
+  INSURANCE
+  EXTERNAL
+}
+
+enum AdapterMode {
+  WEBHOOK
+  REST
+  SFTP
+  MESSAGE_BUS
+  MANUAL_ESCALATION
+}
+
+enum AuditSeverity {
+  INFO
+  WARNING
+  HIGH
+  CRITICAL
+}
+
+model User {
+  id                      String                   @id @default(cuid())
+  email                   String?                  @unique
+  phoneNumber             String?                  @unique
+  passwordHash            String?
+  fullName                String
+  locale                  String                   @default("en")
+  countryCode             String
+  status                  UserStatus               @default(ACTIVE)
+  isVerified              Boolean                  @default(false)
+  isProfileCompleted      Boolean                  @default(false)
+  lastLoginAt             DateTime?
+  avatarUrl               String?
+  metadata                Json?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  userRoles               UserRole[]
+  tenantProfile           TenantProfile?
+  landlordProfile         LandlordProfile?
+  providerProfiles        ProviderProfile[]
+  ownedProperties         Property[]               @relation("PropertyOwner")
+  favorites               Favorite[]
+  shortlists              Shortlist[]
+  unifiedRequests         UnifiedRequest[]         @relation("UnifiedRequestUser")
+  trackingEvents          UnifiedRequestTrackingEvent[]
+  bookings                Booking[]                @relation("BookingTenant")
+  payments                Payment[]                @relation("PaymentUser")
+  rewardWallet            RewardsWallet?
+  rewardTransactions      RewardTransaction[]
+  createdOffers           Offer[]                  @relation("OfferCreator")
+  communityPosts          CommunityPost[]
+  communityComments       CommunityComment[]
+  communityReports        CommunityReport[]
+  notifications           Notification[]
+  auditLogs               AuditLog[]               @relation("AuditActor")
+  viewingRequests         ViewingRequest[]
+  tripAssignments         ViewingTripAssignment[]  @relation("AssignmentAgent")
+}
+
+model Role {
+  id          String     @id @default(cuid())
+  code        RoleCode   @unique
+  name        String
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  userRoles   UserRole[]
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model TenantProfile {
+  id                    String                  @id @default(cuid())
+  userId                String                  @unique
+  preferredLanguage     String                  @default("en")
+  dateOfBirth           DateTime?
+  occupation            String?
+  monthlyBudgetMinor    Int?
+  preferredCity         String?
+  preferredDistricts    String[]
+  currentLat            Float?
+  currentLng            Float?
+  currentAddress        String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movingRequests        MovingRequest[]
+  maintenanceRequests   MaintenanceRequest[]
+  cleaningRequests      CleaningRequest[]
+  airportTransfers      AirportTransferRequest[]
+  insuranceSubs         InsuranceSubscription[]
+}
+
+model LandlordProfile {
+  id                   String     @id @default(cuid())
+  userId               String     @unique
+  companyName          String?
+  portfolioSize        Int        @default(0)
+  verificationStatus   String     @default("pending")
+  payoutPreference     String?
+  supportEmail         String?
+  supportPhone         String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  properties           Property[]
+}
+
+model ProviderProfile {
+  id                   String     @id @default(cuid())
+  userId               String
+  providerId           String
+  title                String
+  isPrimaryContact     Boolean    @default(false)
+  currentLat           Float?
+  currentLng           Float?
+  availabilityStatus   String     @default("offline")
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider             Provider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, providerId])
+}
+
+model Property {
+  id                    String              @id @default(cuid())
+  landlordProfileId     String
+  ownerUserId           String
+  countryCode           String
+  city                  String
+  district              String?
+  title                 String
+  slug                  String              @unique
+  description           String
+  propertyType          String
+  addressLine1          String
+  addressLine2          String?
+  postalCode            String?
+  lat                   Float
+  lng                   Float
+  monthlyRentMinor      Int
+  securityDepositMinor  Int
+  serviceFeeMinor       Int                 @default(0)
+  currency              String
+  bedrooms              Int
+  bathrooms             Int
+  areaSqm               Float
+  furnished             Boolean             @default(false)
+  petFriendly           Boolean             @default(false)
+  parkingSpaces         Int                 @default(0)
+  status                PropertyStatus      @default(DRAFT)
+  amenities             String[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  landlordProfile       LandlordProfile     @relation(fields: [landlordProfileId], references: [id], onDelete: Restrict)
+  ownerUser             User                @relation("PropertyOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  media                 PropertyMedia[]
+  favorites             Favorite[]
+  shortlistItems        ShortlistItem[]
+  bookingRecords        Booking[]
+  viewingItems          ViewingRequestItem[]
+
+  @@index([countryCode, city, monthlyRentMinor])
+  @@index([lat, lng])
+}
+
+model PropertyMedia {
+  id          String   @id @default(cuid())
+  propertyId  String
+  mediaType   String
+  url         String
+  altText     String?
+  sortOrder   Int      @default(0)
+  isPrimary   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+}
+
+model Favorite {
+  id          String   @id @default(cuid())
+  userId      String
+  propertyId  String
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, propertyId])
+}
+
+model Shortlist {
+  id          String          @id @default(cuid())
+  userId      String
+  name        String          @default("Default shortlist")
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       ShortlistItem[]
+}
+
+model ShortlistItem {
+  id           String    @id @default(cuid())
+  shortlistId  String
+  propertyId   String
+  position     Int
+  createdAt    DateTime  @default(now())
+  shortlist    Shortlist @relation(fields: [shortlistId], references: [id], onDelete: Cascade)
+  property     Property  @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([shortlistId, propertyId])
+  @@unique([shortlistId, position])
+}
+
+model UnifiedRequest {
+  id                    String                        @id @default(cuid())
+  userId                String
+  tenantId              String
+  requestType           String
+  serviceType           String
+  source                String
+  destination           String
+  country               String
+  city                  String
+  locationLabel         String?
+  currentLat            Float?
+  currentLng            Float?
+  targetLat             Float?
+  targetLng             Float?
+  pickupLat             Float?
+  pickupLng             Float?
+  dropoffLat            Float?
+  dropoffLng            Float?
+  propertyIds           String[]
+  preferredTime         DateTime?
+  status                UnifiedRequestStatus         @default(SUBMITTED)
+  priority              RequestPriority              @default(NORMAL)
+  vendorId              String?
+  commandCenterStatus   CommandCenterStatus          @default(VISIBLE)
+  paymentStatus         PaymentStatus                @default(PENDING)
+  notes                 String?
+  metadata              Json?
+  routeData             Json?
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  user                  User                         @relation("UnifiedRequestUser", fields: [userId], references: [id], onDelete: Restrict)
+  trackingEvents        UnifiedRequestTrackingEvent[]
+  viewingRequest        ViewingRequest?
+  booking               Booking?
+  payment               Payment?
+  movingRequest         MovingRequest?
+  maintenanceRequest    MaintenanceRequest?
+  cleaningRequest       CleaningRequest?
+  airportTransfer       AirportTransferRequest?
+  offer                 Offer?
+  notifications         Notification[]
+
+  @@index([status, serviceType, country, city])
+}
+
+model UnifiedRequestTrackingEvent {
+  id                String               @id @default(cuid())
+  unifiedRequestId  String
+  actorUserId       String?
+  actorType         String
+  title             String
+  description       String?
+  status            UnifiedRequestStatus
+  lat               Float?
+  lng               Float?
+  metadata          Json?
+  createdAt         DateTime             @default(now())
+  unifiedRequest    UnifiedRequest       @relation(fields: [unifiedRequestId], references: [id], onDelete: Cascade)
+  actorUser         User?                @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+}
+
+model ViewingRequest {
+  id                  String               @id @default(cuid())
+  unifiedRequestId    String               @unique
+  tenantId            String
+  shortlistId         String?
+  preferredDate       DateTime
+  pickupLat           Float
+  pickupLng           Float
+  pickupAddress       String?
+  status              ServiceRequestStatus @default(PENDING)
+  selectedPropertyIds String[]
+  routeData           Json?
+  notes               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  unifiedRequest      UnifiedRequest       @relation(fields: [unifiedRequestId], references: [id], onDelete: Cascade)
+  tenant              User                 @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  items               ViewingRequestItem[]
+  assignment          ViewingTripAssignment?
+}
+
+model ViewingRequestItem {
+  id                String          @id @default(cuid())
+  viewingRequestId  String
+  propertyId        String
+  stopOrder         Int
+  etaMinutes        Int?
+  distanceMeters    Int?
+  createdAt         DateTime        @default(now())
+  viewingRequest    ViewingRequest  @relation(fields: [viewingRequestId], references: [id], onDelete: Cascade)
+  property          Property        @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([viewingRequestId, stopOrder])
+}
+
+model ViewingTripAssignment {
+  id                 String               @id @default(cuid())
+  viewingRequestId   String               @unique
+  providerId         String
+  assignedAgentId    String?
+  vehicleLabel       String?
+  plateNumber        String?
+  status             ServiceRequestStatus @default(ASSIGNED)
+  currentLat         Float?
+  currentLng         Float?
+  etaMinutes         Int?
+  assignedAt         DateTime             @default(now())
+  startedAt          DateTime?
+  completedAt        DateTime?
+  viewingRequest     ViewingRequest       @relation(fields: [viewingRequestId], references: [id], onDelete: Cascade)
+  provider           Provider             @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  assignedAgent      User?                @relation("AssignmentAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+}
+
+model Booking {
+  id                   String          @id @default(cuid())
+  unifiedRequestId     String?         @unique
+  tenantId             String
+  propertyId           String
+  offerId              String?
+  moveInDate           DateTime
+  termMonths           Int
+  status               BookingStatus   @default(RESERVED)
+  totalAmountMinor     Int
+  securityDepositMinor Int
+  currency             String
+  confirmedAt          DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  tenant               User            @relation("BookingTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  property             Property        @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  unifiedRequest       UnifiedRequest? @relation(fields: [unifiedRequestId], references: [id], onDelete: SetNull)
+  payments             Payment[]
+  invoice              Invoice?
+}
+
+model Payment {
+  id                  String          @id @default(cuid())
+  unifiedRequestId    String?         @unique
+  userId              String
+  bookingId           String?
+  amountMinor         Int
+  currency            String
+  provider            String
+  providerRef         String?
+  status              PaymentStatus   @default(PENDING)
+  method              String?
+  metadata            Json?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  user                User            @relation("PaymentUser", fields: [userId], references: [id], onDelete: Restrict)
+  booking             Booking?        @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  unifiedRequest      UnifiedRequest? @relation(fields: [unifiedRequestId], references: [id], onDelete: SetNull)
+  invoice             Invoice?
+}
+
+model Invoice {
+  id               String         @id @default(cuid())
+  bookingId        String?        @unique
+  paymentId        String?        @unique
+  invoiceNumber    String         @unique
+  status           InvoiceStatus  @default(ISSUED)
+  subtotalMinor    Int
+  taxMinor         Int
+  totalMinor       Int
+  currency         String
+  dueDate          DateTime
+  paidAt           DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  booking          Booking?       @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  payment          Payment?       @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+}
+
+model MovingRequest {
+  id                  String               @id @default(cuid())
+  unifiedRequestId    String               @unique
+  tenantProfileId     String
+  providerId          String?
+  estimatedCostMinor  Int?
+  freeCoverageMinor   Int                  @default(50000)
+  moveDate            DateTime
+  pickupAddress       String
+  dropoffAddress      String
+  status              ServiceRequestStatus @default(PENDING)
+  metadata            Json?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  unifiedRequest      UnifiedRequest       @relation(fields: [unifiedRequestId], references: [id], onDelete: Cascade)
+  tenantProfile       TenantProfile        @relation(fields: [tenantProfileId], references: [id], onDelete: Restrict)
+  provider            Provider?            @relation(fields: [providerId], references: [id], onDelete: SetNull)
+}
+
+model MaintenanceRequest {
+  id                  String               @id @default(cuid())
+  unifiedRequestId    String               @unique
+  tenantProfileId     String
+  providerId          String?
+  propertyId          String?
+  category            String
+  severity            String
+  preferredVisitAt    DateTime?
+  status              ServiceRequestStatus @default(PENDING)
+  metadata            Json?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  unifiedRequest      UnifiedRequest       @relation(fields: [unifiedRequestId], references: [id], onDelete: Cascade)
+  tenantProfile       TenantProfile        @relation(fields: [tenantProfileId], references: [id], onDelete: Restrict)
+  provider            Provider?            @relation(fields: [providerId], references: [id], onDelete: SetNull)
+}
+
+model CleaningRequest {
+  id                  String               @id @default(cuid())
+  unifiedRequestId    String               @unique
+  tenantProfileId     String
+  providerId          String?
+  propertyId          String?
+  serviceDate         DateTime
+  durationHours       Int
+  isMonthlyIncluded   Boolean              @default(false)
+  status              ServiceRequestStatus @default(PENDING)
+  metadata            Json?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  unifiedRequest      UnifiedRequest       @relation(fields: [unifiedRequestId], references: [id], onDelete: Cascade)
+  tenantProfile       TenantProfile        @relation(fields: [tenantProfileId], references: [id], onDelete: Restrict)
+  provider            Provider?            @relation(fields: [providerId], references: [id], onDelete: SetNull)
+}
+
+model AirportTransferRequest {
+  id                  String               @id @default(cuid())
+  unifiedRequestId    String               @unique
+  tenantProfileId     String
+  providerId          String?
+  flightNumber        String?
+  pickupLat           Float
+  pickupLng           Float
+  dropoffLat          Float
+  dropoffLng          Float
+  pickupAt            DateTime
+  passengersCount     Int                  @default(1)
+  status              ServiceRequestStatus @default(PENDING)
+  metadata            Json?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  unifiedRequest      UnifiedRequest       @relation(fields: [unifiedRequestId], references: [id], onDelete: Cascade)
+  tenantProfile       TenantProfile        @relation(fields: [tenantProfileId], references: [id], onDelete: Restrict)
+  provider            Provider?            @relation(fields: [providerId], references: [id], onDelete: SetNull)
+}
+
+model InsurancePlan {
+  id                  String                    @id @default(cuid())
+  countryCode         String
+  providerId          String?
+  code                String                    @unique
+  name                String
+  description         String
+  premiumMinor        Int
+  currency            String
+  coverageLimitMinor  Int
+  deductibleMinor     Int
+  isActive            Boolean                   @default(true)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  provider            Provider?                 @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  subscriptions       InsuranceSubscription[]
+}
+
+model InsuranceSubscription {
+  id                  String                      @id @default(cuid())
+  tenantProfileId     String
+  planId              String
+  status              InsuranceSubscriptionStatus @default(PENDING)
+  policyNumber        String?                     @unique
+  startDate           DateTime
+  endDate             DateTime
+  premiumMinor        Int
+  currency            String
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+  tenantProfile       TenantProfile               @relation(fields: [tenantProfileId], references: [id], onDelete: Restrict)
+  plan                InsurancePlan               @relation(fields: [planId], references: [id], onDelete: Restrict)
+  claims              InsuranceClaim[]
+}
+
+model InsuranceClaim {
+  id                  String                @id @default(cuid())
+  subscriptionId      String
+  claimNumber         String                @unique
+  status              InsuranceClaimStatus  @default(FILED)
+  incidentDate        DateTime
+  amountClaimedMinor  Int
+  amountApprovedMinor Int?
+  currency            String
+  description         String
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  subscription        InsuranceSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+}
+
+model RewardsWallet {
+  id                  String               @id @default(cuid())
+  userId              String               @unique
+  availablePoints     Int                  @default(0)
+  tier                String               @default("silver")
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions        RewardTransaction[]
+}
+
+model RewardTransaction {
+  id                  String                 @id @default(cuid())
+  walletId            String
+  userId              String
+  type                RewardTransactionType
+  points              Int
+  reason              String
+  referenceId         String?
+  createdAt           DateTime               @default(now())
+  wallet              RewardsWallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user                User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model Offer {
+  id                  String          @id @default(cuid())
+  unifiedRequestId    String?         @unique
+  createdByUserId     String
+  type                OfferType
+  title               String
+  description         String?
+  discountPercent     Float?
+  discountMinor       Int?
+  startsAt            DateTime
+  endsAt              DateTime
+  isActive            Boolean         @default(true)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  unifiedRequest      UnifiedRequest? @relation(fields: [unifiedRequestId], references: [id], onDelete: SetNull)
+  createdByUser       User            @relation("OfferCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+}
+
+model CommunityPost {
+  id                  String                    @id @default(cuid())
+  authorId            String
+  countryCode         String
+  city                String?
+  title               String
+  content             String
+  moderationStatus    CommunityModerationStatus @default(PENDING)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  author              User                      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments            CommunityComment[]
+  reports             CommunityReport[]
+}
+
+model CommunityComment {
+  id                  String                    @id @default(cuid())
+  postId              String
+  authorId            String
+  content             String
+  moderationStatus    CommunityModerationStatus @default(PENDING)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  post                CommunityPost             @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author              User                      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+}
+
+model CommunityReport {
+  id                  String        @id @default(cuid())
+  postId              String
+  reporterId          String
+  reason              String
+  notes               String?
+  createdAt           DateTime      @default(now())
+  post                CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reporter            User          @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id                  String              @id @default(cuid())
+  userId              String
+  unifiedRequestId    String?
+  title               String
+  body                String
+  channel             NotificationChannel
+  status              NotificationStatus  @default(QUEUED)
+  metadata            Json?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unifiedRequest      UnifiedRequest?     @relation(fields: [unifiedRequestId], references: [id], onDelete: SetNull)
+}
+
+model CountryConfig {
+  id                    String   @id @default(cuid())
+  code                  String   @unique
+  name                  String
+  defaultCurrency       String
+  timezone              String
+  defaultLanguage       String
+  supportedLanguages    String[]
+  taxPercent            Float    @default(0)
+  maintenanceSlaHours   Int      @default(24)
+  freeMoveInCapMinor    Int      @default(50000)
+  googleRegionCode      String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Provider {
+  id                    String                 @id
+  name                  String
+  legalName             String?
+  countryCode           String
+  city                  String?
+  providerType          ProviderType
+  serviceTypes          String[]
+  isFallbackEnabled     Boolean                @default(false)
+  isActive              Boolean                @default(true)
+  ratingAverage         Float                  @default(0)
+  supportEmail          String?
+  supportPhone          String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  providerProfiles      ProviderProfile[]
+  tripAssignments       ViewingTripAssignment[]
+  movingRequests        MovingRequest[]
+  maintenanceRequests   MaintenanceRequest[]
+  cleaningRequests      CleaningRequest[]
+  airportTransfers      AirportTransferRequest[]
+  adapterConfigs        AdapterConfig[]
+  insurancePlans        InsurancePlan[]
+}
+
+model AdapterConfig {
+  id                    String       @id @default(cuid())
+  providerId            String
+  mode                  AdapterMode
+  serviceType           String
+  endpoint              String?
+  authConfig            Json?
+  headers               Json?
+  requestMapping        Json?
+  responseMapping       Json?
+  isActive              Boolean      @default(true)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  provider              Provider     @relation(fields: [providerId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id                    String        @id @default(cuid())
+  actorUserId           String?
+  action                String
+  entity                String
+  entityId              String
+  severity              AuditSeverity @default(INFO)
+  countryCode           String?
+  metadata              Json?
+  createdAt             DateTime      @default(now())
+  actorUser             User?         @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+}
