@@ -7,8 +7,43 @@ import { CreatePropertyDto, SearchPropertiesDto, UpdatePropertyDto } from './dto
 export class PropertiesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private buildRentModel(input: { finalListingRentMinor: number; baseOwnerRentMinor?: number; existingServiceFeeMinor?: number }) {
+    if (input.baseOwnerRentMinor != null) {
+      const baseOwnerRentMinor = Math.max(0, input.baseOwnerRentMinor);
+      const annualBaseRentMinor = baseOwnerRentMinor * 12;
+      const annualPlatformMarginMinor = Math.round(annualBaseRentMinor * 0.1);
+      const monthlyPlatformMarginMinor = Math.round(annualPlatformMarginMinor / 12);
+      const finalListingRentMinor = baseOwnerRentMinor + monthlyPlatformMarginMinor;
+
+      return {
+        baseOwnerRentMinor,
+        annualBaseRentMinor,
+        annualPlatformMarginMinor,
+        monthlyPlatformMarginMinor,
+        finalListingRentMinor,
+      };
+    }
+
+    const monthlyPlatformMarginMinor = Math.max(0, input.existingServiceFeeMinor ?? 0);
+    const finalListingRentMinor = Math.max(0, input.finalListingRentMinor);
+    const baseOwnerRentMinor = Math.max(0, finalListingRentMinor - monthlyPlatformMarginMinor);
+
+    return {
+      baseOwnerRentMinor,
+      annualBaseRentMinor: baseOwnerRentMinor * 12,
+      annualPlatformMarginMinor: monthlyPlatformMarginMinor * 12,
+      monthlyPlatformMarginMinor,
+      finalListingRentMinor,
+    };
+  }
+
   async create(operatorUserId: string, dto: CreatePropertyDto) {
     const existingContractProfile = await this.prisma.landlordProfile.findFirst({ orderBy: { createdAt: 'asc' } });
+
+    const rentModel = this.buildRentModel({
+      finalListingRentMinor: dto.monthlyRentMinor,
+      baseOwnerRentMinor: dto.baseOwnerRentMinor,
+    });
 
     const contractProfile = existingContractProfile
       ?? await this.prisma.landlordProfile.create({
@@ -19,7 +54,7 @@ export class PropertiesService {
         },
       });
 
-    return this.prisma.property.create({
+    const createdProperty = await this.prisma.property.create({
       data: {
         landlordProfileId: contractProfile.id,
         ownerUserId: contractProfile.userId,
@@ -33,8 +68,9 @@ export class PropertiesService {
         addressLine1: dto.addressLine1,
         lat: dto.lat,
         lng: dto.lng,
-        monthlyRentMinor: dto.monthlyRentMinor,
+        monthlyRentMinor: rentModel.finalListingRentMinor,
         securityDepositMinor: dto.securityDepositMinor,
+        serviceFeeMinor: rentModel.monthlyPlatformMarginMinor,
         currency: dto.currency,
         bedrooms: dto.bedrooms,
         bathrooms: dto.bathrooms,
@@ -49,6 +85,11 @@ export class PropertiesService {
       },
       include: { media: true },
     });
+
+    return {
+      ...createdProperty,
+      internalRentModel: rentModel,
+    };
   }
 
   findAll(query: SearchPropertiesDto) {
@@ -89,6 +130,11 @@ export class PropertiesService {
   }
 
   update(propertyId: string, dto: UpdatePropertyDto) {
+    const rentModel = this.buildRentModel({
+      finalListingRentMinor: dto.monthlyRentMinor,
+      baseOwnerRentMinor: dto.baseOwnerRentMinor,
+    });
+
     return this.prisma.property.update({
       where: { id: propertyId },
       data: {
@@ -101,8 +147,9 @@ export class PropertiesService {
         addressLine1: dto.addressLine1,
         lat: dto.lat,
         lng: dto.lng,
-        monthlyRentMinor: dto.monthlyRentMinor,
+        monthlyRentMinor: rentModel.finalListingRentMinor,
         securityDepositMinor: dto.securityDepositMinor,
+        serviceFeeMinor: rentModel.monthlyPlatformMarginMinor,
         currency: dto.currency,
         bedrooms: dto.bedrooms,
         bathrooms: dto.bathrooms,

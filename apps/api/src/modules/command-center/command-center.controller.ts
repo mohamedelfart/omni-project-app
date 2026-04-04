@@ -15,13 +15,13 @@ export class CommandCenterController {
   constructor(private readonly commandCenterService: CommandCenterService) {}
 
   @Get('dashboard')
-  getDashboard() {
-    return this.commandCenterService.getDashboard();
+  getDashboard(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string }) {
+    return this.commandCenterService.getDashboard(query);
   }
 
   @Get('requests')
-  listRequests() {
-    return this.commandCenterService.listRequests();
+  listRequests(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string }) {
+    return this.commandCenterService.listRequests(query);
   }
 
   @Post('requests/:id/assign-provider')

@@ -149,11 +149,23 @@ export class OrchestratorService {
   async dispatchInstruction(requestId: string, instructionType: string, payload?: Record<string, unknown>) {
     const status = instructionType === 'reject' ? 'REJECTED' : instructionType === 'update-status' && payload?.status ? String(payload.status).toUpperCase() : 'UNDER_REVIEW';
 
+    const existing = await this.prisma.unifiedRequest.findUnique({
+      where: { id: requestId },
+      select: { metadata: true },
+    });
+    const existingMetadata = existing?.metadata && typeof existing.metadata === 'object'
+      ? (existing.metadata as Record<string, unknown>)
+      : {};
+
     await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
         status: status as never,
-        metadata: this.toJson({ commandInstruction: instructionType, payload }),
+        metadata: this.toJson({
+          ...existingMetadata,
+          commandInstruction: instructionType,
+          commandInstructionPayload: payload,
+        }),
       },
     });
 
@@ -179,5 +191,67 @@ export class OrchestratorService {
     });
 
     return { requestId, instructionType, dispatched: true };
+  }
+
+  async assignProviderFromCommandCenter(requestId: string, providerId: string, actorUserId?: string) {
+    const request = await this.prisma.unifiedRequest.update({
+      where: { id: requestId },
+      data: {
+        vendorId: providerId,
+        status: 'ASSIGNED',
+      },
+    });
+
+    await this.prisma.unifiedRequestTrackingEvent.create({
+      data: {
+        unifiedRequestId: requestId,
+        actorUserId,
+        actorType: 'command-center',
+        title: 'Provider assigned by command center',
+        status: 'ASSIGNED',
+        metadata: this.toJson({ providerId }),
+      },
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'COMMAND_CENTER_PROVIDER_ASSIGNED',
+      entity: 'UnifiedRequest',
+      entityId: requestId,
+      countryCode: request.country,
+      metadata: { providerId },
+    });
+
+    return request;
+  }
+
+  async updateRequestStatusFromVendor(requestId: string, actorUserId: string, status: string, note?: string) {
+    const normalizedStatus = status.toUpperCase();
+    const request = await this.prisma.unifiedRequest.update({
+      where: { id: requestId },
+      data: { status: normalizedStatus as never },
+    });
+
+    await this.prisma.unifiedRequestTrackingEvent.create({
+      data: {
+        unifiedRequestId: requestId,
+        actorUserId,
+        actorType: 'provider',
+        title: 'Vendor status update',
+        description: note,
+        status: normalizedStatus as never,
+      },
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'VENDOR_TICKET_STATUS_UPDATED',
+      entity: 'UnifiedRequest',
+      entityId: requestId,
+      countryCode: request.country,
+      metadata: { status: normalizedStatus, note },
+    });
+
+    return request;
   }
 }

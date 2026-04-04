@@ -41,6 +41,10 @@ export class CreatePropertyDto {
   @IsNumber()
   monthlyRentMinor!: number;
 
+  @IsOptional()
+  @IsNumber()
+  baseOwnerRentMinor?: number;
+
   @IsNumber()
   securityDepositMinor!: number;
 

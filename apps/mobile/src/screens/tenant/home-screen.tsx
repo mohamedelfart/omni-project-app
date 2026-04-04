@@ -7,11 +7,9 @@ import { PremiumSearchBar } from '../../components/premium-search-bar';
 import { mobileTheme } from '../../theme';
 
 const widgets = [
-  { label: 'Upcoming Booking', value: 'Doha Marina Tower - 10 Apr' },
-  { label: 'Next Payment', value: 'QAR 8,500 due in 6 days' },
-  { label: 'Active Service', value: 'Monthly cleaning - Scheduled' },
-  { label: 'Rewards Status', value: 'Gold tier - 1,250 points' },
-  { label: 'Insurance Coverage', value: 'Rent default protection active' },
+  { label: 'Next viewing trip', value: '3 shortlisted homes ready for routed pickup' },
+  { label: 'Free service balance', value: 'Moving covered up to QAR 500' },
+  { label: 'Insurance', value: 'Protection active and ready for renewal' },
 ];
 
 export function TenantHomeScreen() {
@@ -32,10 +30,11 @@ export function TenantHomeScreen() {
       <PremiumSearchBar placeholder={t('home.searchPlaceholder')} />
 
       <View style={styles.grid}>
-        <ActionCard icon="🏢" title={t('home.actions.propertySearch')} onPress={() => navigation.navigate('PropertySearch')} />
-        <ActionCard icon="🧰" title={t('home.actions.services')} onPress={() => navigation.navigate('ServicesHub')} />
-        <ActionCard icon="💳" title={t('home.actions.payments')} onPress={() => navigation.navigate('Payments')} />
-        <ActionCard icon="🎁" title={t('home.actions.rewards')} onPress={() => navigation.navigate('Rewards')} />
+        <ActionCard icon="🏢" title="Property Search" subtitle="Search, shortlist up to 3 homes, and request a routed viewing" onPress={() => navigation.navigate('PropertySearch')} />
+        <ActionCard icon="📦" title="Free Services" subtitle="Moving, maintenance, cleaning, and airport support" onPress={() => navigation.navigate('MoveIn')} />
+        <ActionCard icon="🧰" title="Services" subtitle="Operator-managed services across your full tenant journey" onPress={() => navigation.navigate('ServicesHub')} />
+        <ActionCard icon="💳" title="Payments" subtitle="Rent, service excess, and scheduled charges" onPress={() => navigation.navigate('Payments')} />
+        <ActionCard icon="🛡️" title="Insurance" subtitle="Coverage and benefits in one dedicated place" featured onPress={() => navigation.navigate('Insurance')} />
       </View>
 
       <View style={styles.widgetWrap}>

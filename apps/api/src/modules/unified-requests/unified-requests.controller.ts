@@ -14,6 +14,12 @@ import { UnifiedRequestsService } from './unified-requests.service';
 export class UnifiedRequestsController {
   constructor(private readonly unifiedRequestsService: UnifiedRequestsService) {}
 
+  @Get('me')
+  @Roles('tenant')
+  listMine(@CurrentUser() user: { id: string }) {
+    return this.unifiedRequestsService.listMine(user.id);
+  }
+
   @Get()
   @Roles('admin', 'command-center', 'provider')
   listAll() {

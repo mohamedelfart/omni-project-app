@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
+import { TenantPerksService } from '../notifications/tenant-perks.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import { CreateBookingRequestDto } from './dto/booking.dto';
@@ -10,6 +11,7 @@ export class BookingService {
     private readonly prisma: PrismaService,
     private readonly unifiedRequestsService: UnifiedRequestsService,
     private readonly auditTrailService: AuditTrailService,
+    private readonly tenantPerksService: TenantPerksService,
   ) {}
 
   async create(userId: string, dto: CreateBookingRequestDto) {
@@ -50,6 +52,12 @@ export class BookingService {
         termMonths: dto.termMonths,
         totalAmountMinor: booking.totalAmountMinor,
       },
+    });
+
+    await this.tenantPerksService.triggerPerk({
+      userId,
+      trigger: 'BOOKING_CONFIRMED',
+      contextEntityId: booking.id,
     });
 
     return booking;

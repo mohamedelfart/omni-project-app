@@ -1,6 +1,7 @@
 import { QATAR_CONFIG } from './qatar.config';
 import { UAE_CONFIG } from './uae.config';
 import { SAUDI_CONFIG } from './saudi.config';
+export { EGYPT_READY_CONFIG } from './egypt.config';
 import { OperatorServiceRule } from '../operator-policy.service';
 
 export interface CountryDefinition {

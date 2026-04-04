@@ -71,6 +71,14 @@ export class UnifiedRequestsService {
     return this.prisma.unifiedRequest.findMany({ include: { trackingEvents: true }, orderBy: { createdAt: 'desc' } });
   }
 
+  listMine(userId: string) {
+    return this.prisma.unifiedRequest.findMany({
+      where: { userId },
+      include: { trackingEvents: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   getById(requestId: string) {
     return this.prisma.unifiedRequest.findUniqueOrThrow({ where: { id: requestId }, include: { trackingEvents: true } });
   }

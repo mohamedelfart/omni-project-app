@@ -6,6 +6,7 @@ import { AuditTrailModule } from './modules/audit-trail/audit-trail.module';
 import { BookingModule } from './modules/booking/booking.module';
 import { CommandCenterModule } from './modules/command-center/command-center.module';
 import { CommunityModule } from './modules/community/community.module';
+import { CostControlModule } from './modules/cost-control/cost-control.module';
 import { FreeServiceEngineModule } from './modules/free-service-engine/free-service-engine.module';
 import { InsuranceModule } from './modules/insurance/insurance.module';
 import { IntegrationHubModule } from './modules/integration-hub/integration-hub.module';
@@ -14,6 +15,7 @@ import { OperatorPolicyModule } from './modules/operator-policy/operator-policy.
 import { PaymentsModule } from './modules/payments/payments.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { PropertiesModule } from './modules/properties/properties.module';
+import { PublicServicesIntegrationModule } from './modules/public-services-integration/public-services-integration.module';
 import { RewardsModule } from './modules/rewards/rewards.module';
 import { ServicesModule } from './modules/services/services.module';
 import { UnifiedRequestsModule } from './modules/unified-requests/unified-requests.module';
@@ -33,6 +35,7 @@ import { HealthModule } from './modules/health/health.module';
     AuthModule,
     UsersModule,
     PropertiesModule,
+    PublicServicesIntegrationModule,
     OperatorPolicyModule,
     FreeServiceEngineModule,
     UnifiedRequestsModule,
@@ -47,6 +50,7 @@ import { HealthModule } from './modules/health/health.module';
     CommunityModule,
     NotificationsModule,
     CommandCenterModule,
+    CostControlModule,
     VendorExecutionModule,
     InventoryModule,
   ],

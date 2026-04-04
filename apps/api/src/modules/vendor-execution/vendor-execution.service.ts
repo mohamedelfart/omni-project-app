@@ -1,12 +1,14 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { OrchestratorService } from '../orchestrator/orchestrator.service';
+import { TenantPerksService } from '../notifications/tenant-perks.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditTrailService } from '../audit-trail/audit-trail.service';
 
 @Injectable()
 export class VendorExecutionService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly auditTrailService: AuditTrailService,
+    private readonly orchestratorService: OrchestratorService,
+    private readonly tenantPerksService: TenantPerksService,
   ) {}
 
   private async providerIdsForUser(userId: string): Promise<string[]> {
@@ -70,30 +72,35 @@ export class VendorExecutionService {
       throw new ForbiddenException('Ticket is not assigned to your provider account');
     }
 
-    const updated = await this.prisma.unifiedRequest.update({
-      where: { id: ticket.id },
-      data: { status: status.toUpperCase() as never },
-    });
+    const updated = await this.orchestratorService.updateRequestStatusFromVendor(ticket.id, userId, status, note);
 
-    await this.prisma.unifiedRequestTrackingEvent.create({
-      data: {
-        unifiedRequestId: ticket.id,
-        actorUserId: userId,
-        actorType: 'provider',
-        title: 'Vendor status update',
-        description: note,
-        status: status.toUpperCase() as never,
-      },
-    });
+    if (updated.status === 'COMPLETED') {
+      if (ticket.serviceType === 'move-in') {
+        await this.tenantPerksService.triggerPerk({
+          userId: ticket.userId,
+          trigger: 'MOVE_IN_COMPLETE',
+          contextEntityId: ticket.id,
+        });
+      }
 
-    await this.auditTrailService.write({
-      actorUserId: userId,
-      action: 'VENDOR_TICKET_STATUS_UPDATED',
-      entity: 'UnifiedRequest',
-      entityId: ticket.id,
-      countryCode: ticket.country,
-      metadata: { status: status.toUpperCase(), note },
-    });
+      const completedServicesBefore = await this.prisma.unifiedRequest.count({
+        where: {
+          userId: ticket.userId,
+          status: 'COMPLETED' as never,
+          id: { not: ticket.id },
+        },
+      });
+
+      if (completedServicesBefore === 0) {
+        await this.tenantPerksService.triggerPerk({
+          userId: ticket.userId,
+          trigger: 'FIRST_SERVICE',
+          contextEntityId: ticket.id,
+        });
+      }
+
+      await this.tenantPerksService.checkAndTriggerMilestones(ticket.userId);
+    }
 
     return updated;
   }

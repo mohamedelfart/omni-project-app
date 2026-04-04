@@ -31,6 +31,7 @@ export class OperatorPolicyService {
       communityEnabled: this.configService.get<string>('COMMUNITY_MODULE_ENABLED') === 'true',
       temporaryStayExchangeEnabled: this.configService.get<string>('TEMP_STAY_EXCHANGE_ENABLED') === 'true',
       miniAirbnbEnabled: this.configService.get<string>('MINI_AIRBNB_ENABLED') === 'true',
+      publicServicesIntegrationEnabled: this.configService.get<string>('PUBLIC_SERVICES_INTEGRATION_ENABLED') === 'true',
     };
   }
 
