@@ -171,11 +171,22 @@ export class FreeServiceEngineService {
     unifiedRequestId: string;
     evaluation: FreeServiceEvaluation;
   }): Promise<void> {
+    const existingRequest = await this.prisma.unifiedRequest.findUnique({
+      where: { id: params.unifiedRequestId },
+      select: { metadata: true },
+    });
+
+    const existingMetadata =
+      existingRequest?.metadata && typeof existingRequest.metadata === 'object'
+        ? (existingRequest.metadata as Record<string, unknown>)
+        : {};
+
     await this.prisma.unifiedRequest.update({
       where: { id: params.unifiedRequestId },
       data: {
         priceMinor: params.evaluation.requestedAmountMinor,
         metadata: JSON.parse(JSON.stringify({
+          ...existingMetadata,
           freeServiceEvaluation: {
             category: params.evaluation.category,
             coveredAmountMinor: params.evaluation.coveredAmountMinor,
