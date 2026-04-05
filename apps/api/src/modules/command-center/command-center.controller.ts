@@ -15,23 +15,51 @@ export class CommandCenterController {
   constructor(private readonly commandCenterService: CommandCenterService) {}
 
   @Get('dashboard')
-  getDashboard(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string }) {
+  getDashboard(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
     return this.commandCenterService.getDashboard(query);
   }
 
   @Get('requests')
-  listRequests(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string }) {
+  listRequests(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
     return this.commandCenterService.listRequests(query);
   }
 
+  @Get('operations')
+  operations(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
+    return this.commandCenterService.getOperationsLayer(query);
+  }
+
+  @Get('analysis')
+  analysis(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
+    return this.commandCenterService.getAnalysisLayer(query);
+  }
+
+  @Get('reports')
+  reports(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
+    return this.commandCenterService.getReportingLayer(query);
+  }
+
+  @Get('recommendations')
+  recommendations(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
+    return this.commandCenterService.getDecisionSupportLayer(query);
+  }
+
   @Post('requests/:id/assign-provider')
-  assignProvider(@Param('id') id: string, @Body() body: { providerId: string }) {
-    return this.commandCenterService.assignProvider(id, body.providerId);
+  assignProvider(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { providerId: string },
+  ) {
+    return this.commandCenterService.assignProvider(user.id, id, body.providerId);
   }
 
   @Post('requests/:id/instructions')
-  dispatchInstruction(@Param('id') id: string, @Body() body: { instructionType: string; payload?: Record<string, unknown> }) {
-    return this.commandCenterService.dispatchInstruction(id, body.instructionType, body.payload);
+  dispatchInstruction(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { instructionType: string; payload?: Record<string, unknown> },
+  ) {
+    return this.commandCenterService.dispatchInstruction(user.id, id, body.instructionType, body.payload);
   }
 
   @Post('offers')

@@ -48,4 +48,26 @@ export const EGYPT_READY_CONFIG = {
   googleRegionCode: 'EG',
   cities: ['Cairo', 'New Cairo', '6th of October', 'Alexandria'],
   services: EGYPT_READY_SERVICE_RULES,
+  policies: {
+    routing: {
+      strictServiceTypeMatch: true,
+      allowCountryFallbackProvider: true,
+      preferFallbackEnabledProvider: true,
+    },
+    perks: {
+      moveInCompletionEnabled: true,
+      firstServiceEnabled: true,
+      milestoneEnabled: true,
+      moveInCompletionServiceTypes: ['move-in'],
+    },
+    financial: {
+      rentMarginMode: 'service-fee-based',
+      excessChargeMode: 'invoice-pending-payment',
+      defaultServiceCapMinor: 120000,
+    },
+    adapters: {
+      integrationBoundary: 'core-dispatch',
+      providerSelectionSource: 'orchestrator',
+    },
+  },
 };

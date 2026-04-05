@@ -116,13 +116,18 @@ export class TenantPerksService {
         await this.prisma.rewardsWallet.update({
           where: { userId: params.userId },
           data: {
-            pointsBalance: { increment: points },
+            availablePoints: { increment: points },
             transactions: {
               create: {
-                type: 'CREDIT' as never,
-                pointsDelta: points,
-                description: `Hotel perk: ${title}`,
+                type: 'EARN',
+                points: points,
+                reason: `Hotel perk: ${title}`,
                 referenceId: params.contextEntityId,
+                user: {
+                  connect: {
+                    id: params.userId,
+                  },
+                },
               },
             },
           },

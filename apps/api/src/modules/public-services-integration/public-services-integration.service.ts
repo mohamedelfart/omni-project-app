@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
+import {
+  NormalizedProviderDispatchResponse,
+  NormalizedPublicServiceRequest,
+} from '../integration-hub/integration-contracts';
+import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 
@@ -14,7 +19,7 @@ type PublicServiceType =
 type PublicServiceAdapter = {
   authorityKey: string;
   serviceType: PublicServiceType;
-  dispatch: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  dispatch: (payload: NormalizedPublicServiceRequest) => Promise<NormalizedProviderDispatchResponse>;
 };
 
 @Injectable()
@@ -22,6 +27,7 @@ export class PublicServicesIntegrationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly unifiedRequestsService: UnifiedRequestsService,
+    private readonly orchestratorService: OrchestratorService,
     private readonly auditTrailService: AuditTrailService,
     private readonly configService: ConfigService,
   ) {}
@@ -34,29 +40,53 @@ export class PublicServicesIntegrationService {
     'address-verification': {
       authorityKey: 'municipality-address-registry',
       serviceType: 'address-verification',
-      dispatch: async (payload) => ({ accepted: true, authorityRef: `addr_${Date.now()}`, payload }),
+      dispatch: async (payload) => ({ accepted: true, providerReference: `addr_${Date.now()}`, providerStatus: 'ACCEPTED', rawStatus: 'ACCEPTED', raw: payload }),
     },
     'residency-registration': {
       authorityKey: 'residency-services',
       serviceType: 'residency-registration',
-      dispatch: async (payload) => ({ accepted: true, authorityRef: `res_${Date.now()}`, payload }),
+      dispatch: async (payload) => ({ accepted: true, providerReference: `res_${Date.now()}`, providerStatus: 'ACCEPTED', rawStatus: 'ACCEPTED', raw: payload }),
     },
     'lease-validation': {
       authorityKey: 'lease-validation-office',
       serviceType: 'lease-validation',
-      dispatch: async (payload) => ({ accepted: true, authorityRef: `lease_${Date.now()}`, payload }),
+      dispatch: async (payload) => ({ accepted: true, providerReference: `lease_${Date.now()}`, providerStatus: 'ACCEPTED', rawStatus: 'ACCEPTED', raw: payload }),
     },
     'municipality-request': {
       authorityKey: 'municipality-services',
       serviceType: 'municipality-request',
-      dispatch: async (payload) => ({ accepted: true, authorityRef: `mun_${Date.now()}`, payload }),
+      dispatch: async (payload) => ({ accepted: true, providerReference: `mun_${Date.now()}`, providerStatus: 'ACCEPTED', rawStatus: 'ACCEPTED', raw: payload }),
     },
     'utilities-integration': {
       authorityKey: 'utilities-gateway',
       serviceType: 'utilities-integration',
-      dispatch: async (payload) => ({ accepted: true, authorityRef: `util_${Date.now()}`, payload }),
+      dispatch: async (payload) => ({ accepted: true, providerReference: `util_${Date.now()}`, providerStatus: 'ACCEPTED', rawStatus: 'ACCEPTED', raw: payload }),
     },
   };
+
+  private toNormalizedPublicServiceRequest(params: {
+    requestId: string;
+    providerId: string;
+    countryCode: string;
+    city: string;
+    serviceType: PublicServiceType;
+    authorityCode: string;
+    payload: Record<string, unknown>;
+  }): NormalizedPublicServiceRequest {
+    return {
+      requestType: 'public-service',
+      requestId: params.requestId,
+      providerId: params.providerId,
+      countryCode: params.countryCode,
+      city: params.city,
+      serviceType: `public-${params.serviceType}`,
+      requestedAt: new Date().toISOString(),
+      metadata: {
+        publicServicePayload: params.payload,
+      },
+      authorityCode: params.authorityCode,
+    };
+  }
 
   private getAdapter(serviceType: string) {
     const adapter = this.adapters[serviceType];
@@ -142,50 +172,37 @@ export class PublicServicesIntegrationService {
     const serviceType = String(metadata.serviceType ?? '').trim();
     const adapter = this.getAdapter(serviceType);
 
+    const normalizedRequest = this.toNormalizedPublicServiceRequest({
+      requestId,
+      providerId: request.vendorId ?? 'public-services-authority',
+      countryCode: request.country,
+      city: request.city,
+      serviceType: adapter.serviceType,
+      authorityCode: adapter.authorityKey,
+      payload: (metadata.publicServicePayload as Record<string, unknown>) ?? {},
+    });
+
     const dispatchResult = this.integrationEnabled
-      ? await adapter.dispatch((metadata.publicServicePayload as Record<string, unknown>) ?? {})
+      ? await adapter.dispatch(normalizedRequest)
       : {
         accepted: false,
-        authorityRef: null,
-        disabledReason: 'PUBLIC_SERVICES_INTEGRATION_ENABLED is false',
+        providerReference: null,
+        providerStatus: 'DISABLED',
+        rawStatus: 'DISABLED',
+        message: 'PUBLIC_SERVICES_INTEGRATION_ENABLED is false',
+        raw: normalizedRequest,
       };
 
-    const updatedRequest = await this.prisma.unifiedRequest.update({
-      where: { id: requestId },
-      data: {
-        status: this.integrationEnabled ? 'IN_PROGRESS' : 'UNDER_REVIEW',
-        metadata: JSON.parse(JSON.stringify({
-          ...metadata,
-          approvalStatus: 'APPROVED',
-          adapter: adapter.authorityKey,
-          dispatchResult,
-        })),
-      },
-    });
-
-    await this.prisma.unifiedRequestTrackingEvent.create({
-      data: {
-        unifiedRequestId: requestId,
-        actorUserId: adminUserId,
-        actorType: 'command-center',
-        title: 'Public service request approved',
-        description: this.integrationEnabled
-          ? `Dispatched through ${adapter.authorityKey}.`
-          : 'Approved for future dispatch. External integration currently disabled.',
-        status: updatedRequest.status,
-        metadata: JSON.parse(JSON.stringify(dispatchResult)),
-      },
-    });
-
-    await this.auditTrailService.write({
+    const updatedRequest = await this.orchestratorService.approvePublicServiceRequest({
+      requestId,
       actorUserId: adminUserId,
-      action: 'PUBLIC_SERVICE_REQUEST_APPROVED',
-      entity: 'UnifiedRequest',
-      entityId: requestId,
-      countryCode: request.country,
-      metadata: {
+      approvalStatus: 'APPROVED',
+      integrationEnabled: this.integrationEnabled,
+      adapterKey: adapter.authorityKey,
+      dispatchResult,
+      metadataPatch: {
+        approvalStatus: 'APPROVED',
         adapter: adapter.authorityKey,
-        integrationEnabled: this.integrationEnabled,
         dispatchResult,
       },
     });

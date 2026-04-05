@@ -146,10 +146,19 @@ export class FreeServiceEngineService {
         country: params.countryCode,
         status: { in: ['COMPLETED', 'IN_PROGRESS', 'ASSIGNED'] as never[] },
       },
-      select: { priceMinor: true },
+      select: { metadata: true },
     });
 
-    const totalUsageMinor = requests.reduce((sum, r) => sum + (r.priceMinor ?? 0), 0);
+    const totalUsageMinor = requests.reduce((sum, request) => {
+      const metadata = request.metadata && typeof request.metadata === 'object'
+        ? (request.metadata as Record<string, unknown>)
+        : {};
+      const freeServiceEvaluation = metadata.freeServiceEvaluation && typeof metadata.freeServiceEvaluation === 'object'
+        ? (metadata.freeServiceEvaluation as Record<string, unknown>)
+        : {};
+      const coveredAmountMinor = Number(freeServiceEvaluation.coveredAmountMinor ?? 0);
+      return sum + (Number.isFinite(coveredAmountMinor) ? coveredAmountMinor : 0);
+    }, 0);
     const remainingFreeMinor = Math.max(0, freeCapMinor - totalUsageMinor);
 
     return {
@@ -184,7 +193,6 @@ export class FreeServiceEngineService {
     await this.prisma.unifiedRequest.update({
       where: { id: params.unifiedRequestId },
       data: {
-        priceMinor: params.evaluation.requestedAmountMinor,
         metadata: JSON.parse(JSON.stringify({
           ...existingMetadata,
           freeServiceEvaluation: {

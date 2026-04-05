@@ -49,12 +49,12 @@ export class ViewingController {
   }
 
   @Get('requests')
-  listRequests() {
-    return this.viewingService.listViewingRequests();
+  listRequests(@CurrentUser() user: { id: string; role: string; roles: string[] }) {
+    return this.viewingService.listViewingRequests(user);
   }
 
   @Get('requests/:id')
-  getRequestById(@Param('id') id: string) {
-    return this.viewingService.getViewingRequestById(id);
+  getRequestById(@CurrentUser() user: { id: string; role: string; roles: string[] }, @Param('id') id: string) {
+    return this.viewingService.getViewingRequestById(user, id);
   }
 }

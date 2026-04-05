@@ -1,5 +1,6 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { Text, View } from 'react-native';
 
 import { ForgotPasswordScreen } from '../screens/auth/forgot-password-screen';
 import { LoginScreen } from '../screens/auth/login-screen';
@@ -56,10 +57,19 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export function RootNavigator() {
   const { isAuthenticated } = useSessionStore();
+  const initialRouteName: keyof RootStackParamList = isAuthenticated ? 'TenantHome' : 'Login';
+
+  if (!initialRouteName) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F7FB' }}>
+        <Text style={{ color: '#1E3A5F', fontSize: 18, fontWeight: '700' }}>App Loaded</Text>
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
         {isAuthenticated ? (
           <>
             <Stack.Screen name="TenantHome" component={TenantHomeScreen} />

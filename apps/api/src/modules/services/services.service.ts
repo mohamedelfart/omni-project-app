@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FreeServiceEngineService } from '../free-service-engine/free-service-engine.service';
+import { inferIntegrationDomain, mapServiceTypeToNormalizedRequestType } from '../integration-hub/integration-contracts';
+import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import {
@@ -18,6 +20,7 @@ export class ServicesService {
     private readonly unifiedRequestsService: UnifiedRequestsService,
     private readonly operatorPolicyService: OperatorPolicyService,
     private readonly freeServiceEngineService: FreeServiceEngineService,
+    private readonly orchestratorService: OrchestratorService,
   ) {}
 
   private getCurrencyForCountry(countryCode: string): string {
@@ -49,6 +52,29 @@ export class ServicesService {
     });
   }
 
+  private async buildPolicyMetadata(countryCode: string, serviceType: string) {
+    const runtimePolicy = await this.operatorPolicyService.getRuntimePolicyContext(countryCode);
+    const serviceRule = runtimePolicy.serviceRules.find((rule) => rule.serviceType === serviceType);
+
+    return {
+      activeCountryCode: runtimePolicy.activeCountryCode,
+      selectedCountryCode: runtimePolicy.selectedCountryCode,
+      selectedCountryStatus: runtimePolicy.selectedCountryStatus,
+      serviceRule,
+      routingPolicy: runtimePolicy.routingPolicy,
+      perkPolicy: runtimePolicy.perkPolicy,
+      financialPolicy: runtimePolicy.financialPolicy,
+      adapterPolicy: {
+        integrationBoundary: 'core-dispatch',
+        providerSelectionSource: 'orchestrator',
+      },
+      integrationContract: {
+        providerDomain: inferIntegrationDomain(serviceType),
+        normalizedRequestType: mapServiceTypeToNormalizedRequestType(serviceType),
+      },
+    };
+  }
+
   private async applyFinancials(params: {
     userId: string;
     countryCode: string;
@@ -75,12 +101,11 @@ export class ServicesService {
     });
 
     if (params.evaluation.tenantOwesMinor > 0) {
-      await this.prisma.unifiedRequest.update({
-        where: { id: params.unifiedRequestId },
-        data: {
-          status: 'AWAITING_PAYMENT',
-          paymentStatus: 'PENDING',
-        },
+      await this.orchestratorService.moveRequestToAwaitingPayment({
+        requestId: params.unifiedRequestId,
+        actorUserId: params.userId,
+        serviceType: params.serviceType,
+        tenantOwesMinor: params.evaluation.tenantOwesMinor,
       });
 
       await this.prisma.payment.create({
@@ -106,12 +131,14 @@ export class ServicesService {
   async createMoveIn(userId: string, dto: CreateMoveInDto) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const countryCode = user.countryCode ?? 'QA';
+    await this.operatorPolicyService.assertServiceEnabled(countryCode, 'move-in');
     const costEvaluation = await this.evaluateServicePricing({
       userId,
       countryCode,
       serviceType: 'move-in',
       requestedAmountMinor: dto.estimatedCostMinor,
     });
+    const policyContext = await this.buildPolicyMetadata(countryCode, 'move-in');
 
     const unifiedRequest = await this.unifiedRequestsService.create(userId, {
       requestType: 'move-in',
@@ -121,6 +148,7 @@ export class ServicesService {
       metadata: {
         ...(JSON.parse(JSON.stringify(dto)) as Record<string, unknown>),
         costEvaluation,
+        policyContext,
       },
     });
 
@@ -149,11 +177,13 @@ export class ServicesService {
   async createMaintenance(userId: string, dto: CreateMaintenanceDto) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const countryCode = user.countryCode ?? 'QA';
+    await this.operatorPolicyService.assertServiceEnabled(countryCode, 'maintenance');
     const costEvaluation = await this.evaluateServicePricing({
       userId,
       countryCode,
       serviceType: 'maintenance',
     });
+    const policyContext = await this.buildPolicyMetadata(countryCode, 'maintenance');
 
     const unifiedRequest = await this.unifiedRequestsService.create(userId, {
       requestType: 'maintenance',
@@ -163,6 +193,7 @@ export class ServicesService {
       metadata: {
         ...(JSON.parse(JSON.stringify(dto)) as Record<string, unknown>),
         costEvaluation,
+        policyContext,
       },
     });
 
@@ -188,11 +219,13 @@ export class ServicesService {
   async createCleaning(userId: string, dto: CreateCleaningDto) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const countryCode = user.countryCode ?? 'QA';
+    await this.operatorPolicyService.assertServiceEnabled(countryCode, 'cleaning');
     const costEvaluation = await this.evaluateServicePricing({
       userId,
       countryCode,
       serviceType: 'cleaning',
     });
+    const policyContext = await this.buildPolicyMetadata(countryCode, 'cleaning');
 
     const unifiedRequest = await this.unifiedRequestsService.create(userId, {
       requestType: 'cleaning',
@@ -202,6 +235,7 @@ export class ServicesService {
       metadata: {
         ...(JSON.parse(JSON.stringify(dto)) as Record<string, unknown>),
         costEvaluation,
+        policyContext,
       },
     });
 
@@ -227,11 +261,13 @@ export class ServicesService {
   async createAirportTransfer(userId: string, dto: CreateAirportTransferDto) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const countryCode = user.countryCode ?? 'QA';
+    await this.operatorPolicyService.assertServiceEnabled(countryCode, 'airport-transfer');
     const costEvaluation = await this.evaluateServicePricing({
       userId,
       countryCode,
       serviceType: 'airport-transfer',
     });
+    const policyContext = await this.buildPolicyMetadata(countryCode, 'airport-transfer');
 
     const unifiedRequest = await this.unifiedRequestsService.create(userId, {
       requestType: 'airport-transfer',
@@ -245,6 +281,7 @@ export class ServicesService {
       metadata: {
         ...(JSON.parse(JSON.stringify(dto)) as Record<string, unknown>),
         costEvaluation,
+        policyContext,
       },
     });
 
@@ -271,13 +308,22 @@ export class ServicesService {
   }
 
   createPaidService(userId: string, dto: CreatePaidServiceDto) {
-    return this.prisma.user.findUniqueOrThrow({ where: { id: userId } }).then((user) =>
-      this.unifiedRequestsService.create(userId, {
-      requestType: dto.requestType,
-      serviceType: dto.serviceType,
-      country: user.countryCode ?? 'QA',
-      city: dto.city,
-      metadata: { integrationMode: 'provider-adapter', requestedBy: 'tenant-app' },
-    }));
+    return this.prisma.user.findUniqueOrThrow({ where: { id: userId } }).then(async (user) => {
+      const countryCode = user.countryCode ?? 'QA';
+      await this.operatorPolicyService.assertServiceEnabled(countryCode, dto.serviceType);
+      const policyContext = await this.buildPolicyMetadata(countryCode, dto.serviceType);
+
+      return this.unifiedRequestsService.create(userId, {
+        requestType: dto.requestType,
+        serviceType: dto.serviceType,
+        country: countryCode,
+        city: dto.city,
+        metadata: {
+          integrationMode: 'provider-adapter',
+          requestedBy: 'tenant-app',
+          policyContext,
+        },
+      });
+    });
   }
 }

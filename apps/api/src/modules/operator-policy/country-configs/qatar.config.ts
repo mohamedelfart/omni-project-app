@@ -65,4 +65,26 @@ export const QATAR_CONFIG = {
   googleRegionCode: 'QA',
   cities: ['Doha', 'Lusail', 'Al Rayyan', 'Al Wakrah', 'Al Khor'],
   services: QATAR_SERVICE_RULES,
+  policies: {
+    routing: {
+      strictServiceTypeMatch: true,
+      allowCountryFallbackProvider: true,
+      preferFallbackEnabledProvider: true,
+    },
+    perks: {
+      moveInCompletionEnabled: true,
+      firstServiceEnabled: true,
+      milestoneEnabled: true,
+      moveInCompletionServiceTypes: ['move-in'],
+    },
+    financial: {
+      rentMarginMode: 'service-fee-based',
+      excessChargeMode: 'invoice-pending-payment',
+      defaultServiceCapMinor: 50000,
+    },
+    adapters: {
+      integrationBoundary: 'core-dispatch',
+      providerSelectionSource: 'orchestrator',
+    },
+  },
 };

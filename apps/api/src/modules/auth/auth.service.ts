@@ -20,8 +20,19 @@ import {
   VerifyAccountDto,
 } from './dto/auth.dto';
 
+type OtpMode = 'DEV' | 'PROD';
+
+type OtpChallengeRecord = {
+  codeHash: string;
+  salt: string;
+  expiresAt: number;
+  attempts: number;
+};
+
 @Injectable()
 export class AuthService {
+  private readonly otpChallenges = new Map<string, OtpChallengeRecord>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -87,27 +98,55 @@ export class AuthService {
     return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
   }
 
-  async requestPhoneOtp(payload: PhoneOtpRequestDto): Promise<{ challengeId: string; expiresInSeconds: number; devOtpCode: string }> {
-    const code = '246810';
-    const challengeId = await this.jwtService.signAsync(
-      { phoneNumber: payload.phoneNumber, otp: code, action: 'verify-phone' },
-      {
-        secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
-        expiresIn: `${this.configService.get<number>('OTP_TTL_SECONDS') ?? 300}s`,
-      },
-    );
+  async requestPhoneOtp(payload: PhoneOtpRequestDto): Promise<{ challengeId: string; expiresInSeconds: number; devOtpCode?: string }> {
+    this.cleanupExpiredOtpChallenges();
+
+    const code = this.generateOtpCode();
+    const expiresInSeconds = this.configService.get<number>('OTP_TTL_SECONDS') ?? 300;
+    const challengeId = randomBytes(16).toString('hex');
+    const salt = randomBytes(16).toString('hex');
+
+    this.otpChallenges.set(payload.phoneNumber, {
+      codeHash: this.hashOtpCode(code, salt),
+      salt,
+      expiresAt: Date.now() + expiresInSeconds * 1000,
+      attempts: 0,
+    });
 
     return {
       challengeId,
-      expiresInSeconds: this.configService.get<number>('OTP_TTL_SECONDS') ?? 300,
-      devOtpCode: code,
+      expiresInSeconds,
+      ...(this.getOtpMode() === 'DEV' ? { devOtpCode: code } : {}),
     };
   }
 
   async verifyPhoneOtp(payload: PhoneOtpVerifyDto): Promise<AuthTokens> {
-    if (payload.otp !== '246810') {
+    this.cleanupExpiredOtpChallenges();
+
+    const challenge = this.otpChallenges.get(payload.phoneNumber);
+    if (!challenge) {
+      throw new UnauthorizedException('Invalid or expired OTP');
+    }
+
+    if (challenge.expiresAt <= Date.now()) {
+      this.otpChallenges.delete(payload.phoneNumber);
+      throw new UnauthorizedException('Invalid or expired OTP');
+    }
+
+    const maxAttempts = this.configService.get<number>('OTP_MAX_ATTEMPTS') ?? 5;
+    if (challenge.attempts >= maxAttempts) {
+      this.otpChallenges.delete(payload.phoneNumber);
+      throw new UnauthorizedException('Invalid or expired OTP');
+    }
+
+    const isValidOtp = this.verifyOtpCode(payload.otp, challenge.codeHash, challenge.salt);
+    if (!isValidOtp) {
+      challenge.attempts += 1;
+      this.otpChallenges.set(payload.phoneNumber, challenge);
       throw new UnauthorizedException('Invalid OTP');
     }
+
+    this.otpChallenges.delete(payload.phoneNumber);
 
     let user = await this.prisma.user.findUnique({
       where: { phoneNumber: payload.phoneNumber },
@@ -229,6 +268,35 @@ export class AuthService {
     const salt = randomBytes(16).toString('hex');
     const hash = scryptSync(value, salt, 64).toString('hex');
     return `${salt}:${hash}`;
+  }
+
+  private generateOtpCode(): string {
+    const raw = randomBytes(4).readUInt32BE(0) % 1_000_000;
+    return raw.toString().padStart(6, '0');
+  }
+
+  private getOtpMode(): OtpMode {
+    const mode = (this.configService.get<string>('OTP_MODE') ?? 'PROD').toUpperCase();
+    return mode === 'DEV' ? 'DEV' : 'PROD';
+  }
+
+  private hashOtpCode(code: string, salt: string): string {
+    return scryptSync(code, salt, 64).toString('hex');
+  }
+
+  private verifyOtpCode(value: string, codeHash: string, salt: string): boolean {
+    const derived = scryptSync(value, salt, 64);
+    const target = Buffer.from(codeHash, 'hex');
+    return target.length === derived.length && timingSafeEqual(target, derived);
+  }
+
+  private cleanupExpiredOtpChallenges(): void {
+    const now = Date.now();
+    for (const [phoneNumber, challenge] of this.otpChallenges.entries()) {
+      if (challenge.expiresAt <= now) {
+        this.otpChallenges.delete(phoneNumber);
+      }
+    }
   }
 
   private verifySecret(value: string, storedValue: string): boolean {

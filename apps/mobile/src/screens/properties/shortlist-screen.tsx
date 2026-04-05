@@ -6,7 +6,6 @@ import { Button, Card, EmptyState } from '@quickrent/design-system';
 
 import { FeatureShell } from '../../components/shell/feature-shell';
 import { createViewingRequest, getShortlist, removeFromShortlist, ViewingShortlistItem } from '../../lib/viewing-api';
-import { useSessionStore } from '../../store/session.store';
 import { mobileTheme } from '../../theme';
 
 export function ShortlistScreen() {
@@ -15,7 +14,6 @@ export function ShortlistScreen() {
   const [items, setItems] = useState<ViewingShortlistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const setActiveViewingRequestId = useSessionStore((state) => state.setActiveViewingRequestId);
 
   const loadShortlist = async () => {
     setLoading(true);
@@ -47,7 +45,6 @@ export function ShortlistScreen() {
         notes: 'Tenant mobile viewing request',
       });
 
-      setActiveViewingRequestId(request.id);
       navigation.navigate('ViewingTrip');
     } catch {
       setError('Could not create viewing request.');

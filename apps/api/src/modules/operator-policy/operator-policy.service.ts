@@ -1,9 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
-import { getCountryDefinition, getSupportedCountryCodes } from './country-configs/index';
+import {
+  getActiveCountryCode,
+  getCountryDefinition,
+  getCountryPackStatus,
+  getPreparedCountryDefinition,
+  getSupportedCountryCodes,
+  listCountryPackStatuses,
+} from './country-configs/index';
 
 export interface OperatorServiceRule {
   serviceType: string;
@@ -13,6 +20,32 @@ export interface OperatorServiceRule {
   freeCapMinor: number;
   requiresVendor: boolean;
 }
+
+type ResolvedRoutingPolicy = {
+  strictServiceTypeMatch: boolean;
+  allowCountryFallbackProvider: boolean;
+  preferFallbackEnabledProvider: boolean;
+};
+
+type ResolvedPerkPolicy = {
+  moveInCompletionEnabled: boolean;
+  firstServiceEnabled: boolean;
+  milestoneEnabled: boolean;
+  moveInCompletionServiceTypes: string[];
+};
+
+type ResolvedFinancialPolicy = {
+  rentMarginMode: 'service-fee-based';
+  excessChargeMode: 'invoice-pending-payment';
+  defaultServiceCapMinor: number;
+};
+
+type AdapterEligibilityParams = {
+  countryCode: string;
+  serviceType: string;
+  adapterServiceType?: string | null;
+  adapterActive?: boolean;
+};
 
 @Injectable()
 export class OperatorPolicyService {
@@ -24,6 +57,133 @@ export class OperatorPolicyService {
 
   private toJson(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
+  }
+
+  getActiveCountryCode() {
+    const configured = this.configService.get<string>('ACTIVE_COUNTRY_CODE')?.toUpperCase();
+    if (configured && getCountryDefinition(configured)) {
+      return configured;
+    }
+
+    return getActiveCountryCode();
+  }
+
+  private getDefaultRoutingPolicy(): ResolvedRoutingPolicy {
+    return {
+      strictServiceTypeMatch: true,
+      allowCountryFallbackProvider: true,
+      preferFallbackEnabledProvider: true,
+    };
+  }
+
+  private getDefaultPerkPolicy(): ResolvedPerkPolicy {
+    return {
+      moveInCompletionEnabled: true,
+      firstServiceEnabled: true,
+      milestoneEnabled: true,
+      moveInCompletionServiceTypes: ['move-in'],
+    };
+  }
+
+  private getDefaultFinancialPolicy(countryCode: string): ResolvedFinancialPolicy {
+    const fallbackCap = getCountryDefinition(countryCode)?.freeMoveInCapMinor ?? 50000;
+    return {
+      rentMarginMode: 'service-fee-based',
+      excessChargeMode: 'invoice-pending-payment',
+      defaultServiceCapMinor: fallbackCap,
+    };
+  }
+
+  getRoutingPolicy(countryCode: string): ResolvedRoutingPolicy {
+    const countryDef = getCountryDefinition(countryCode);
+    const configured = countryDef?.policies?.routing;
+
+    return {
+      ...this.getDefaultRoutingPolicy(),
+      ...(configured ?? {}),
+    };
+  }
+
+  getPerkPolicy(countryCode: string): ResolvedPerkPolicy {
+    const countryDef = getCountryDefinition(countryCode);
+    const configured = countryDef?.policies?.perks;
+
+    return {
+      ...this.getDefaultPerkPolicy(),
+      ...(configured ?? {}),
+      moveInCompletionServiceTypes: configured?.moveInCompletionServiceTypes ?? ['move-in'],
+    };
+  }
+
+  getFinancialPolicy(countryCode: string): ResolvedFinancialPolicy {
+    const countryDef = getCountryDefinition(countryCode);
+    const configured = countryDef?.policies?.financial;
+
+    return {
+      ...this.getDefaultFinancialPolicy(countryCode),
+      ...(configured ?? {}),
+    };
+  }
+
+  async assertServiceEnabled(countryCode: string, serviceType: string) {
+    const rules = await this.getCountryServiceRules(countryCode);
+    const serviceRule = rules.find((rule) => rule.serviceType === serviceType);
+
+    if (!serviceRule || !serviceRule.enabled) {
+      throw new BadRequestException(`Service ${serviceType} is not active for ${countryCode}`);
+    }
+
+    return serviceRule;
+  }
+
+  async getRuntimePolicyContext(countryCode?: string) {
+    const selectedCountryCode = (countryCode ?? this.getActiveCountryCode()).toUpperCase();
+    const countryConfig = await this.getCountryConfig(selectedCountryCode);
+    const countryServiceRules = await this.getCountryServiceRules(selectedCountryCode);
+    const activeCountryCode = this.getActiveCountryCode();
+    const preparedEgypt = getPreparedCountryDefinition('EG');
+
+    return {
+      activeCountryCode,
+      selectedCountryCode,
+      selectedCountryStatus: getCountryPackStatus(selectedCountryCode),
+      availableCountries: getSupportedCountryCodes(),
+      countryPackStatuses: listCountryPackStatuses(),
+      countryConfig,
+      serviceRules: countryServiceRules,
+      routingPolicy: this.getRoutingPolicy(selectedCountryCode),
+      perkPolicy: this.getPerkPolicy(selectedCountryCode),
+      financialPolicy: this.getFinancialPolicy(selectedCountryCode),
+      egyptReady: preparedEgypt
+        ? {
+            code: preparedEgypt.code,
+            name: preparedEgypt.name,
+            status: getCountryPackStatus(preparedEgypt.code),
+          }
+        : null,
+    };
+  }
+
+  async getAdapterEligibility(params: AdapterEligibilityParams) {
+    const runtimePolicy = await this.getRuntimePolicyContext(params.countryCode);
+    const serviceRule = runtimePolicy.serviceRules.find((rule) => rule.serviceType === params.serviceType);
+    const strictMatch = runtimePolicy.routingPolicy.strictServiceTypeMatch;
+    const adapterServiceType = params.adapterServiceType ?? null;
+    const matchingServiceType = adapterServiceType
+      ? (adapterServiceType === 'all' || adapterServiceType === params.serviceType)
+      : false;
+
+    return {
+      serviceRuleFound: Boolean(serviceRule),
+      serviceEnabled: serviceRule ? Boolean(serviceRule.enabled) : true,
+      strictServiceTypeMatch: strictMatch,
+      matchingServiceType,
+      adapterActive: Boolean(params.adapterActive),
+      fallbackAllowed: runtimePolicy.routingPolicy.allowCountryFallbackProvider,
+      eligible: Boolean(params.adapterActive)
+        && (!strictMatch || matchingServiceType)
+        && (!serviceRule || serviceRule.enabled),
+    };
   }
 
   getFeatureFlags() {
@@ -148,6 +308,7 @@ export class OperatorPolicyService {
     const countryConfig = await this.getCountryConfig(countryCode);
     const rules = await this.getCountryServiceRules(countryCode);
     const serviceRule = rules.find((rule) => rule.serviceType === serviceType);
+    const financialPolicy = this.getFinancialPolicy(countryCode);
 
     const freeCap = serviceType === 'move-in'
       ? countryConfig.freeMoveInCapMinor
@@ -163,6 +324,10 @@ export class OperatorPolicyService {
       appliedFreeMinor,
       payableMinor,
       rule: serviceRule,
+      policy: {
+        financialPolicy,
+        activeCountryCode: this.getActiveCountryCode(),
+      },
     };
   }
 }

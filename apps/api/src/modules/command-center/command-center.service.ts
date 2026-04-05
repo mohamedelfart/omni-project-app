@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
+import { LocationService } from '../location/location.service';
+import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
+import { DecisionSupportService } from './decision-support.service';
 
 type DashboardFilters = {
   countryCode?: string;
@@ -10,6 +13,7 @@ type DashboardFilters = {
   assetId?: string;
   serviceType?: string;
   status?: string;
+  vendorId?: string;
 };
 
 @Injectable()
@@ -18,6 +22,9 @@ export class CommandCenterService {
     private readonly prisma: PrismaService,
     private readonly orchestratorService: OrchestratorService,
     private readonly auditTrailService: AuditTrailService,
+    private readonly operatorPolicyService: OperatorPolicyService,
+    private readonly decisionSupportService: DecisionSupportService,
+    private readonly locationService: LocationService,
   ) {}
 
   private buildDateRange(filters?: DashboardFilters) {
@@ -61,8 +68,523 @@ export class CommandCenterService {
       country: filters?.countryCode,
       serviceType: filters?.serviceType,
       status: filters?.status as never,
+      vendorId: filters?.vendorId,
       propertyIds: filters?.assetId ? { has: filters.assetId } : undefined,
       createdAt: this.buildDateRange(filters),
+    };
+  }
+
+  private isActiveStatus(status: string) {
+    return ['SUBMITTED', 'UNDER_REVIEW', 'QUEUED', 'ASSIGNED', 'EN_ROUTE', 'IN_PROGRESS', 'AWAITING_PAYMENT', 'ESCALATED'].includes(status);
+  }
+
+  private requestLifecycleDurations(request: {
+    createdAt: Date;
+    updatedAt: Date;
+    status: string;
+    trackingEvents: Array<{ actorType: string; createdAt: Date }>;
+  }) {
+    const firstVendorAction = request.trackingEvents
+      .filter((event) => event.actorType === 'provider')
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0];
+
+    const responseMinutes = firstVendorAction
+      ? Math.max(0, Math.round((firstVendorAction.createdAt.getTime() - request.createdAt.getTime()) / 60000))
+      : null;
+
+    const completionMinutes = request.status === 'COMPLETED'
+      ? Math.max(0, Math.round((request.updatedAt.getTime() - request.createdAt.getTime()) / 60000))
+      : null;
+
+    return { responseMinutes, completionMinutes };
+  }
+
+  private dayKey(date: Date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  private toRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  }
+
+  private extractIntegrationVisibility(routeData: unknown) {
+    const raw = this.toRecord(routeData);
+    return {
+      adapterKey: typeof raw.adapterKey === 'string' ? raw.adapterKey : null,
+      adapterContractType: typeof raw.adapterContractType === 'string' ? raw.adapterContractType : null,
+      simulationMode: Boolean(raw.simulationMode),
+      simulatedProviderResponse: this.toRecord(raw.simulatedDispatch),
+      routingDecisionContext: this.toRecord(raw.routingDecisionContext),
+    };
+  }
+
+  private extractTicketLocationContext(request: {
+    pickupLat?: number | null;
+    pickupLng?: number | null;
+    currentLat?: number | null;
+    currentLng?: number | null;
+    targetLat?: number | null;
+    targetLng?: number | null;
+    dropoffLat?: number | null;
+    dropoffLng?: number | null;
+    locationLabel?: string | null;
+    city: string;
+    country: string;
+  }) {
+    // Primary: pickup → current → target
+    const primaryLat = request.pickupLat ?? request.currentLat ?? request.targetLat;
+    const primaryLng = request.pickupLng ?? request.currentLng ?? request.targetLng;
+    const sourceType = request.pickupLat != null ? 'pickup'
+      : request.currentLat != null ? 'tenant-current'
+      : 'service-site';
+
+    return this.locationService.buildLocationDisplay({
+      sourceType: sourceType as 'pickup' | 'tenant-current' | 'service-site',
+      lat: primaryLat,
+      lng: primaryLng,
+      placeLabel: request.locationLabel ?? null,
+      city: request.city,
+      countryCode: request.country,
+    });
+  }
+
+  private includeForOperations() {
+    return {
+      trackingEvents: { orderBy: { createdAt: 'asc' as const } },
+      payment: {
+        select: {
+          id: true,
+          amountMinor: true,
+          currency: true,
+          status: true,
+          createdAt: true,
+        },
+      },
+      viewingRequest: {
+        select: {
+          id: true,
+        },
+      },
+      movingRequest: {
+        select: {
+          id: true,
+        },
+      },
+      maintenanceRequest: {
+        select: {
+          id: true,
+        },
+      },
+      cleaningRequest: {
+        select: {
+          id: true,
+        },
+      },
+      airportTransfer: {
+        select: {
+          id: true,
+        },
+      },
+    };
+  }
+
+  async getOperationsLayer(filters?: DashboardFilters) {
+    const policyContext = await this.operatorPolicyService.getRuntimePolicyContext(filters?.countryCode);
+    const requests = await this.prisma.unifiedRequest.findMany({
+      where: this.buildRequestWhere(filters),
+      include: this.includeForOperations(),
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return {
+      filters: filters ?? {},
+      policyContext,
+      total: requests.length,
+      tickets: requests.map((request) => {
+        const financials = this.extractFinancials(request.metadata);
+        const lifecycle = this.requestLifecycleDurations(request);
+        const policyMetadata = request.metadata && typeof request.metadata === 'object'
+          ? ((request.metadata as Record<string, unknown>).policyContext as Record<string, unknown> | undefined)
+          : undefined;
+        const hasServiceEntity = Boolean(
+          request.viewingRequest ||
+          request.movingRequest ||
+          request.maintenanceRequest ||
+          request.cleaningRequest ||
+          request.airportTransfer,
+        );
+
+        return {
+          ticketId: request.id,
+          serviceType: request.serviceType,
+          tenantId: request.tenantId,
+          status: request.status,
+          assignedVendor: request.vendorId,
+          createdAt: request.createdAt,
+          updatedAt: request.updatedAt,
+          country: request.country,
+          city: request.city,
+          cost: {
+            coveredAmountMinor: financials.coveredAmountMinor,
+            excessAmountMinor: financials.tenantOwesMinor,
+            paymentStatus: request.paymentStatus,
+            paymentAmountMinor: request.payment?.amountMinor ?? 0,
+            paymentCurrency: request.payment?.currency ?? null,
+          },
+          auditVisibility: {
+            trackingEventCount: request.trackingEvents.length,
+            firstVendorActionAt: request.trackingEvents.find((event) => event.actorType === 'provider')?.createdAt ?? null,
+            lastEventAt: request.trackingEvents[request.trackingEvents.length - 1]?.createdAt ?? null,
+            responseMinutes: lifecycle.responseMinutes,
+            completionMinutes: lifecycle.completionMinutes,
+          },
+          lifecycle: {
+            requestEntityPresent: hasServiceEntity,
+            indexedBy: {
+              serviceType: request.serviceType,
+              vendorId: request.vendorId,
+              country: request.country,
+              city: request.city,
+            },
+          },
+          policyDrivenBy: {
+            countryPack: request.country,
+            serviceRule: policyMetadata?.serviceRule ?? null,
+            routingPolicy: policyMetadata?.routingPolicy ?? policyContext.routingPolicy,
+            perkPolicy: policyMetadata?.perkPolicy ?? policyContext.perkPolicy,
+            financialPolicy: policyMetadata?.financialPolicy ?? policyContext.financialPolicy,
+          },
+          locationContext: this.extractTicketLocationContext(request),
+          geoContext: {
+            city: request.city,
+            countryCode: request.country,
+            hasLocation: request.pickupLat != null || request.currentLat != null || request.targetLat != null,
+          },
+          integrationVisibility: this.extractIntegrationVisibility(request.routeData),
+        };
+      }),
+    };
+  }
+
+  async getAnalysisLayer(filters?: DashboardFilters) {
+    const policyContext = await this.operatorPolicyService.getRuntimePolicyContext(filters?.countryCode);
+    const requests = await this.prisma.unifiedRequest.findMany({
+      where: this.buildRequestWhere(filters),
+      include: {
+        trackingEvents: { orderBy: { createdAt: 'asc' } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const byService: Record<string, number> = {};
+    const byVendor: Record<string, number> = {};
+    const adapterUsage: Record<string, number> = {};
+    const simulatedByService: Record<string, number> = {};
+    const supplyByService: Record<string, number> = {};
+    const trendByDay: Record<string, Record<string, number>> = {};
+    const byCountryService: Record<string, { count: number; awaitingPayment: number; failed: number; completed: number; completionMinutes: number[] }> = {};
+    const byTenant: Record<string, { total: number; lastServiceType: string; awaitingPayment: number; failed: number; serviceCounts: Record<string, number> }> = {};
+    const responseMinutes: number[] = [];
+    const completionMinutes: number[] = [];
+    let completed = 0;
+    let failed = 0;
+
+    // Geo aggregation state
+    const byCity: Record<string, number> = {};
+    const byCityService: Record<string, number> = {};
+    const vendorsByCity: Record<string, Set<string>> = {};
+
+    for (const request of requests) {
+      byService[request.serviceType] = (byService[request.serviceType] ?? 0) + 1;
+      if (request.vendorId) {
+        byVendor[request.vendorId] = (byVendor[request.vendorId] ?? 0) + 1;
+      }
+
+      const routeData = this.toRecord(request.routeData);
+      const adapterKey = typeof routeData.adapterKey === 'string' ? routeData.adapterKey : null;
+      if (adapterKey) {
+        adapterUsage[adapterKey] = (adapterUsage[adapterKey] ?? 0) + 1;
+      }
+
+      if (Boolean(routeData.simulationMode)) {
+        simulatedByService[request.serviceType] = (simulatedByService[request.serviceType] ?? 0) + 1;
+      }
+
+      if (request.vendorId) {
+        const supplyKey = `${request.serviceType}::${request.vendorId}`;
+        supplyByService[supplyKey] = (supplyByService[supplyKey] ?? 0) + 1;
+      }
+
+      const day = this.dayKey(request.createdAt);
+      trendByDay[day] = trendByDay[day] ?? {};
+      trendByDay[day][request.serviceType] = (trendByDay[day][request.serviceType] ?? 0) + 1;
+
+      const countryServiceKey = `${request.country}::${request.serviceType}`;
+      byCountryService[countryServiceKey] = byCountryService[countryServiceKey] ?? {
+        count: 0,
+        awaitingPayment: 0,
+        failed: 0,
+        completed: 0,
+        completionMinutes: [],
+      };
+      byCountryService[countryServiceKey].count += 1;
+      if (request.status === 'AWAITING_PAYMENT') {
+        byCountryService[countryServiceKey].awaitingPayment += 1;
+      }
+      if (request.status === 'FAILED') {
+        byCountryService[countryServiceKey].failed += 1;
+      }
+
+      byTenant[request.tenantId] = byTenant[request.tenantId] ?? {
+        total: 0,
+        lastServiceType: request.serviceType,
+        awaitingPayment: 0,
+        failed: 0,
+        serviceCounts: {},
+      };
+      byTenant[request.tenantId].total += 1;
+      byTenant[request.tenantId].lastServiceType = request.serviceType;
+      byTenant[request.tenantId].serviceCounts[request.serviceType] = (byTenant[request.tenantId].serviceCounts[request.serviceType] ?? 0) + 1;
+      if (request.status === 'AWAITING_PAYMENT') {
+        byTenant[request.tenantId].awaitingPayment += 1;
+      }
+      if (request.status === 'FAILED') {
+        byTenant[request.tenantId].failed += 1;
+      }
+
+      const lifecycle = this.requestLifecycleDurations(request);
+      if (lifecycle.responseMinutes != null) {
+        responseMinutes.push(lifecycle.responseMinutes);
+      }
+      if (lifecycle.completionMinutes != null) {
+        completionMinutes.push(lifecycle.completionMinutes);
+        byCountryService[countryServiceKey].completionMinutes.push(lifecycle.completionMinutes);
+      }
+
+      if (request.status === 'COMPLETED') {
+        completed += 1;
+        byCountryService[countryServiceKey].completed += 1;
+      }
+      if (request.status === 'FAILED') {
+        failed += 1;
+      }
+
+      // Geo aggregation
+      const reqCity = request.city ?? 'unknown';
+      byCity[reqCity] = (byCity[reqCity] ?? 0) + 1;
+      const citySvcKey = `${reqCity}::${request.serviceType}`;
+      byCityService[citySvcKey] = (byCityService[citySvcKey] ?? 0) + 1;
+      if (request.vendorId) {
+        if (!vendorsByCity[reqCity]) vendorsByCity[reqCity] = new Set();
+        vendorsByCity[reqCity].add(request.vendorId);
+      }
+    }
+
+    // Geo post-processing
+    const vendorCoverageByCity: Record<string, number> = {};
+    for (const [geoCity, vendors] of Object.entries(vendorsByCity)) {
+      vendorCoverageByCity[geoCity] = vendors.size;
+    }
+
+    const cityDemandValues = Object.values(byCity);
+    const avgCityDemand = cityDemandValues.length > 0
+      ? cityDemandValues.reduce((s, v) => s + v, 0) / cityDemandValues.length
+      : 0;
+
+    const serviceGapByCity = Object.entries(byCityService)
+      .map(([key, demand]) => {
+        const sepIdx = key.indexOf('::');
+        const gapCity = key.slice(0, sepIdx);
+        const gapService = key.slice(sepIdx + 2);
+        const supply = vendorCoverageByCity[gapCity] ?? 0;
+        return { city: gapCity, serviceType: gapService, demand, supply, gap: Math.max(0, demand - supply) };
+      })
+      .filter((entry) => entry.gap > 0)
+      .sort((a, b) => b.gap - a.gap);
+
+    const highDemandCities = Object.entries(byCity)
+      .filter(([, count]) => count > avgCityDemand * 1.5)
+      .map(([geoCity, requestCount]) => ({ city: geoCity, requestCount }))
+      .sort((a, b) => b.requestCount - a.requestCount);
+
+    const underServedCities = highDemandCities
+      .filter(({ city: geoCity }) => (vendorCoverageByCity[geoCity] ?? 0) < 2)
+      .map(({ city: geoCity, requestCount }) => ({
+        city: geoCity,
+        requestCount,
+        vendorCount: vendorCoverageByCity[geoCity] ?? 0,
+      }));
+
+    const highFrictionZones = serviceGapByCity
+      .filter((entry) => entry.demand >= 3)
+      .slice(0, 10)
+      .map((entry) => ({
+        city: entry.city,
+        serviceType: entry.serviceType,
+        demand: entry.demand,
+        vendorCoverage: vendorCoverageByCity[entry.city] ?? 0,
+        frictionIndicator: entry.supply === 0 ? 'no-coverage' : 'under-served',
+      }));
+
+    return {
+      filters: filters ?? {},
+      policyContext,
+      totals: {
+        tickets: requests.length,
+        active: requests.filter((request) => this.isActiveStatus(request.status)).length,
+        completed,
+        failed,
+      },
+      serviceMetrics: {
+        ticketsByServiceType: byService,
+      },
+      timeMetrics: {
+        averageResponseTimeMinutes: this.average(responseMinutes),
+        averageCompletionTimeMinutes: this.average(completionMinutes),
+      },
+      vendorMetrics: {
+        activityCounts: byVendor,
+      },
+      trends: {
+        serviceVolumeByDay: Object.entries(trendByDay).map(([date, services]) => ({
+          date,
+          services,
+        })),
+      },
+      recommendationSignals: {
+        countryPainPoints: Object.entries(byCountryService).map(([key, signal]) => {
+          const [countryCode, serviceType] = key.split('::');
+          return {
+            countryCode,
+            serviceType,
+            requestVolume: signal.count,
+            awaitingPaymentCount: signal.awaitingPayment,
+            failedCount: signal.failed,
+            completionRate: signal.count ? Number((signal.completed / signal.count).toFixed(4)) : 0,
+            avgCompletionMinutes: this.average(signal.completionMinutes),
+            frictionScore: (signal.awaitingPayment * 2) + (signal.failed * 3),
+          };
+        }).sort((a, b) => b.frictionScore - a.frictionScore),
+        tenantNeedSignals: Object.entries(byTenant).map(([tenantId, signal]) => {
+          const topService = Object.entries(signal.serviceCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? signal.lastServiceType;
+          return {
+            tenantId,
+            totalRequests: signal.total,
+            awaitingPaymentCount: signal.awaitingPayment,
+            failedCount: signal.failed,
+            lastServiceType: signal.lastServiceType,
+            likelyNextServiceHint: topService,
+          };
+        }).sort((a, b) => b.totalRequests - a.totalRequests),
+        vendorLoadSignals: Object.entries(byVendor)
+          .map(([vendorId, ticketCount]) => ({ vendorId, ticketCount }))
+          .sort((a, b) => b.ticketCount - a.ticketCount),
+        providerGapSignals: Object.entries(byService)
+          .map(([serviceType, demandCount]) => {
+            const supplyCount = Object.entries(supplyByService)
+              .filter(([key]) => key.startsWith(`${serviceType}::`))
+              .reduce((sum, [, count]) => sum + count, 0);
+            return {
+              serviceType,
+              demandCount,
+              supplyCount,
+              gap: Math.max(0, demandCount - supplyCount),
+            };
+          })
+          .sort((a, b) => b.gap - a.gap),
+        adapterUsageFrequency: Object.entries(adapterUsage)
+          .map(([adapterKey, usageCount]) => ({ adapterKey, usageCount }))
+          .sort((a, b) => b.usageCount - a.usageCount),
+        simulatedDemandVsSupply: Object.entries(byService).map(([serviceType, demandCount]) => ({
+          serviceType,
+          simulatedDemandCount: simulatedByService[serviceType] ?? 0,
+          supplyCount: Object.entries(supplyByService)
+            .filter(([key]) => key.startsWith(`${serviceType}::`))
+            .reduce((sum, [, count]) => sum + count, 0),
+          demandCount,
+        })),
+        geoSignals: {
+          demandByCity: byCity,
+          demandByServiceAndCity: byCityService,
+          vendorCoverageByCity,
+          serviceGapByCity,
+        },
+      },
+      geoInsights: {
+        highDemandCities,
+        underServedCities,
+        highFrictionZones,
+      },
+    };
+  }
+
+  async getDecisionSupportLayer(filters?: DashboardFilters) {
+    const analysis = await this.getAnalysisLayer(filters);
+    const recommendations = this.decisionSupportService.generateRecommendations({
+      totals: analysis.totals,
+      recommendationSignals: analysis.recommendationSignals,
+    });
+
+    return {
+      filters: filters ?? {},
+      generatedAt: new Date().toISOString(),
+      totalRecommendations: recommendations.length,
+      bySeverity: {
+        critical: recommendations.filter((r) => r.severity === 'critical').length,
+        high: recommendations.filter((r) => r.severity === 'high').length,
+        medium: recommendations.filter((r) => r.severity === 'medium').length,
+        low: recommendations.filter((r) => r.severity === 'low').length,
+      },
+      byCategory: recommendations.reduce<Record<string, number>>((acc, r) => {
+        acc[r.category] = (acc[r.category] ?? 0) + 1;
+        return acc;
+      }, {}),
+      recommendations,
+    };
+  }
+
+  async getReportingLayer(filters?: DashboardFilters) {
+    const policyContext = await this.operatorPolicyService.getRuntimePolicyContext(filters?.countryCode);
+    const analysis = await this.getAnalysisLayer(filters);
+    const recommendations = this.decisionSupportService.generateRecommendations({
+      totals: analysis.totals,
+      recommendationSignals: analysis.recommendationSignals,
+    });
+
+    const dailyTotals = analysis.trends.serviceVolumeByDay.map((day) => ({
+      date: day.date,
+      total: Object.values(day.services).reduce((sum, value) => sum + value, 0),
+      services: day.services,
+    }));
+
+    const topServicesByVolume = Object.entries(analysis.serviceMetrics.ticketsByServiceType)
+      .map(([serviceType, count]) => ({ serviceType, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    return {
+      filters: filters ?? {},
+      policyContext,
+      dailyCounts: dailyTotals,
+      outcomes: {
+        completed: analysis.totals.completed,
+        failed: analysis.totals.failed,
+      },
+      topServicesByVolume,
+      aiReadiness: {
+        countryPainPoints: analysis.recommendationSignals.countryPainPoints.slice(0, 10),
+        tenantNeedClusters: analysis.recommendationSignals.tenantNeedSignals.slice(0, 20),
+        vendorLoadSignals: analysis.recommendationSignals.vendorLoadSignals.slice(0, 20),
+        providerGapSignals: analysis.recommendationSignals.providerGapSignals.slice(0, 20),
+        adapterUsageFrequency: analysis.recommendationSignals.adapterUsageFrequency.slice(0, 20),
+        simulatedDemandVsSupply: analysis.recommendationSignals.simulatedDemandVsSupply.slice(0, 20),
+      },
+      decisionSupport: {
+        totalRecommendations: recommendations.length,
+        criticalCount: recommendations.filter((r) => r.severity === 'critical').length,
+        highCount: recommendations.filter((r) => r.severity === 'high').length,
+        topRecommendations: recommendations.slice(0, 10),
+      },
     };
   }
 
@@ -87,8 +609,7 @@ export class CommandCenterService {
       this.prisma.auditLog.count({ where: { severity: { in: ['HIGH', 'CRITICAL'] }, countryCode: filters?.countryCode } }),
     ]);
 
-    const activeStatuses = new Set(['SUBMITTED', 'UNDER_REVIEW', 'QUEUED', 'ASSIGNED', 'EN_ROUTE', 'IN_PROGRESS', 'AWAITING_PAYMENT', 'ESCALATED']);
-    const activeTickets = requests.filter((request) => activeStatuses.has(request.status)).length;
+    const activeTickets = requests.filter((request) => this.isActiveStatus(request.status)).length;
     const completedRequests = requests.filter((request) => request.status === 'COMPLETED');
     const assignedEventsMinutes = requests
       .map((request) => {
@@ -129,7 +650,7 @@ export class CommandCenterService {
       return {
         providerId: provider.id,
         providerName: provider.name,
-        activeTickets: vendorRequests.filter((request) => activeStatuses.has(request.status)).length,
+        activeTickets: vendorRequests.filter((request) => this.isActiveStatus(request.status)).length,
         completedTickets: completed,
         completionRate: vendorRequests.length ? Math.round((completed / vendorRequests.length) * 100) : 0,
         ratingAverage: provider.ratingAverage,
@@ -206,13 +727,30 @@ export class CommandCenterService {
   listRequests(filters?: DashboardFilters) {
     return this.prisma.unifiedRequest.findMany({
       where: this.buildRequestWhere(filters),
-      include: { trackingEvents: true },
+      include: {
+        trackingEvents: true,
+        user: { select: { fullName: true, phoneNumber: true } },
+        payment: {
+          select: {
+            id: true,
+            amountMinor: true,
+            currency: true,
+            status: true,
+          },
+        },
+        viewingRequest: {
+          include: {
+            items: { include: { property: { select: { id: true, title: true, city: true, district: true } } } },
+            assignment: { include: { provider: { select: { id: true, name: true, city: true } } } },
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async assignProvider(requestId: string, providerId: string) {
-    return this.orchestratorService.assignProviderFromCommandCenter(requestId, providerId);
+  async assignProvider(actorUserId: string, requestId: string, providerId: string) {
+    return this.orchestratorService.assignProviderFromCommandCenter(requestId, providerId, actorUserId);
   }
 
   async createOffer(userId: string, payload: { title: string; type: string; discountMinor?: number }) {
@@ -238,8 +776,8 @@ export class CommandCenterService {
     return offer;
   }
 
-  dispatchInstruction(requestId: string, instructionType: string, payload?: Record<string, unknown>) {
-    return this.orchestratorService.dispatchInstruction(requestId, instructionType, payload);
+  dispatchInstruction(actorUserId: string, requestId: string, instructionType: string, payload?: Record<string, unknown>) {
+    return this.orchestratorService.dispatchInstruction(requestId, instructionType, payload, actorUserId);
   }
 
   listCountryConfigs() {

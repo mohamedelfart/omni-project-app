@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
@@ -12,6 +13,16 @@ export class ViewingService {
     private readonly orchestratorService: OrchestratorService,
     private readonly auditTrailService: AuditTrailService,
   ) {}
+
+  private isPrivileged(user: AuthenticatedUser) {
+    return user.roles.includes('admin') || user.roles.includes('command-center');
+  }
+
+  private buildTicketCode(viewingRequestId: string, createdAt: Date) {
+    const datePart = createdAt.toISOString().slice(0, 10).replace(/-/g, '');
+    const indexPart = viewingRequestId.slice(-6).toUpperCase();
+    return `VWT-${datePart}-${indexPart}`;
+  }
 
   async getOrCreateShortlist(userId: string) {
     const shortlist = await this.prisma.shortlist.findFirst({
@@ -87,7 +98,10 @@ export class ViewingService {
   }
 
   async createViewingRequest(userId: string, payload: { preferredDateISO: string; pickupLat: number; pickupLng: number; notes?: string }) {
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { tenantProfile: true },
+    });
     const shortlist = await this.getOrCreateShortlist(userId);
     if (!shortlist.items.length || shortlist.items.length > 3) {
       throw new BadRequestException('Viewing request requires 1 to 3 shortlisted properties');
@@ -95,7 +109,15 @@ export class ViewingService {
 
     const primaryProperty = shortlist.items[0]?.property;
     const countryCode = primaryProperty?.countryCode ?? user.countryCode ?? 'QA';
-    const city = primaryProperty?.city ?? user.city ?? 'Doha';
+    const city = primaryProperty?.city ?? user.tenantProfile?.preferredCity ?? 'Doha';
+    const locationLabel = user.tenantProfile?.currentAddress ?? 'Tenant live location';
+    const ticketPropertyDetails = shortlist.items.map((item) => ({
+      propertyId: item.propertyId,
+      title: item.property.title,
+      city: item.property.city,
+      district: item.property.district,
+      stopOrder: item.position,
+    }));
 
     const unifiedRequest = await this.unifiedRequestsService.create(userId, {
       requestType: 'property-viewing',
@@ -104,24 +126,39 @@ export class ViewingService {
       city,
       propertyIds: shortlist.items.map((item) => item.propertyId),
       preferredTime: payload.preferredDateISO,
+      locationLabel,
+      currentLat: user.tenantProfile?.currentLat ?? payload.pickupLat,
+      currentLng: user.tenantProfile?.currentLng ?? payload.pickupLng,
       pickupLat: payload.pickupLat,
       pickupLng: payload.pickupLng,
       metadata: {
         notes: payload.notes,
         selectedPropertyIds: shortlist.items.map((item) => item.propertyId),
         flow: 'tenant-core-command-center-vendor',
+        tenant: {
+          userId: user.id,
+          fullName: user.fullName,
+          phoneNumber: user.phoneNumber,
+        },
+        properties: ticketPropertyDetails,
       },
+    });
+
+    const latestUnifiedRequest = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: unifiedRequest.id },
+      include: { trackingEvents: true },
     });
 
     const viewingRequest = await this.prisma.viewingRequest.create({
       data: {
-        unifiedRequestId: unifiedRequest.id,
+        unifiedRequestId: latestUnifiedRequest.id,
         tenantId: userId,
         shortlistId: shortlist.id,
         preferredDate: new Date(payload.preferredDateISO),
         pickupLat: payload.pickupLat,
         pickupLng: payload.pickupLng,
-        pickupAddress: 'Tenant live location',
+        pickupAddress: locationLabel,
+        status: latestUnifiedRequest.vendorId ? 'ASSIGNED' : 'PENDING',
         selectedPropertyIds: shortlist.items.map((item) => item.propertyId),
         notes: payload.notes,
         items: {
@@ -131,7 +168,28 @@ export class ViewingService {
       include: { items: { include: { property: true } } },
     });
 
-    const provider = await this.orchestratorService.selectProvider('viewing-transport', countryCode, city, payload.pickupLat, payload.pickupLng);
+    const ticketCode = this.buildTicketCode(viewingRequest.id, viewingRequest.createdAt);
+    const unifiedMetadata = latestUnifiedRequest.metadata && typeof latestUnifiedRequest.metadata === 'object'
+      ? latestUnifiedRequest.metadata as Record<string, unknown>
+      : {};
+
+    await this.prisma.unifiedRequest.update({
+      where: { id: latestUnifiedRequest.id },
+      data: {
+        notes: payload.notes,
+        metadata: {
+          ...unifiedMetadata,
+          ticketCode,
+          locationLabel,
+          preferredDateISO: payload.preferredDateISO,
+        },
+      },
+    });
+
+    const provider = latestUnifiedRequest.vendorId
+      ? await this.prisma.provider.findUnique({ where: { id: latestUnifiedRequest.vendorId } })
+      : null;
+
     if (provider) {
       await this.prisma.viewingTripAssignment.create({
         data: {
@@ -144,7 +202,7 @@ export class ViewingService {
 
       await this.prisma.unifiedRequestTrackingEvent.create({
         data: {
-          unifiedRequestId: unifiedRequest.id,
+          unifiedRequestId: latestUnifiedRequest.id,
           actorType: 'system',
           title: 'Nearest vendor assigned for viewing trip',
           description: `${provider.name} will transport tenant to shortlisted properties.`,
@@ -163,12 +221,17 @@ export class ViewingService {
         propertyIds: shortlist.items.map((item) => item.propertyId),
         providerId: provider?.id,
         preferredDateISO: payload.preferredDateISO,
+        ticketCode,
       },
     });
 
     return this.prisma.viewingRequest.findUniqueOrThrow({
       where: { id: viewingRequest.id },
-      include: { items: { include: { property: true } }, assignment: true, unifiedRequest: true },
+      include: {
+        items: { include: { property: true } },
+        assignment: { include: { provider: true } },
+        unifiedRequest: { include: { trackingEvents: true } },
+      },
     });
   }
 
@@ -196,22 +259,15 @@ export class ViewingService {
       include: { items: { include: { property: true } }, assignment: true, unifiedRequest: true },
     });
 
-    await this.prisma.unifiedRequest.update({
-      where: { id: viewingRequest.unifiedRequestId },
-      data: {
-        status: 'COMPLETED',
-        propertyIds: [propertyId],
-      },
-    });
-
-    await this.prisma.unifiedRequestTrackingEvent.create({
-      data: {
-        unifiedRequestId: viewingRequest.unifiedRequestId,
-        actorUserId: userId,
-        actorType: 'tenant',
-        title: 'Property selected after viewing',
-        description: `Tenant selected property ${propertyId} and is ready to continue to payment.`,
-        status: 'COMPLETED',
+    await this.orchestratorService.completeRequestFromTenant({
+      requestId: viewingRequest.unifiedRequestId,
+      actorUserId: userId,
+      propertyIds: [propertyId],
+      title: 'Property selected after viewing',
+      description: `Tenant selected property ${propertyId} and is ready to continue to payment.`,
+      metadata: {
+        propertyId,
+        nextStep: 'payment',
       },
     });
 
@@ -235,17 +291,28 @@ export class ViewingService {
     };
   }
 
-  listViewingRequests() {
+  listViewingRequests(user: AuthenticatedUser) {
     return this.prisma.viewingRequest.findMany({
+      where: this.isPrivileged(user) ? undefined : { tenantId: user.id },
       include: { items: { include: { property: true } }, assignment: true, unifiedRequest: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  getViewingRequestById(viewingRequestId: string) {
-    return this.prisma.viewingRequest.findUniqueOrThrow({
+  async getViewingRequestById(user: AuthenticatedUser, viewingRequestId: string) {
+    const viewingRequest = await this.prisma.viewingRequest.findUniqueOrThrow({
       where: { id: viewingRequestId },
-      include: { items: { include: { property: true } }, assignment: true, unifiedRequest: true },
+      include: {
+        items: { include: { property: true } },
+        assignment: { include: { provider: true } },
+        unifiedRequest: { include: { trackingEvents: true } },
+      },
     });
+
+    if (!this.isPrivileged(user) && viewingRequest.tenantId !== user.id) {
+      throw new ForbiddenException('Viewing request does not belong to current tenant');
+    }
+
+    return viewingRequest;
   }
 }

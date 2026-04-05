@@ -25,5 +25,10 @@ export async function apiRequest<T>(path: string, options?: RequestInit): Promis
     throw new Error(`API request failed for ${path}`);
   }
 
-  return response.json() as Promise<T>;
+  const payload = await response.json() as { data?: T } | T;
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    return payload.data as T;
+  }
+
+  return payload as T;
 }

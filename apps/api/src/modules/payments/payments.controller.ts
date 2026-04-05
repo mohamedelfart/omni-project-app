@@ -21,8 +21,8 @@ export class PaymentsController {
 
   @Patch(':id/status')
   @Roles('admin', 'command-center')
-  updateStatus(@Param('id') id: string, @Body() dto: UpdatePaymentStatusDto) {
-    return this.paymentsService.updateStatus(id, dto);
+  updateStatus(@CurrentUser() user: { id: string }, @Param('id') id: string, @Body() dto: UpdatePaymentStatusDto) {
+    return this.paymentsService.updateStatus(id, user.id, dto);
   }
 
   @Get('invoices/me')

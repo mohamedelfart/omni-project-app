@@ -25,6 +25,8 @@ import { ViewingModule } from './modules/viewing/viewing.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrchestratorModule } from './modules/orchestrator/orchestrator.module';
 import { HealthModule } from './modules/health/health.module';
+import { LocationModule } from './modules/location/location.module';
+import { TenantIntelligenceModule } from './modules/tenant-intelligence/tenant-intelligence.module';
 
 @Module({
   imports: [
@@ -53,6 +55,8 @@ import { HealthModule } from './modules/health/health.module';
     CostControlModule,
     VendorExecutionModule,
     InventoryModule,
+    LocationModule,
+    TenantIntelligenceModule,
   ],
 })
 export class AppModule {}

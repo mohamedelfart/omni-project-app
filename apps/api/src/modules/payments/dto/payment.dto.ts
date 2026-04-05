@@ -1,4 +1,5 @@
-import { IsNumber, IsOptional, IsString } from 'class-validator';
+import { PaymentStatus } from '@prisma/client';
+import { IsEnum, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreatePaymentDto {
   @IsOptional()
@@ -9,7 +10,8 @@ export class CreatePaymentDto {
   @IsString()
   unifiedRequestId?: string;
 
-  @IsNumber()
+  @IsInt()
+  @Min(1)
   amountMinor!: number;
 
   @IsString()
@@ -20,6 +22,6 @@ export class CreatePaymentDto {
 }
 
 export class UpdatePaymentStatusDto {
-  @IsString()
-  status!: string;
+  @IsEnum(PaymentStatus)
+  status!: PaymentStatus;
 }

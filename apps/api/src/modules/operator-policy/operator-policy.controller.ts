@@ -48,6 +48,16 @@ export class OperatorPolicyController {
     return this.operatorPolicyService.getCountryServiceRules(countryCode.toUpperCase());
   }
 
+  @Get('runtime-pack/:countryCode')
+  getRuntimePack(@Param('countryCode') countryCode: string) {
+    return this.operatorPolicyService.getRuntimePolicyContext(countryCode.toUpperCase());
+  }
+
+  @Get('runtime-pack')
+  getActiveRuntimePack() {
+    return this.operatorPolicyService.getRuntimePolicyContext();
+  }
+
   @Put('countries/:countryCode/services')
   setCountryServiceRules(
     @CurrentUser() user: { id: string },

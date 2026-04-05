@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { TenantPerksService } from '../notifications/tenant-perks.service';
+import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -9,6 +10,7 @@ export class VendorExecutionService {
     private readonly prisma: PrismaService,
     private readonly orchestratorService: OrchestratorService,
     private readonly tenantPerksService: TenantPerksService,
+    private readonly operatorPolicyService: OperatorPolicyService,
   ) {}
 
   private async providerIdsForUser(userId: string): Promise<string[]> {
@@ -30,6 +32,16 @@ export class VendorExecutionService {
       where: { vendorId: { in: providerIds } },
       include: {
         user: { select: { fullName: true, phoneNumber: true, email: true } },
+        viewingRequest: {
+          include: {
+            items: {
+              include: {
+                property: { select: { id: true, title: true, city: true, district: true } },
+              },
+            },
+            assignment: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -37,6 +49,7 @@ export class VendorExecutionService {
 
     return requests.map((request) => ({
       ticketId: request.id,
+      ticketCode: request.metadata && typeof request.metadata === 'object' ? (request.metadata as Record<string, unknown>).ticketCode ?? null : null,
       userName: request.user.fullName,
       phone: request.user.phoneNumber,
       location: {
@@ -49,11 +62,20 @@ export class VendorExecutionService {
         dropoffLng: request.dropoffLng,
       },
       assetId: request.propertyIds[0] ?? null,
+      properties: request.viewingRequest?.items.map((item) => ({
+        id: item.property.id,
+        title: item.property.title,
+        city: item.property.city,
+        district: item.property.district,
+        stopOrder: item.stopOrder,
+      })) ?? [],
       serviceType: request.serviceType,
       status: request.status,
       country: request.country,
       city: request.city,
       preferredTime: request.preferredTime,
+      createdAt: request.createdAt,
+      etaMinutes: request.viewingRequest?.assignment?.etaMinutes ?? null,
     }));
   }
 
@@ -75,7 +97,9 @@ export class VendorExecutionService {
     const updated = await this.orchestratorService.updateRequestStatusFromVendor(ticket.id, userId, status, note);
 
     if (updated.status === 'COMPLETED') {
-      if (ticket.serviceType === 'move-in') {
+      const perkPolicy = this.operatorPolicyService.getPerkPolicy(ticket.country);
+
+      if (perkPolicy.moveInCompletionEnabled && perkPolicy.moveInCompletionServiceTypes.includes(ticket.serviceType)) {
         await this.tenantPerksService.triggerPerk({
           userId: ticket.userId,
           trigger: 'MOVE_IN_COMPLETE',
@@ -91,7 +115,7 @@ export class VendorExecutionService {
         },
       });
 
-      if (completedServicesBefore === 0) {
+      if (perkPolicy.firstServiceEnabled && completedServicesBefore === 0) {
         await this.tenantPerksService.triggerPerk({
           userId: ticket.userId,
           trigger: 'FIRST_SERVICE',
@@ -99,7 +123,9 @@ export class VendorExecutionService {
         });
       }
 
-      await this.tenantPerksService.checkAndTriggerMilestones(ticket.userId);
+      if (perkPolicy.milestoneEnabled) {
+        await this.tenantPerksService.checkAndTriggerMilestones(ticket.userId);
+      }
     }
 
     return updated;

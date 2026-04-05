@@ -9,14 +9,10 @@ type SessionState = {
   locale: 'en' | 'ar';
   apiToken?: string;
   selectedPropertyId?: string;
-  activeViewingRequestId?: string;
-  confirmedViewingPropertyId?: string;
   signInAsTenant: () => void;
   signOut: () => void;
   setLocale: (locale: 'en' | 'ar') => void;
   setSelectedPropertyId: (propertyId?: string) => void;
-  setActiveViewingRequestId: (requestId?: string) => void;
-  confirmViewingProperty: (propertyId: string) => void;
 };
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -35,12 +31,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       role: 'tenant',
       apiToken: undefined,
       selectedPropertyId: undefined,
-      activeViewingRequestId: undefined,
-      confirmedViewingPropertyId: undefined,
     });
   },
   setLocale: (locale) => set({ locale }),
   setSelectedPropertyId: (selectedPropertyId) => set({ selectedPropertyId }),
-  setActiveViewingRequestId: (activeViewingRequestId) => set({ activeViewingRequestId }),
-  confirmViewingProperty: (confirmedViewingPropertyId) => set({ confirmedViewingPropertyId }),
 }));

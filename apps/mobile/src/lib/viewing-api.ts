@@ -37,6 +37,11 @@ export type ViewingRequest = {
     providerId: string;
     status: string;
     etaMinutes?: number | null;
+    provider?: {
+      id: string;
+      name: string;
+      city?: string | null;
+    };
   } | null;
   unifiedRequest: {
     id: string;
@@ -45,6 +50,18 @@ export type ViewingRequest = {
     city: string;
     propertyIds: string[];
     vendorId?: string | null;
+    metadata?: {
+      ticketCode?: string;
+      locationLabel?: string;
+      preferredDateISO?: string;
+    };
+    trackingEvents?: Array<{
+      id: string;
+      title: string;
+      description?: string | null;
+      status: string;
+      createdAt: string;
+    }>;
   };
   items: Array<{
     property: {
@@ -69,10 +86,23 @@ export type PropertySearchResult = {
   bedrooms: number;
   areaSqm: number;
   description: string;
+  addressLine1?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  countryCode?: string | null;
+  media?: Array<{
+    id: string;
+    url: string;
+    isPrimary?: boolean;
+  }>;
 };
 
 export function listProperties() {
   return apiRequest<PropertySearchResult[]>('/properties');
+}
+
+export function getPropertyById(propertyId: string) {
+  return apiRequest<PropertySearchResult>(`/properties/${propertyId}`);
 }
 
 export function getShortlist() {
