@@ -1,3 +1,4 @@
+import type { CountryDefinition } from './index';
 import { OperatorServiceRule } from '../../operator-policy/operator-policy.service';
 
 export const EGYPT_READY_SERVICE_RULES: OperatorServiceRule[] = [
@@ -70,4 +71,4 @@ export const EGYPT_READY_CONFIG = {
       providerSelectionSource: 'orchestrator',
     },
   },
-};
+} satisfies CountryDefinition;

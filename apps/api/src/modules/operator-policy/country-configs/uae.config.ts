@@ -1,3 +1,4 @@
+import type { CountryDefinition } from './index';
 import { OperatorServiceRule } from '../../operator-policy/operator-policy.service';
 
 /** UAE country service rules — all amounts in minor units (AED × 100) */
@@ -73,4 +74,4 @@ export const UAE_CONFIG = {
   googleRegionCode: 'AE',
   cities: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah'],
   services: UAE_SERVICE_RULES,
-};
+} satisfies CountryDefinition;

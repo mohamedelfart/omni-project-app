@@ -184,7 +184,7 @@ export class TenantPerksService {
 
     const firstBookings = await this.prisma.booking.findMany({
       where: {
-        startDate: {
+        moveInDate: {
           gte: new Date(oneYearAgo.getTime() - 1000 * 60 * 60 * 24),
           lte: new Date(oneYearAgo.getTime() + 1000 * 60 * 60 * 24),
         },

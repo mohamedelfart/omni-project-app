@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { CommandCenterStatus, Prisma, ServiceRequestStatus, UnifiedRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { IntegrationHubService } from '../integration-hub/integration-hub.service';
@@ -22,7 +22,7 @@ export class OrchestratorService {
     return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   }
 
-  private readonly activeLoadStatuses = [
+  private readonly activeLoadStatuses: UnifiedRequestStatus[] = [
     'SUBMITTED',
     'UNDER_REVIEW',
     'QUEUED',
@@ -33,15 +33,41 @@ export class OrchestratorService {
     'ESCALATED',
   ] as const;
 
-  private isTerminalRequestStatus(status: string) {
+  private isTerminalRequestStatus(status: UnifiedRequestStatus) {
     return ['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED'].includes(status);
   }
 
+  private toCommandCenterStatus(status: string): CommandCenterStatus {
+    switch (status) {
+      case 'MONITORING':
+      case 'ACTION_REQUIRED':
+      case 'RESOLVED':
+        return status;
+      case 'ESCALATED':
+      default:
+        return 'ACTION_REQUIRED';
+    }
+  }
+
+  private toServiceRequestStatus(status: UnifiedRequestStatus): ServiceRequestStatus | null {
+    switch (status) {
+      case 'ASSIGNED':
+      case 'EN_ROUTE':
+      case 'IN_PROGRESS':
+      case 'COMPLETED':
+      case 'CANCELLED':
+      case 'REJECTED':
+        return status;
+      default:
+        return null;
+    }
+  }
+
   private resolveRequestStatusFromPayment(params: {
-    currentStatus: string;
+    currentStatus: UnifiedRequestStatus;
     vendorId?: string | null;
     paymentStatus: 'PENDING' | 'AUTHORIZED' | 'SUCCEEDED' | 'FAILED' | 'REFUNDED' | 'WAIVED';
-  }): 'SUBMITTED' | 'ASSIGNED' | 'AWAITING_PAYMENT' | 'FAILED' | 'ESCALATED' | 'COMPLETED' | 'CANCELLED' | 'REJECTED' | 'UNDER_REVIEW' | 'QUEUED' | 'EN_ROUTE' | 'IN_PROGRESS' {
+  }): UnifiedRequestStatus {
     const { currentStatus, vendorId, paymentStatus } = params;
 
     if (paymentStatus === 'PENDING' || paymentStatus === 'AUTHORIZED') {
@@ -119,16 +145,16 @@ export class OrchestratorService {
         by: ['vendorId'],
         where: {
           vendorId: { in: candidateIds },
-          status: { in: [...this.activeLoadStatuses] as string[] },
+          status: { in: this.activeLoadStatuses },
         },
-        _count: { _all: true },
+        _count: { vendorId: true },
       })
       : [];
 
     const activeLoadByVendor = new Map<string, number>();
     for (const group of loadGroups) {
       if (!group.vendorId) continue;
-      activeLoadByVendor.set(group.vendorId, group._count._all);
+      activeLoadByVendor.set(group.vendorId, group._count.vendorId);
     }
 
     const ranked = candidates
@@ -451,7 +477,8 @@ export class OrchestratorService {
       throw new BadRequestException('Unsupported vendor status transition');
     }
 
-    const normalizedStatus = mappedStatus.coreStatus;
+    const normalizedStatus = mappedStatus.coreStatus as UnifiedRequestStatus;
+    const requestStatus = this.toServiceRequestStatus(normalizedStatus);
     const title = mappedStatus.actorEventTitle;
     const description = mappedStatus.actorEventDescription;
     const existingRequest = await this.prisma.unifiedRequest.findUnique({
@@ -467,15 +494,15 @@ export class OrchestratorService {
       where: { id: requestId },
       data: {
         status: normalizedStatus as never,
-        commandCenterStatus: mappedStatus.commandCenterStatus,
+        commandCenterStatus: this.toCommandCenterStatus(mappedStatus.commandCenterStatus),
       },
     });
 
-    if (existingRequest.viewingRequest) {
+    if (existingRequest.viewingRequest && requestStatus) {
       await this.prisma.viewingRequest.update({
         where: { id: existingRequest.viewingRequest.id },
         data: {
-          status: normalizedStatus,
+          status: requestStatus,
         },
       });
 
@@ -483,11 +510,11 @@ export class OrchestratorService {
         await this.prisma.viewingTripAssignment.update({
           where: { viewingRequestId: existingRequest.viewingRequest.id },
           data: {
-            status: normalizedStatus,
-            startedAt: normalizedStatus === 'IN_PROGRESS'
+            status: requestStatus,
+            startedAt: requestStatus === 'IN_PROGRESS'
               ? existingRequest.viewingRequest.assignment.startedAt ?? new Date()
               : existingRequest.viewingRequest.assignment.startedAt,
-            completedAt: normalizedStatus === 'COMPLETED' ? new Date() : existingRequest.viewingRequest.assignment.completedAt,
+            completedAt: requestStatus === 'COMPLETED' ? new Date() : existingRequest.viewingRequest.assignment.completedAt,
           },
         });
       }

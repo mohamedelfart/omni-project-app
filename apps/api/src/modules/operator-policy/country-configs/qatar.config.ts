@@ -1,3 +1,4 @@
+import type { CountryDefinition } from './index';
 import { OperatorServiceRule } from '../../operator-policy/operator-policy.service';
 
 /** Qatar country service rules — all amounts in minor units (QAR × 100) */
@@ -87,4 +88,4 @@ export const QATAR_CONFIG = {
       providerSelectionSource: 'orchestrator',
     },
   },
-};
+} satisfies CountryDefinition;

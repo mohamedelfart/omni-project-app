@@ -1,3 +1,4 @@
+import type { CountryDefinition } from './index';
 import { OperatorServiceRule } from '../../operator-policy/operator-policy.service';
 
 /** Saudi Arabia country service rules — all amounts in minor units (SAR × 100) */
@@ -57,4 +58,4 @@ export const SAUDI_CONFIG = {
   googleRegionCode: 'SA',
   cities: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'NEOM'],
   services: SAUDI_SERVICE_RULES,
-};
+} satisfies CountryDefinition;

@@ -335,21 +335,22 @@ export class CommandCenterService {
         byCountryService[countryServiceKey].failed += 1;
       }
 
-      byTenant[request.tenantId] = byTenant[request.tenantId] ?? {
+      const tenantAggregate = byTenant[request.tenantId] ?? {
         total: 0,
         lastServiceType: request.serviceType,
         awaitingPayment: 0,
         failed: 0,
         serviceCounts: {},
       };
-      byTenant[request.tenantId].total += 1;
-      byTenant[request.tenantId].lastServiceType = request.serviceType;
-      byTenant[request.tenantId].serviceCounts[request.serviceType] = (byTenant[request.tenantId].serviceCounts[request.serviceType] ?? 0) + 1;
+      byTenant[request.tenantId] = tenantAggregate;
+      tenantAggregate.total += 1;
+      tenantAggregate.lastServiceType = request.serviceType;
+      tenantAggregate.serviceCounts[request.serviceType] = (tenantAggregate.serviceCounts[request.serviceType] ?? 0) + 1;
       if (request.status === 'AWAITING_PAYMENT') {
-        byTenant[request.tenantId].awaitingPayment += 1;
+        tenantAggregate.awaitingPayment += 1;
       }
       if (request.status === 'FAILED') {
-        byTenant[request.tenantId].failed += 1;
+        tenantAggregate.failed += 1;
       }
 
       const lifecycle = this.requestLifecycleDurations(request);
@@ -453,7 +454,9 @@ export class CommandCenterService {
       },
       recommendationSignals: {
         countryPainPoints: Object.entries(byCountryService).map(([key, signal]) => {
-          const [countryCode, serviceType] = key.split('::');
+          const separatorIndex = key.indexOf('::');
+          const countryCode = separatorIndex >= 0 ? key.slice(0, separatorIndex) : 'unknown';
+          const serviceType = separatorIndex >= 0 ? key.slice(separatorIndex + 2) : 'unknown';
           return {
             countryCode,
             serviceType,
