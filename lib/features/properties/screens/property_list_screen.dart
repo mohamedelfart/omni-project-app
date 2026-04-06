@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
 import '../../../core/services/service_manager.dart';
+import '../../../shared/widgets/premium_visual_asset.dart';
 import 'property_details_screen.dart';
 import 'property_viewing_flow_screen.dart';
 
@@ -183,9 +184,15 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFFF8FAFC),
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF1E3A5F)),
+        leading: TextButton(
           onPressed: () => Navigator.pop(context),
+          child: const Text(
+            'Back',
+            style: TextStyle(
+              color: Color(0xFF1E3A5F),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
         title: const Text(
           'Property Search',
@@ -239,7 +246,6 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
                     decoration: InputDecoration(
                       hintText: 'Search city, area...',
                       hintStyle: const TextStyle(color: Color(0xFF6B7280)),
-                      prefixIcon: const Icon(Icons.search, color: Color(0xFF6B7280)),
                       filled: true,
                       fillColor: Colors.white,
                       border: OutlineInputBorder(
@@ -255,14 +261,15 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E3A5F),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: IconButton(
-                    icon: const Icon(Icons.tune, color: Colors.white),
+                SizedBox(
+                  height: 48,
+                  child: ElevatedButton(
                     onPressed: _showFilterSheet,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1E3A5F),
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('Filters'),
                   ),
                 ),
               ],
@@ -348,7 +355,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
             color: Colors.white,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.06),
+                color: Colors.black.withValues(alpha: 0.06),
                 blurRadius: 18,
                 offset: const Offset(0, -4),
               ),
@@ -397,7 +404,7 @@ class _PropertyCard extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 20,
             offset: const Offset(0, 4),
           ),
@@ -415,11 +422,12 @@ class _PropertyCard extends StatelessWidget {
                   height: 180,
                   width: double.infinity,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
+                  errorBuilder: (_, _, _) => const SizedBox(
                     height: 180,
-                    color: const Color(0xFFE5E7EB),
-                    child: const Center(
-                      child: Icon(Icons.business, size: 60, color: Color(0xFF9CA3AF)),
+                    child: PremiumVisualAsset(
+                      imageUrl: PremiumVisualCatalog.property,
+                      semanticLabel: 'Property visual',
+                      aspectRatio: 2.2,
                     ),
                   ),
                 ),
@@ -477,9 +485,6 @@ class _PropertyCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    const Icon(Icons.location_on_outlined,
-                        size: 14, color: Color(0xFF6B7280)),
-                    const SizedBox(width: 4),
                     Text(
                       '${property.location.city ?? ''}, ${property.location.country ?? ''}',
                       style: const TextStyle(
@@ -492,17 +497,11 @@ class _PropertyCard extends StatelessWidget {
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    _InfoChip(icon: Icons.bed_outlined, label: '${property.bedrooms} Beds'),
+                    _InfoChip(label: '${property.bedrooms} Beds'),
                     const SizedBox(width: 12),
-                    _InfoChip(
-                      icon: Icons.bathtub_outlined,
-                      label: '${property.bathrooms} Baths',
-                    ),
+                    _InfoChip(label: '${property.bathrooms} Baths'),
                     const SizedBox(width: 12),
-                    _InfoChip(
-                      icon: Icons.square_foot_outlined,
-                      label: '${property.area} m²',
-                    ),
+                    _InfoChip(label: '${property.area} m²'),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -563,22 +562,22 @@ class _PropertyCard extends StatelessWidget {
 }
 
 class _InfoChip extends StatelessWidget {
-  final IconData icon;
   final String label;
 
-  const _InfoChip({required this.icon, required this.label});
+  const _InfoChip({required this.label});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 14, color: const Color(0xFF6B7280)),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-        ),
-      ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+      ),
     );
   }
 }

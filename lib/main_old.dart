@@ -276,7 +276,7 @@ class _PropertySearchScreenState extends State<PropertySearchScreen> {
                     decoration: BoxDecoration(
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF00E5FF).withOpacity(
+                          color: const Color(0xFF00E5FF).withValues(alpha: 
                             (_hoverStates[id] ?? false) ? 0.9 : 0.4,
                           ),
                           blurRadius: (_hoverStates[id] ?? false) ? 30 : 15,
@@ -307,7 +307,7 @@ class _PropertySearchScreenState extends State<PropertySearchScreen> {
                               end: Alignment.bottomRight,
                               colors: [
                                 Colors.transparent,
-                                Colors.black.withOpacity(
+                                Colors.black.withValues(alpha: 
                                   (_hoverStates[id] ?? false) ? 0.3 : 0.15,
                                 ),
                               ],
@@ -333,7 +333,7 @@ class _PropertySearchScreenState extends State<PropertySearchScreen> {
                     duration: const Duration(milliseconds: 300),
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: (_isFavorite[id] ?? false) ? Colors.red.withOpacity(0.2) : Colors.black45,
+                      color: (_isFavorite[id] ?? false) ? Colors.red.withValues(alpha: 0.2) : Colors.black45,
                       shape: BoxShape.circle,
                     ),
                     child: Icon(

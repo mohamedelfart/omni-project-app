@@ -865,7 +865,7 @@ class PaidService {
         'description': description,
         'category': category,
         'icon': icon,
-        'color': color.value,
+        'color': color.toARGB32(),
         'isAvailable': isAvailable,
         'estimatedTime': estimatedTime,
         'rating': rating,

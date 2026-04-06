@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../home/screens/tenant_home_screen.dart';
+import '../../../shared/widgets/premium_visual_asset.dart';
 
 // ============================================================================
 // LOGIN SCREEN — QuickRent
@@ -56,29 +57,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 children: [
                   const SizedBox(height: 60),
 
-                  // ── Logo ───────────────────────────────────────
-                  Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xFF1E3A5F), Color(0xFF2D5A8E)],
-                      ),
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x331E3A5F),
-                          blurRadius: 24,
-                          offset: Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.home_work_outlined,
-                      color: Colors.white,
-                      size: 40,
+                  const SizedBox(
+                    width: 122,
+                    child: PremiumVisualAsset(
+                      imageUrl: PremiumVisualCatalog.login,
+                      semanticLabel: 'QuickRent',
+                      aspectRatio: 1,
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -147,10 +131,6 @@ class _LoginScreenState extends State<LoginScreen> {
                             decoration: const InputDecoration(
                               labelText: 'البريد الإلكتروني',
                               hintText: 'example@email.com',
-                              prefixIcon: Icon(
-                                Icons.email_outlined,
-                                color: Color(0xFF9CA3AF),
-                              ),
                             ),
                             validator: (v) {
                               if (v == null || v.isEmpty) {
@@ -171,19 +151,17 @@ class _LoginScreenState extends State<LoginScreen> {
                             decoration: InputDecoration(
                               labelText: 'كلمة المرور',
                               hintText: '••••••••',
-                              prefixIcon: const Icon(
-                                Icons.lock_outlined,
-                                color: Color(0xFF9CA3AF),
-                              ),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _obscurePassword
-                                      ? Icons.visibility_off_outlined
-                                      : Icons.visibility_outlined,
-                                  color: const Color(0xFF9CA3AF),
-                                ),
+                              suffixIcon: TextButton(
                                 onPressed: () => setState(
                                   () => _obscurePassword = !_obscurePassword,
+                                ),
+                                child: Text(
+                                  _obscurePassword ? 'Show' : 'Hide',
+                                  style: const TextStyle(
+                                    color: Color(0xFF64748B),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),
@@ -279,7 +257,7 @@ class _WavePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFF1E3A5F).withOpacity(0.06)
+      ..color = const Color(0xFF1E3A5F).withValues(alpha: 0.06)
       ..style = PaintingStyle.fill;
 
     final path = Path();
@@ -302,7 +280,7 @@ class _WavePainter extends CustomPainter {
     canvas.drawPath(path, paint);
 
     final paint2 = Paint()
-      ..color = const Color(0xFFF97316).withOpacity(0.05)
+      ..color = const Color(0xFFF97316).withValues(alpha: 0.05)
       ..style = PaintingStyle.fill;
 
     final path2 = Path();

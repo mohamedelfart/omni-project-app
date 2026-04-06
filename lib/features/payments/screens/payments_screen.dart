@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
+import '../../../shared/widgets/premium_visual_asset.dart';
 import '../../../shared/widgets/loading_action_button.dart';
 
 class PaymentsScreen extends StatefulWidget {
@@ -64,6 +65,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                     trailing:
                         '${widget.confirmedProperty!.price.toStringAsFixed(0)} ${widget.confirmedProperty!.currency}',
                     accent: const Color(0xFF1E3A5F),
+                    visualUrl: PremiumVisualCatalog.property,
                   ),
                   const SizedBox(height: 16),
                 ],
@@ -72,6 +74,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                   subtitle: 'Security deposit and first installment ready for checkout.',
                   trailing: 'Due now',
                   accent: Color(0xFFF97316),
+                  visualUrl: PremiumVisualCatalog.payments,
                 ),
                 const SizedBox(height: 16),
                 const _SectionCard(
@@ -79,6 +82,7 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                   subtitle: 'Optional protection plan can be combined in the same payment.',
                   trailing: 'Optional',
                   accent: Color(0xFF0F766E),
+                  visualUrl: PremiumVisualCatalog.insurance,
                 ),
                 const SizedBox(height: 16),
                 const _SectionCard(
@@ -86,18 +90,29 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                   subtitle: 'Track move-in, cleaning, and external service charges in one place.',
                   trailing: 'Unified',
                   accent: Color(0xFF7C3AED),
+                  visualUrl: PremiumVisualCatalog.globalServices,
                 ),
                 const SizedBox(height: 24),
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFFFFFFFF), Color(0xFFF2F7FF)],
+                    ),
                     borderRadius: BorderRadius.circular(24),
                     border: Border.all(color: const Color(0xFFE2E8F0)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      const PremiumVisualAsset(
+                        imageUrl: PremiumVisualCatalog.payments,
+                        semanticLabel: 'Payment handoff',
+                        aspectRatio: 2.4,
+                      ),
+                      const SizedBox(height: 14),
                       const Text(
                         'Payment handoff',
                         style: TextStyle(
@@ -119,7 +134,6 @@ class _PaymentsScreenState extends State<PaymentsScreen> {
                         label: 'Pay now',
                         isLoading: _isPaying,
                         onPressed: _payNow,
-                        icon: Icons.lock,
                       ),
                     ],
                   ),
@@ -135,12 +149,14 @@ class _SectionCard extends StatelessWidget {
   final String subtitle;
   final String trailing;
   final Color accent;
+  final String visualUrl;
 
   const _SectionCard({
     required this.title,
     required this.subtitle,
     required this.trailing,
     required this.accent,
+    required this.visualUrl,
   });
 
   @override
@@ -155,13 +171,12 @@ class _SectionCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 12,
-            height: 12,
-            margin: const EdgeInsets.only(top: 6),
-            decoration: BoxDecoration(
-              color: accent,
-              shape: BoxShape.circle,
+          SizedBox(
+            width: 72,
+            child: PremiumVisualAsset(
+              imageUrl: visualUrl,
+              semanticLabel: title,
+              aspectRatio: 1,
             ),
           ),
           const SizedBox(width: 14),

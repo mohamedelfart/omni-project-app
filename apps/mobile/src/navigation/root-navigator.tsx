@@ -1,6 +1,5 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Text, View } from 'react-native';
 
 import { ForgotPasswordScreen } from '../screens/auth/forgot-password-screen';
 import { LoginScreen } from '../screens/auth/login-screen';
@@ -25,10 +24,11 @@ import { MoveInScreen } from '../screens/services/move-in-screen';
 import { PaidServicesScreen } from '../screens/services/paid-services-screen';
 import { ServicesHubScreen } from '../screens/services/services-hub-screen';
 import { TenantHomeScreen } from '../screens/tenant/home-screen';
-import { useSessionStore } from '../store/session.store';
+import { VendorScreen } from '../screens/vendor/vendor-screen';
 
 type RootStackParamList = {
   Login: undefined;
+  Vendor: undefined;
   Register: undefined;
   OtpLogin: undefined;
   ForgotPassword: undefined;
@@ -53,53 +53,38 @@ type RootStackParamList = {
   Contracts: undefined;
 };
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+const Stack = createNativeStackNavigator();
 
 export function RootNavigator() {
-  const { isAuthenticated } = useSessionStore();
-  const initialRouteName: keyof RootStackParamList = isAuthenticated ? 'TenantHome' : 'Login';
-
-  if (!initialRouteName) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F7FB' }}>
-        <Text style={{ color: '#1E3A5F', fontSize: 18, fontWeight: '700' }}>App Loaded</Text>
-      </View>
-    );
-  }
+  const initialRouteName: keyof RootStackParamList = 'Login';
 
   return (
     <NavigationContainer>
       <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
-        {isAuthenticated ? (
-          <>
-            <Stack.Screen name="TenantHome" component={TenantHomeScreen} />
-            <Stack.Screen name="PropertySearch" component={PropertySearchScreen} />
-            <Stack.Screen name="PropertyDetails" component={PropertyDetailsScreen} />
-            <Stack.Screen name="Shortlist" component={ShortlistScreen} />
-            <Stack.Screen name="Compare" component={CompareScreen} />
-            <Stack.Screen name="ViewingTrip" component={ViewingTripScreen} />
-            <Stack.Screen name="BookingConfirmation" component={BookingConfirmationScreen} />
-            <Stack.Screen name="Payments" component={PaymentsScreen} />
-            <Stack.Screen name="Rewards" component={RewardsScreen} />
-            <Stack.Screen name="Insurance" component={InsuranceScreen} />
-            <Stack.Screen name="ServicesHub" component={ServicesHubScreen} />
-            <Stack.Screen name="MoveIn" component={MoveInScreen} />
-            <Stack.Screen name="Maintenance" component={MaintenanceScreen} />
-            <Stack.Screen name="Cleaning" component={CleaningScreen} />
-            <Stack.Screen name="AirportTransfer" component={AirportTransferScreen} />
-            <Stack.Screen name="PaidServices" component={PaidServicesScreen} />
-            <Stack.Screen name="Community" component={CommunityScreen} />
-            <Stack.Screen name="Profile" component={ProfileScreen} />
-            <Stack.Screen name="Contracts" component={ContractsScreen} />
-          </>
-        ) : (
-          <>
-            <Stack.Screen name="Login" component={LoginScreen} />
-            <Stack.Screen name="Register" component={RegisterScreen} />
-            <Stack.Screen name="OtpLogin" component={OtpLoginScreen} />
-            <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-          </>
-        )}
+        <Stack.Screen name="Login" component={LoginScreen} />
+        <Stack.Screen name="Vendor" component={VendorScreen} />
+        <Stack.Screen name="Register" component={RegisterScreen} />
+        <Stack.Screen name="OtpLogin" component={OtpLoginScreen} />
+        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+        <Stack.Screen name="TenantHome" component={TenantHomeScreen} />
+        <Stack.Screen name="PropertySearch" component={PropertySearchScreen} />
+        <Stack.Screen name="PropertyDetails" component={PropertyDetailsScreen} />
+        <Stack.Screen name="Shortlist" component={ShortlistScreen} />
+        <Stack.Screen name="Compare" component={CompareScreen} />
+        <Stack.Screen name="ViewingTrip" component={ViewingTripScreen} />
+        <Stack.Screen name="BookingConfirmation" component={BookingConfirmationScreen} />
+        <Stack.Screen name="Payments" component={PaymentsScreen} />
+        <Stack.Screen name="Rewards" component={RewardsScreen} />
+        <Stack.Screen name="Insurance" component={InsuranceScreen} />
+        <Stack.Screen name="ServicesHub" component={ServicesHubScreen} />
+        <Stack.Screen name="MoveIn" component={MoveInScreen} />
+        <Stack.Screen name="Maintenance" component={MaintenanceScreen} />
+        <Stack.Screen name="Cleaning" component={CleaningScreen} />
+        <Stack.Screen name="AirportTransfer" component={AirportTransferScreen} />
+        <Stack.Screen name="PaidServices" component={PaidServicesScreen} />
+        <Stack.Screen name="Community" component={CommunityScreen} />
+        <Stack.Screen name="Profile" component={ProfileScreen} />
+        <Stack.Screen name="Contracts" component={ContractsScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

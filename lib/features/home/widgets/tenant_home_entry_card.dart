@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../../shared/widgets/premium_visual_asset.dart';
+
 class TenantHomeEntryCard extends StatelessWidget {
   final String title;
   final String subtitle;
-  final IconData icon;
+  final String visualUrl;
   final Color accentColor;
   final VoidCallback onTap;
   final bool highlighted;
@@ -13,7 +15,7 @@ class TenantHomeEntryCard extends StatelessWidget {
     super.key,
     required this.title,
     required this.subtitle,
-    required this.icon,
+    required this.visualUrl,
     required this.accentColor,
     required this.onTap,
     this.highlighted = false,
@@ -35,8 +37,11 @@ class TenantHomeEntryCard extends StatelessWidget {
                     end: Alignment.bottomRight,
                     colors: [Color(0xFF1E3A5F), Color(0xFF355C8A)],
                   )
-                : null,
-            color: highlighted ? null : Colors.white,
+                : const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFFFFFF), Color(0xFFF8FAFF)],
+                  ),
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: highlighted ? const Color(0xFF1E3A5F) : const Color(0xFFE2E8F0),
@@ -56,52 +61,12 @@ class TenantHomeEntryCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: highlighted
-                            ? Colors.white.withOpacity(0.16)
-                            : accentColor.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Icon(
-                        icon,
-                        color: highlighted ? Colors.white : accentColor,
-                        size: 24,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (highlighted)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.14),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: const Text(
-                          'Highlighted',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      )
-                    else
-                      Icon(
-                        Icons.arrow_forward_ios,
-                        size: 14,
-                        color: accentColor,
-                      ),
-                  ],
+                PremiumVisualAsset(
+                  imageUrl: visualUrl,
+                  semanticLabel: title,
+                  aspectRatio: highlighted ? 2.2 : 1.8,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 14),
                 Text(
                   title,
                   style: TextStyle(
@@ -116,7 +81,7 @@ class TenantHomeEntryCard extends StatelessWidget {
                     subtitle,
                     style: TextStyle(
                       color: highlighted
-                          ? Colors.white.withOpacity(0.84)
+                          ? Colors.white.withValues(alpha: 0.84)
                           : const Color(0xFF64748B),
                       fontSize: 13,
                       height: 1.5,
@@ -151,11 +116,14 @@ class TenantHomeEntryCard extends StatelessWidget {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            Icon(
-                              Icons.arrow_forward,
-                              size: 16,
-                              color: highlighted ? Colors.white : accentColor,
+                            const SizedBox(width: 10),
+                            Container(
+                              height: 2,
+                              width: 18,
+                              decoration: BoxDecoration(
+                                color: highlighted ? Colors.white : accentColor,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
                             ),
                           ],
                         ),

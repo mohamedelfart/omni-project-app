@@ -32,11 +32,7 @@ const styles = StyleSheet.create({
     gap: mobileTheme.spacing.md,
     borderWidth: 1,
     borderColor: mobileTheme.colors.neutral100,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.06,
-    shadowRadius: 16,
-    elevation: 3,
+    boxShadow: '0px 8px 16px rgba(0, 0, 0, 0.06)',
   },
   cardFeatured: {
     backgroundColor: '#FFF7ED',

@@ -6,6 +6,7 @@ import '../../properties/screens/property_list_screen.dart';
 import '../../services/screens/insurance_screen.dart';
 import '../../services/screens/services_screen.dart';
 import '../widgets/tenant_home_entry_card.dart';
+import '../../../shared/widgets/premium_visual_asset.dart';
 
 class TenantHomeScreen extends StatefulWidget {
   const TenantHomeScreen({super.key});
@@ -40,16 +41,12 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
           children: [
             Row(
               children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E3A5F),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const Icon(
-                    Icons.apartment_rounded,
-                    color: Colors.white,
+                const SizedBox(
+                  width: 64,
+                  child: PremiumVisualAsset(
+                    imageUrl: PremiumVisualCatalog.property,
+                    semanticLabel: 'Tenant home',
+                    aspectRatio: 1,
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -82,14 +79,16 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: Colors.white,
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFFFFFF), Color(0xFFF2F7FF)],
+                ),
                 borderRadius: BorderRadius.circular(24),
                 border: Border.all(color: const Color(0xFFE2E8F0)),
               ),
               child: const Row(
                 children: [
-                  Icon(Icons.search, color: Color(0xFF1E3A5F)),
-                  SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       'Search properties, launch services, or continue to payments.',
@@ -109,7 +108,7 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
                 title: 'Insurance',
                 subtitle:
                     'Highlighted tenant protection flow with direct handoff into payments.',
-                icon: Icons.shield_outlined,
+                visualUrl: PremiumVisualCatalog.insurance,
                 accentColor: const Color(0xFF1E3A5F),
                 highlighted: true,
                 isLoading: _loadingKey == 'insurance',
@@ -128,7 +127,7 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
                 TenantHomeEntryCard(
                   title: 'Property Search',
                   subtitle: 'Select up to 3 homes, add them to cart, and request a viewing.',
-                  icon: Icons.home_work_outlined,
+                  visualUrl: PremiumVisualCatalog.property,
                   accentColor: const Color(0xFF1E3A5F),
                   isLoading: _loadingKey == 'property',
                   onTap: () => _open('property', const PropertyListScreen()),
@@ -136,7 +135,7 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
                 TenantHomeEntryCard(
                   title: 'Free Services',
                   subtitle: 'Moving, cleaning, maintenance, and airport transport for tenants.',
-                  icon: Icons.handyman_outlined,
+                  visualUrl: PremiumVisualCatalog.cleaning,
                   accentColor: const Color(0xFF0F766E),
                   isLoading: _loadingKey == 'free-services',
                   onTap: () => _open('free-services', const HotelServicesScreen()),
@@ -144,7 +143,7 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
                 TenantHomeEntryCard(
                   title: 'Services',
                   subtitle: 'Open the global services entry for partner-led tenant requests.',
-                  icon: Icons.public_outlined,
+                  visualUrl: PremiumVisualCatalog.globalServices,
                   accentColor: const Color(0xFF7C3AED),
                   isLoading: _loadingKey == 'services',
                   onTap: () => _open('services', const ServicesScreen()),
@@ -152,7 +151,7 @@ class _TenantHomeScreenState extends State<TenantHomeScreen> {
                 TenantHomeEntryCard(
                   title: 'Payments',
                   subtitle: 'Continue from confirmed property to the tenant payment handoff.',
-                  icon: Icons.payments_outlined,
+                  visualUrl: PremiumVisualCatalog.payments,
                   accentColor: const Color(0xFFF97316),
                   isLoading: _loadingKey == 'payments',
                   onTap: () => _open('payments', const PaymentsScreen()),

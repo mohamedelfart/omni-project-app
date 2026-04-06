@@ -224,11 +224,7 @@ const styles = StyleSheet.create({
     borderRadius: mobileTheme.radii.lg,
     padding: mobileTheme.spacing.lg,
     gap: mobileTheme.spacing.xs,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    boxShadow: '0px 4px 8px rgba(0, 0, 0, 0.04)',
   },
   recHeader: {
     flexDirection: 'row',

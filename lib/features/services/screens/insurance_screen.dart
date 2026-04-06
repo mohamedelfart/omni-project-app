@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../shared/widgets/premium_visual_asset.dart';
 import '../../../shared/widgets/loading_action_button.dart';
 
 class InsuranceScreen extends StatefulWidget {
@@ -19,18 +20,21 @@ class _InsuranceScreenState extends State<InsuranceScreen> {
       name: 'Secure 3',
       priceLabel: '500 QAR',
       description: 'Three months of payment interruption cover.',
+      visualUrl: PremiumVisualCatalog.insurance,
       highlight: false,
     ),
     _InsurancePlan(
       name: 'Secure 6',
       priceLabel: '900 QAR',
       description: 'Balanced coverage for move-in and early tenancy risk.',
+      visualUrl: PremiumVisualCatalog.insurance,
       highlight: true,
     ),
     _InsurancePlan(
       name: 'Secure 12',
       priceLabel: '1,500 QAR',
       description: 'Full-year protection for rent disruption scenarios.',
+      visualUrl: PremiumVisualCatalog.insurance,
       highlight: false,
     ),
   ];
@@ -89,6 +93,12 @@ class _InsuranceScreenState extends State<InsuranceScreen> {
                   child: const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      PremiumVisualAsset(
+                        imageUrl: PremiumVisualCatalog.insurance,
+                        semanticLabel: 'Insurance protection',
+                        aspectRatio: 2.3,
+                      ),
+                      SizedBox(height: 14),
                       Text(
                         'Tenant protection',
                         style: TextStyle(
@@ -126,7 +136,6 @@ class _InsuranceScreenState extends State<InsuranceScreen> {
                   label: 'Add insurance to payments',
                   isLoading: _isSubmitting,
                   onPressed: _activate,
-                  icon: Icons.shield_outlined,
                 ),
               ],
             ),
@@ -164,6 +173,15 @@ class _PlanCard extends StatelessWidget {
       ),
       child: Row(
         children: [
+          SizedBox(
+            width: 86,
+            child: PremiumVisualAsset(
+              imageUrl: plan.visualUrl,
+              semanticLabel: plan.name,
+              aspectRatio: 1,
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -230,12 +248,14 @@ class _InsurancePlan {
   final String name;
   final String priceLabel;
   final String description;
+  final String visualUrl;
   final bool highlight;
 
   const _InsurancePlan({
     required this.name,
     required this.priceLabel,
     required this.description,
+    required this.visualUrl,
     required this.highlight,
   });
 }

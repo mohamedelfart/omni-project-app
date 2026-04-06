@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
+import '../../../shared/widgets/premium_visual_asset.dart';
 import '../../../shared/widgets/loading_action_button.dart';
 
 class ServicesScreen extends StatefulWidget {
@@ -77,13 +78,23 @@ class _ServicesScreenState extends State<ServicesScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFFFFFFF), Color(0xFFF2F7FF)],
+                      ),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: const Color(0xFFE2E8F0)),
                     ),
                     child: const Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        PremiumVisualAsset(
+                          imageUrl: PremiumVisualCatalog.globalServices,
+                          semanticLabel: 'Global services',
+                          aspectRatio: 2.4,
+                        ),
+                        SizedBox(height: 14),
                         Text(
                           'Global services entry',
                           style: TextStyle(
@@ -144,7 +155,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Uber',
         description: 'Fast transport across the city.',
         category: 'TRANSPORT',
-        icon: '🚕',
+        icon: '',
         color: Colors.black,
         isAvailable: true,
         estimatedTime: '5-15 min',
@@ -157,7 +168,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Careem',
         description: 'Reliable city and airport rides.',
         category: 'TRANSPORT',
-        icon: '🚗',
+        icon: '',
         color: Colors.green,
         isAvailable: true,
         estimatedTime: '3-10 min',
@@ -170,7 +181,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Talabat',
         description: 'Food delivery from local and global brands.',
         category: 'FOOD',
-        icon: '🍕',
+        icon: '',
         color: Colors.orange,
         isAvailable: true,
         estimatedTime: '20-45 min',
@@ -183,7 +194,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Deliveroo',
         description: 'Premium dining delivery.',
         category: 'FOOD',
-        icon: '🍔',
+        icon: '',
         color: Colors.teal,
         isAvailable: true,
         estimatedTime: '15-35 min',
@@ -196,7 +207,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Amazon',
         description: 'Parcel and essentials delivery.',
         category: 'DELIVERY',
-        icon: '📦',
+        icon: '',
         color: Colors.blue,
         isAvailable: true,
         estimatedTime: '1-3 days',
@@ -209,7 +220,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Noon',
         description: 'Grocery and product delivery.',
         category: 'DELIVERY',
-        icon: '🛒',
+        icon: '',
         color: Colors.pink,
         isAvailable: true,
         estimatedTime: '30-60 min',
@@ -222,7 +233,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'ToYou',
         description: 'On-demand errands and delivery.',
         category: 'SERVICES',
-        icon: '🚚',
+        icon: '',
         color: Colors.purple,
         isAvailable: true,
         estimatedTime: '1-2 hrs',
@@ -235,7 +246,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
         name: 'Home Support',
         description: 'Partner network for household services.',
         category: 'SERVICES',
-        icon: '🏠',
+        icon: '',
         color: Colors.indigo,
         isAvailable: true,
         estimatedTime: '2-4 hrs',
@@ -283,7 +294,7 @@ class _PaidServiceCardState extends State<PaidServiceCard> {
           boxShadow: _isHovered
               ? [
                   BoxShadow(
-                    color: const Color(0x140F172A).withOpacity(0.2),
+                    color: const Color(0x140F172A).withValues(alpha: 0.2),
                     blurRadius: 16,
                     offset: const Offset(0, 8),
                   ),
@@ -298,19 +309,13 @@ class _PaidServiceCardState extends State<PaidServiceCard> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    color: widget.service.color.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
+                PremiumVisualAsset(
+                  imageUrl: resolvePremiumVisual(
+                    name: widget.service.name,
+                    category: widget.service.category,
                   ),
-                  child: Center(
-                    child: Text(
-                      widget.service.icon,
-                      style: const TextStyle(fontSize: 24),
-                    ),
-                  ),
+                  semanticLabel: widget.service.name,
+                  aspectRatio: 1.35,
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -325,10 +330,8 @@ class _PaidServiceCardState extends State<PaidServiceCard> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.star, size: 14, color: Colors.amber),
-                    const SizedBox(width: 2),
                     Text(
-                      widget.service.rating.toString(),
+                      'Rating ${widget.service.rating.toString()}',
                       style: const TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                     const SizedBox(width: 8),

@@ -22,11 +22,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: mobileTheme.spacing.lg,
     paddingVertical: 14,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
-    elevation: 2,
+    boxShadow: '0px 6px 14px rgba(0, 0, 0, 0.05)',
   },
   input: {
     color: mobileTheme.colors.text,

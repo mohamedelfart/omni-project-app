@@ -32,6 +32,7 @@ export type TenantRecommendationsResponse = {
     hasActiveRequests: boolean;
     totalRequests: number;
     lastServiceType: string | null;
+    city: string | null;
   };
   top: TenantServiceRecommendation[];
   all: TenantServiceRecommendation[];

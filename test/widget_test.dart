@@ -8,14 +8,15 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:omnirent_app/main.dart';
+import 'package:omnirent_app/features/auth/screens/login_screen.dart';
 
 void main() {
   testWidgets('OmniRent App Logo Test', (WidgetTester tester) async {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const OmniRentApp());
 
-    // Verify that our app loads
+    // Verify that the app boots into the current authentication flow.
     expect(find.byType(OmniRentApp), findsOneWidget);
-    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(find.byType(LoginScreen), findsOneWidget);
   });
 }
