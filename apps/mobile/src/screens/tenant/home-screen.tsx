@@ -1,283 +1,144 @@
 import { useNavigation } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Animated,
+  Image,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
-import { ActionCard } from '../../components/action-card';
+import { OmniButton } from '../../components/omni-button';
+import { OmniSkeleton } from '../../components/omni-skeleton';
 import { PremiumSearchBar } from '../../components/premium-search-bar';
-import { getTranslator } from '../../lib/language';
-import { type TenantServiceRecommendation, fetchTenantRecommendations } from '../../lib/tenant-recommendations-api';
 import { useSessionStore } from '../../store/session.store';
-import { mobileTheme } from '../../theme';
+import { homeStyles as styles } from './home-screen.styles';
 
-const BADGE_COLORS: Record<string, string> = {
-  free: '#16a34a',
-  priority: '#d97706',
-  suggested: '#2563eb',
-  new: '#7c3aed',
+const FEATURED_PROPERTY = {
+  title: 'Skyline Pearl Residence',
+  location: 'West Bay, Doha',
+  price: 'QAR 6,800 / month',
+  image:
+    'https://images.unsplash.com/photo-1600607686527-6fb886090705?auto=format&fit=crop&w=1400&q=80',
 };
-
-const BADGE_KEY_BY_TYPE: Record<string, string> = {
-  free: 'home.badge.free',
-  priority: 'home.badge.priority',
-  suggested: 'home.badge.suggested',
-  new: 'home.badge.new',
-};
-
-function ServiceRecommendationCard({
-  item,
-  t,
-  onPress,
-}: {
-  item: TenantServiceRecommendation;
-  t: (key: string, fallback?: string) => string;
-  onPress: () => void;
-}) {
-  const badgeColor = BADGE_COLORS[item.badge] ?? '#6b7280';
-  const badgeLabel = t(BADGE_KEY_BY_TYPE[item.badge] ?? '', item.badge);
-
-  return (
-    <TouchableOpacity style={styles.recCard} onPress={onPress} activeOpacity={0.8}>
-      <View style={styles.recHeader}>
-        <Text style={styles.recTitle}>{item.displayName}</Text>
-        <View style={[styles.badge, { backgroundColor: badgeColor }]}>
-          <Text style={styles.badgeText}>{badgeLabel}</Text>
-        </View>
-      </View>
-      <Text style={styles.recTagline}>{item.tagline}</Text>
-      <Text style={styles.recReason}>{item.reason}</Text>
-    </TouchableOpacity>
-  );
-}
 
 export function TenantHomeScreen() {
   const navigation = useNavigation<any>();
-  const isAuthenticated = useSessionStore((s) => s.isAuthenticated);
-  const locale = useSessionStore((s) => s.locale);
-  const t = getTranslator(locale);
-  const [recommendations, setRecommendations] = useState<TenantServiceRecommendation[]>([]);
-  const [freeHighlight, setFreeHighlight] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const staticWidgets = [
-    {
-      label: t('home.widget.freeBalance.label', 'Free service balance'),
-      value: t('home.widget.freeBalance.value', 'Moving covered up to QAR 500'),
-    },
-    {
-      label: t('home.widget.insurance.label', 'Insurance'),
-      value: t('home.widget.insurance.value', 'Protection active and ready for renewal'),
-    },
-  ];
+  const fade = useRef(new Animated.Value(0)).current;
+  const lift = useRef(new Animated.Value(18)).current;
+
+  const isAuthenticated = useSessionStore((state) => state.isAuthenticated);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    fetchTenantRecommendations()
-      .then((data) => {
-        const safeTop = Array.isArray(data?.top)
-          ? data.top.filter((item): item is TenantServiceRecommendation => Boolean(item?.serviceType && item?.displayName))
-          : [];
-        setRecommendations(safeTop);
-        setFreeHighlight(data?.freeServiceHighlight ?? null);
-      })
-      .catch(() => {
-        // Graceful silent fallback — recommendations are non-critical
-      });
-  }, [isAuthenticated]);
+    const timer = setTimeout(() => setLoading(false), 850);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    Animated.parallel([
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 380,
+        useNativeDriver: true,
+      }),
+      Animated.timing(lift, {
+        toValue: 0,
+        duration: 380,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [fade, lift, loading]);
+
+  const actionCards = useMemo(
+    () => [
+      {
+        title: 'Book Viewing',
+        body: 'Secure your slot instantly with guided support.',
+        onPress: () => navigation.push('ViewingTrip'),
+      },
+      {
+        title: 'Free Services',
+        body: 'Unlock move-in support and tenant convenience perks.',
+        onPress: () => navigation.push('MoveIn'),
+      },
+    ],
+    [navigation],
+  );
+
+  const openProfile = () => {
+    if (!isAuthenticated) {
+      navigation.navigate('Login');
+      return;
+    }
+    navigation.push('Profile');
+  };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={styles.headerRow}>
-        <Text style={styles.logo}>QuickRent</Text>
-        <View style={styles.headerIcons}>
-          <Text style={styles.icon}>🔔</Text>
-          <Text style={styles.icon}>👤</Text>
+    <SafeAreaView style={styles.screen}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.topRow}>
+          <View>
+            <Text style={styles.brand}>OmniRent</Text>
+            <Text style={styles.subtitle}>Premium living in Qatar and Texas</Text>
+          </View>
+          <TouchableOpacity onPress={openProfile} activeOpacity={0.85} style={styles.profileChip}>
+            <Text style={styles.profileChipText}>ME</Text>
+          </TouchableOpacity>
         </View>
-      </View>
 
-      <Text style={styles.greeting}>{t('home.greeting')}</Text>
-      <PremiumSearchBar placeholder={t('home.searchPlaceholder')} />
+        <Pressable onPress={() => navigation.push('PropertySearch')}>
+          <PremiumSearchBar placeholder="Search luxury homes" />
+        </Pressable>
 
-      <View style={styles.grid}>
-        <ActionCard
-          icon="🏢"
-          title={t('home.action.propertySearch.title', 'Property Search')}
-          subtitle={t('home.action.propertySearch.subtitle', 'Search, shortlist up to 3 homes, and request a routed viewing')}
-          onPress={() => navigation.navigate('PropertySearch')}
-        />
-        <ActionCard
-          icon="📦"
-          title={t('home.action.freeServices.title', 'Free Services')}
-          subtitle={t('home.action.freeServices.subtitle', 'Moving, maintenance, cleaning, and airport support')}
-          onPress={() => navigation.navigate('MoveIn')}
-        />
-        <ActionCard
-          icon="🧰"
-          title={t('home.action.services.title', 'Services')}
-          subtitle={t('home.action.services.subtitle', 'Operator-managed services across your full tenant journey')}
-          onPress={() => navigation.navigate('ServicesHub')}
-        />
-        <ActionCard
-          icon="💳"
-          title={t('home.action.payments.title', 'Payments')}
-          subtitle={t('home.action.payments.subtitle', 'Rent, service excess, and scheduled charges')}
-          onPress={() => navigation.navigate('Payments')}
-        />
-        <ActionCard
-          icon="🛡️"
-          title={t('home.action.insurance.title', 'Insurance')}
-          subtitle={t('home.action.insurance.subtitle', 'Coverage and benefits in one dedicated place')}
-          featured
-          onPress={() => navigation.navigate('Insurance')}
-        />
-      </View>
-
-      {recommendations.length > 0 && (
-        <View style={styles.sectionWrap}>
-          <Text style={styles.sectionTitle}>{t('home.recommended', 'Recommended for you')}</Text>
-          {freeHighlight ? (
-            <View style={styles.freeHighlightCard}>
-              <Text style={styles.freeHighlightText}>✦ {freeHighlight}</Text>
+        {loading ? (
+          <View style={styles.card}>
+            <OmniSkeleton height={220} radius={24} />
+            <OmniSkeleton height={24} width="70%" style={{ marginTop: 16 }} />
+            <OmniSkeleton height={16} width="44%" style={{ marginTop: 8 }} />
+            <OmniSkeleton height={52} radius={16} style={{ marginTop: 18 }} />
+          </View>
+        ) : (
+          <Animated.View style={{ opacity: fade, transform: [{ translateY: lift }] }}>
+            <Text style={styles.sectionTitle}>Featured Property</Text>
+            <View style={styles.card}>
+              <View>
+                <Image source={{ uri: FEATURED_PROPERTY.image }} style={styles.heroImage} resizeMode="cover" />
+                <View style={styles.floatingTag}>
+                  <Text style={styles.floatingTagText}>Luxury Pick</Text>
+                </View>
+              </View>
+              <View style={styles.heroContent}>
+                <Text style={styles.heroTitle}>{FEATURED_PROPERTY.title}</Text>
+                <Text style={styles.heroMeta}>{FEATURED_PROPERTY.location}</Text>
+                <Text style={styles.heroPrice}>{FEATURED_PROPERTY.price}</Text>
+                <OmniButton
+                  style={styles.cta}
+                  label="Explore Property"
+                  onPress={() => navigation.push('PropertyDetails')}
+                />
+              </View>
             </View>
-          ) : null}
-          {recommendations.map((rec) => (
-            <ServiceRecommendationCard
-              key={rec.serviceType}
-              item={rec}
-              t={t}
-              onPress={() => navigation.navigate(rec.navigateTo || 'ServicesHub')}
-            />
+          </Animated.View>
+        )}
+
+        <View style={styles.actionGrid}>
+          {actionCards.map((item) => (
+            <TouchableOpacity key={item.title} activeOpacity={0.9} style={styles.actionCard} onPress={item.onPress}>
+              <Text style={styles.actionTitle}>{item.title}</Text>
+              <Text style={styles.actionText}>{item.body}</Text>
+            </TouchableOpacity>
           ))}
         </View>
-      )}
-
-      <View style={styles.widgetWrap}>
-        {staticWidgets.map((widget) => (
-          <View key={widget.label} style={styles.widgetCard}>
-            <Text style={styles.widgetLabel}>{widget.label}</Text>
-            <Text style={styles.widgetValue}>{widget.value}</Text>
-          </View>
-        ))}
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: '#F4F7FB',
-  },
-  content: {
-    padding: mobileTheme.spacing.xl,
-    gap: mobileTheme.spacing.lg,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  logo: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: mobileTheme.colors.primary,
-  },
-  headerIcons: {
-    flexDirection: 'row',
-    gap: mobileTheme.spacing.md,
-  },
-  icon: {
-    fontSize: 22,
-  },
-  greeting: {
-    fontSize: 18,
-    color: mobileTheme.colors.neutral600,
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: mobileTheme.spacing.md,
-  },
-  sectionWrap: {
-    gap: mobileTheme.spacing.sm,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: mobileTheme.colors.primary,
-    marginBottom: mobileTheme.spacing.xs,
-  },
-  freeHighlightCard: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: mobileTheme.radii.md,
-    padding: mobileTheme.spacing.md,
-  },
-  freeHighlightText: {
-    color: '#166534',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  recCard: {
-    backgroundColor: mobileTheme.colors.white,
-    borderWidth: 1,
-    borderColor: mobileTheme.colors.neutral100,
-    borderRadius: mobileTheme.radii.lg,
-    padding: mobileTheme.spacing.lg,
-    gap: mobileTheme.spacing.xs,
-    boxShadow: '0px 4px 8px rgba(0, 0, 0, 0.04)',
-  },
-  recHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  recTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: mobileTheme.colors.primary,
-    flex: 1,
-  },
-  badge: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    marginLeft: mobileTheme.spacing.sm,
-  },
-  badgeText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  recTagline: {
-    color: mobileTheme.colors.neutral600,
-    fontSize: 13,
-  },
-  recReason: {
-    color: mobileTheme.colors.secondary,
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  widgetWrap: {
-    gap: mobileTheme.spacing.md,
-    marginTop: mobileTheme.spacing.sm,
-  },
-  widgetCard: {
-    backgroundColor: mobileTheme.colors.white,
-    borderWidth: 1,
-    borderColor: mobileTheme.colors.neutral100,
-    borderRadius: mobileTheme.radii.lg,
-    padding: mobileTheme.spacing.lg,
-  },
-  widgetLabel: {
-    color: mobileTheme.colors.neutral600,
-    fontSize: 13,
-  },
-  widgetValue: {
-    color: mobileTheme.colors.primary,
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-});

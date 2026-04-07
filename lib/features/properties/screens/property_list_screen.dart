@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/models/models.dart';
 import '../../../core/services/service_manager.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
+import 'luxury_property_booking_showcase.dart';
 import 'property_details_screen.dart';
 import 'property_viewing_flow_screen.dart';
 
@@ -201,6 +202,28 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
             fontWeight: FontWeight.bold,
           ),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const LuxuryPropertyBookingShowcase(),
+                  ),
+                );
+              },
+              child: const Text(
+                'Luxury UI',
+                style: TextStyle(
+                  color: Color(0xFF1E3A5F),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: Column(
         children: [

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 
 import { Badge, Card, ScreenContainer } from '@quickrent/design-system';
 
@@ -16,9 +17,17 @@ export function FeatureShell({
   badge?: string;
   children: ReactNode;
 }) {
+  const navigation = useNavigation<any>();
+  const canGoBack = navigation.canGoBack();
+
   return (
     <ScreenContainer>
       <ScrollView contentContainerStyle={styles.content}>
+        {canGoBack ? (
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+            <Text style={styles.backButtonText}>Back</Text>
+          </TouchableOpacity>
+        ) : null}
         <Card>
           <View style={styles.header}>
             {badge ? <Badge label={badge} tone="info" /> : null}
@@ -36,6 +45,19 @@ const styles = StyleSheet.create({
   content: {
     gap: mobileTheme.spacing.lg,
     paddingBottom: mobileTheme.spacing.xxxl,
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: mobileTheme.colors.neutral100,
+    backgroundColor: mobileTheme.colors.white,
+  },
+  backButtonText: {
+    color: mobileTheme.colors.primary,
+    fontWeight: '700',
   },
   header: {
     gap: mobileTheme.spacing.sm,

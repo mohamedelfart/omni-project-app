@@ -17,6 +17,7 @@ export function ViewingTripScreen() {
   const [request, setRequest] = useState<ViewingRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retrySeed, setRetrySeed] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +64,7 @@ export function ViewingTripScreen() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [retrySeed]);
 
   const confirmedViewingPropertyId = request?.selectedPropertyIds?.[0];
   const statusLabel = request?.unifiedRequest.status ?? 'SUBMITTED';
@@ -72,9 +73,9 @@ export function ViewingTripScreen() {
 
   return (
     <FeatureShell
-      title={t('viewing.shell.title', 'Viewing Trip')}
-      subtitle={t('viewing.shell.subtitle', 'Tenant to core to command center and provider routing, with pickup, ETA, and multi-stop visibility.')}
-      badge={t('viewing.shell.badge', 'Trip Tracking')}
+      title="FREE Viewing Experience"
+      subtitle="We pick you up, show you the home, and bring you back"
+      badge="FREE SERVICE"
     >
       {loading ? <LoadingState label={t('viewing.loading', 'Requesting your viewing trip')} /> : null}
       {!loading && !request ? (
@@ -84,8 +85,17 @@ export function ViewingTripScreen() {
         />
       ) : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? <Button label="Retry" variant="secondary" onPress={() => setRetrySeed((current) => current + 1)} /> : null}
       <Card>
         <View style={styles.tripCard}>
+          <View style={styles.benefitsBlock}>
+            <View style={styles.freeBadgePill}>
+              <Text style={styles.freeBadgeText}>FREE SERVICE</Text>
+            </View>
+            <Text style={styles.benefitLine}>✔ Free driver to the property</Text>
+            <Text style={styles.benefitLine}>✔ Guided tour with our agent</Text>
+            <Text style={styles.benefitLine}>✔ No commitment required</Text>
+          </View>
           <Badge
             label={request?.assignment
               ? `${t('viewing.badge.vendorAssigned', 'Vendor assigned')} • ${t('viewing.eta', 'ETA')} ${request.assignment.etaMinutes ?? 0} min`
@@ -137,10 +147,11 @@ export function ViewingTripScreen() {
             </>
           ) : null}
           <Button
-            label={t('viewing.continueToPayment', 'Continue to Payment')}
+            label="Book My Free Visit"
             disabled={!confirmedViewingPropertyId}
-            onPress={() => navigation.navigate('Payments')}
+            onPress={() => navigation.push('Payments')}
           />
+          <Text style={styles.supportText}>No payment required for this visit</Text>
         </View>
       </Card>
     </FeatureShell>
@@ -149,6 +160,25 @@ export function ViewingTripScreen() {
 
 const styles = StyleSheet.create({
   tripCard: { gap: mobileTheme.spacing.sm },
+  benefitsBlock: { gap: mobileTheme.spacing.xs, marginBottom: 2 },
+  freeBadgePill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EAF3FF',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  freeBadgeText: {
+    color: '#2159A6',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  benefitLine: {
+    color: mobileTheme.colors.primary,
+    fontSize: 14,
+    lineHeight: 20,
+  },
   title: { color: mobileTheme.colors.primary, fontSize: 20, fontWeight: '700' },
   text: { color: mobileTheme.colors.secondary, lineHeight: 22 },
   subheader: { color: mobileTheme.colors.primary, fontWeight: '700', marginTop: 4 },
@@ -157,5 +187,6 @@ const styles = StyleSheet.create({
   stopTitle: { color: mobileTheme.colors.primary, fontWeight: '700' },
   eventRow: { gap: mobileTheme.spacing.xs, paddingVertical: mobileTheme.spacing.xs },
   eventTitle: { color: mobileTheme.colors.primary, fontWeight: '700' },
+  supportText: { color: mobileTheme.colors.secondary, fontSize: 12, lineHeight: 18 },
   error: { color: '#B91C1C' },
 });

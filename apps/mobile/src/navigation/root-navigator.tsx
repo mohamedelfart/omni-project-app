@@ -56,17 +56,24 @@ type RootStackParamList = {
 const Stack = createNativeStackNavigator();
 
 export function RootNavigator() {
-  const initialRouteName: keyof RootStackParamList = 'Login';
+  const initialRouteName: keyof RootStackParamList = 'TenantHome';
 
   return (
     <NavigationContainer>
-      <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
+      <Stack.Navigator
+        initialRouteName={initialRouteName}
+        screenOptions={{
+          headerShown: false,
+          gestureEnabled: true,
+          animation: 'slide_from_right',
+        }}
+      >
+        <Stack.Screen name="TenantHome" component={TenantHomeScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Vendor" component={VendorScreen} />
         <Stack.Screen name="Register" component={RegisterScreen} />
         <Stack.Screen name="OtpLogin" component={OtpLoginScreen} />
         <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-        <Stack.Screen name="TenantHome" component={TenantHomeScreen} />
         <Stack.Screen name="PropertySearch" component={PropertySearchScreen} />
         <Stack.Screen name="PropertyDetails" component={PropertyDetailsScreen} />
         <Stack.Screen name="Shortlist" component={ShortlistScreen} />

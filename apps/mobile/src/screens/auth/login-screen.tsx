@@ -22,6 +22,11 @@ export function LoginScreen() {
   const navigation = useNavigation<any>();
   const signInAsTenant = useSessionStore((state) => state.signInAsTenant);
 
+  const translate = (key: string, fallback: string) => {
+    const value = t(key, { defaultValue: fallback, returnObjects: false });
+    return typeof value === 'string' ? value : fallback;
+  };
+
   const { handleSubmit, setValue, watch } = useForm<LoginForm>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -37,24 +42,24 @@ export function LoginScreen() {
   return (
     <ScreenContainer>
       <View style={styles.headerBlock}>
-        <Text style={styles.title}>{t('auth.welcome')}</Text>
-        <Text style={styles.subtitle}>{t('auth.subtitle')}</Text>
+        <Text style={styles.title}>{translate('auth.welcome', 'Welcome back to QuickRent')}</Text>
+        <Text style={styles.subtitle}>{translate('auth.subtitle', 'Secure global rental and lifestyle platform')}</Text>
       </View>
 
       <Card>
         <View style={styles.form}>
           <Input
-            placeholder={t('auth.email')}
+            placeholder={translate('auth.email', 'Email')}
             value={watch('email')}
             onChangeText={(v: string) => setValue('email', v, { shouldValidate: true })}
           />
           <Input
-            placeholder={t('auth.password')}
+            placeholder={translate('auth.password', 'Password')}
             secureTextEntry
             value={watch('password')}
             onChangeText={(v: string) => setValue('password', v, { shouldValidate: true })}
           />
-          <Button label={t('auth.signIn')} onPress={handleSubmit(onSubmit)} />
+          <Button label={translate('auth.signIn', 'Sign In')} onPress={handleSubmit(onSubmit)} />
         </View>
       </Card>
 

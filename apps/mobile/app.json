@@ -5,9 +5,35 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "web": {
-      "bundler": "metro"
+    "runtimeVersion": {
+      "policy": "appVersion"
     },
-    "assetBundlePatterns": ["**/*"]
+    "web": {
+      "bundler": "metro",
+      "build": {
+        "babel": {
+          "include": ["packages/**"]
+        }
+      }
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTabletMode": true,
+      "bundleIdentifier": "com.omnirent.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.omnirent.mobile"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "YOUR_EAS_PROJECT_ID"
+      }
+    }
   }
 }

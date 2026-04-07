@@ -45,7 +45,7 @@ export function ShortlistScreen() {
         notes: 'Tenant mobile viewing request',
       });
 
-      navigation.navigate('ViewingTrip');
+      navigation.push('ViewingTrip');
     } catch {
       setError('Could not create viewing request.');
     } finally {
@@ -64,9 +64,10 @@ export function ShortlistScreen() {
   };
 
   return (
-    <FeatureShell title="Shortlist" subtitle="Up to three properties can be carried into compare and routed trip planning." badge="Max 3">
+    <FeatureShell title="FREE Viewing Experience" subtitle="We pick you up, show you the home, and bring you back" badge="FREE SERVICE">
       {loading ? <Text style={styles.position}>Loading shortlist...</Text> : null}
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? <Button label="Retry" variant="secondary" onPress={() => void loadShortlist()} /> : null}
       {!loading && !items.length ? (
         <EmptyState title="No homes shortlisted yet" description="Select up to 3 properties from search, then request a guided viewing trip." />
       ) : null}
@@ -84,8 +85,21 @@ export function ShortlistScreen() {
           </View>
         </Card>
       ))}
-      <Button label="Compare Properties" variant="secondary" disabled={items.length < 2} onPress={() => navigation.navigate('Compare')} />
-      <Button label={isRequesting ? 'Requesting' : 'Request Viewing'} disabled={!items.length || isRequesting} onPress={requestViewingTrip} />
+      {!!items.length ? (
+        <Card>
+          <View style={styles.benefitsBlock}>
+            <View style={styles.freeBadgePill}>
+              <Text style={styles.freeBadgeText}>FREE SERVICE</Text>
+            </View>
+            <Text style={styles.benefitLine}>✔ Free driver to the property</Text>
+            <Text style={styles.benefitLine}>✔ Guided tour with our agent</Text>
+            <Text style={styles.benefitLine}>✔ No commitment required</Text>
+            <Text style={styles.supportText}>No payment required for this visit</Text>
+          </View>
+        </Card>
+      ) : null}
+      <Button label="Compare Properties" variant="secondary" disabled={items.length < 2} onPress={() => navigation.push('Compare')} />
+      <Button label="Book My Free Visit" disabled={!items.length || isRequesting} onPress={requestViewingTrip} />
     </FeatureShell>
   );
 }
@@ -96,5 +110,31 @@ const styles = StyleSheet.create({
   position: { color: mobileTheme.colors.secondary },
   title: { color: mobileTheme.colors.primary, fontSize: 18, fontWeight: '700' },
   meta: { color: mobileTheme.colors.accent, fontWeight: '700' },
+  benefitsBlock: { gap: mobileTheme.spacing.xs },
+  freeBadgePill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EAF3FF',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginBottom: 2,
+  },
+  freeBadgeText: {
+    color: '#2159A6',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  benefitLine: {
+    color: mobileTheme.colors.primary,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  supportText: {
+    color: mobileTheme.colors.secondary,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 4,
+  },
   error: { color: '#B91C1C' },
 });

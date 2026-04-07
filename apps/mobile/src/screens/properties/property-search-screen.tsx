@@ -64,10 +64,11 @@ export function PropertySearchScreen() {
         <View style={styles.summaryCard}>
           <Text style={styles.summaryTitle}>Shortlist status</Text>
           <Text style={styles.summaryText}>{shortlistStatusLabel}</Text>
-          <Button label={shortlistedPropertyIds.length ? 'Request Viewing' : 'Select Homes'} disabled={!shortlistedPropertyIds.length} onPress={() => navigation.navigate('Shortlist')} />
+          <Button label={shortlistedPropertyIds.length ? 'Request Viewing' : 'Select Homes'} disabled={!shortlistedPropertyIds.length} onPress={() => navigation.push('Shortlist')} />
         </View>
       </Card>
       {error ? <EmptyState title="Connection issue" description={error} /> : null}
+      {error ? <Button label="Retry" variant="secondary" onPress={() => void refresh()} /> : null}
       {!loading && properties.length === 0 ? <EmptyState title="No properties found" description="Try adjusting search filters and refresh." /> : null}
       {properties.map((property) => (
         <Card key={property.id}>
@@ -79,7 +80,7 @@ export function PropertySearchScreen() {
               <Text style={styles.secondary}>{property.bedrooms} bed • {property.areaSqm} sqm • {property.city}</Text>
             </View>
             <View style={styles.actions}>
-              <Button label="Details" variant="secondary" onPress={() => { setSelectedPropertyId(property.id); navigation.navigate('PropertyDetails'); }} />
+              <Button label="Details" variant="secondary" onPress={() => { setSelectedPropertyId(property.id); navigation.push('PropertyDetails'); }} />
               <Button
                 label={shortlistedPropertyIds.includes(property.id) ? 'Added' : (shortlistLoadingId === property.id ? 'Adding' : 'Add to shortlist')}
                 disabled={shortlistedPropertyIds.includes(property.id) || (!shortlistedPropertyIds.includes(property.id) && shortlistedPropertyIds.length >= 3) || shortlistLoadingId === property.id}

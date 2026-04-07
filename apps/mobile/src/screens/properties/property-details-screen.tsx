@@ -1,25 +1,39 @@
 import { useNavigation } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  Image,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
 
-import { Button, Card, Badge, LoadingState } from '@quickrent/design-system';
-
+import { OmniButton } from '../../components/omni-button';
+import { OmniSkeleton } from '../../components/omni-skeleton';
 import { FeatureShell } from '../../components/shell/feature-shell';
-import { PropertyMapCard } from '../../components/property-map-card';
 import { getTranslator } from '../../lib/language';
+import { requireAuth } from '../../lib/require-auth';
 import { addToShortlist, getPropertyById, PropertySearchResult } from '../../lib/viewing-api';
 import { useSessionStore } from '../../store/session.store';
-import { mobileTheme } from '../../theme';
+import { propertyDetailsStyles as styles } from './property-details-screen.styles';
+
+const FALLBACK_IMAGE =
+  'https://images.unsplash.com/photo-1493809842364-78817add7ffb?auto=format&fit=crop&w=1400&q=80';
 
 export function PropertyDetailsScreen() {
   const navigation = useNavigation<any>();
   const propertyId = useSessionStore((state) => state.selectedPropertyId) ?? 'prop_1';
   const locale = useSessionStore((state) => state.locale);
+  const isAuthenticated = useSessionStore((state) => state.isAuthenticated);
   const t = getTranslator(locale);
-  const [adding, setAdding] = useState(false);
-  const [added, setAdded] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [property, setProperty] = useState<PropertySearchResult | null>(null);
+  const [retrySeed, setRetrySeed] = useState(0);
+  const [adding, setAdding] = useState(false);
+
+  const fade = useRef(new Animated.Value(0)).current;
+  const rise = useRef(new Animated.Value(16)).current;
 
   useEffect(() => {
     let cancelled = false;
@@ -47,16 +61,46 @@ export function PropertyDetailsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [propertyId]);
+  }, [propertyId, retrySeed]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    Animated.parallel([
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 360,
+        useNativeDriver: true,
+      }),
+      Animated.timing(rise, {
+        toValue: 0,
+        duration: 360,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [fade, loading, rise]);
 
   if (loading) {
     return (
       <FeatureShell
-        title={t('property.shell.title', 'Property')}
-        subtitle={t('property.shell.loadingSubtitle', 'Loading property from QuickRent Core')}
-        badge={t('property.shell.badge', 'Property Details')}
+        title="Property Details"
+        subtitle="Curating premium specifications"
+        badge="Luxury Residence"
       >
-        <LoadingState label={t('property.loading', 'Loading property details')} />
+        <View style={styles.page}>
+          <View style={styles.heroCard}>
+            <OmniSkeleton height={230} radius={24} />
+            <OmniSkeleton height={28} width="72%" style={{ marginTop: 14 }} />
+            <OmniSkeleton height={16} width="40%" style={{ marginTop: 8 }} />
+            <View style={styles.statsRow}>
+              <OmniSkeleton height={72} radius={16} style={{ flex: 1 }} />
+              <OmniSkeleton height={72} radius={16} style={{ flex: 1 }} />
+              <OmniSkeleton height={72} radius={16} style={{ flex: 1 }} />
+            </View>
+          </View>
+        </View>
       </FeatureShell>
     );
   }
@@ -64,69 +108,120 @@ export function PropertyDetailsScreen() {
   if (!property) {
     return (
       <FeatureShell
-        title={t('property.shell.title', 'Property')}
-        subtitle={t('property.shell.emptySubtitle', 'No property data available')}
-        badge={t('property.shell.badge', 'Property Details')}
+        title="Property Details"
+        subtitle="Data temporarily unavailable"
+        badge="Luxury Residence"
       >
-        <Card>
-          <Text style={styles.text}>{t('property.empty', 'No properties found.')}</Text>
-        </Card>
+        <View style={styles.errorCard}>
+          <Text style={styles.sectionTitle}>Unable to load property right now</Text>
+          <Text style={styles.bodyText}>
+            Please retry. The browsing flow remains active and your navigation stack is preserved.
+          </Text>
+          <OmniButton label="Retry" onPress={() => setRetrySeed((value) => value + 1)} />
+        </View>
       </FeatureShell>
     );
   }
 
+  const monthlyRent = `QAR ${((property.monthlyRentMinor ?? 0) / 100).toLocaleString()} / month`;
+  const primaryImage = property.media?.find((item) => item.isPrimary)?.url ?? property.media?.[0]?.url ?? FALLBACK_IMAGE;
+
   return (
     <FeatureShell
       title={property.title}
-      subtitle={property.description ?? t('property.subtitleFallback', 'Property details')}
-      badge={t('property.shell.badge', 'Property Details')}
+      subtitle={property.district ?? property.city}
+      badge="Property Details"
     >
-      <Card>
-        <View style={styles.section}>
-          <Badge
-            label={`QAR ${((property.monthlyRentMinor ?? 0) / 100).toLocaleString()} ${t('property.monthly', '/ month')}`}
-            tone="success"
-          />
-          <Text style={styles.meta}>{property.district ?? property.city}</Text>
-          <Text style={styles.text}>{t('property.valueText', 'Concierge, gym, route planning, live pickup readiness, and booking progression are all available from this view.')}</Text>
-          <Button
-            label={added
-              ? t('property.button.inShortlist', 'In shortlist')
-              : (adding ? t('property.button.adding', 'Adding') : t('property.button.addToShortlist', 'Add to shortlist'))}
-            disabled={added || adding}
-            onPress={async () => {
-              setAdding(true);
-              try {
-                await addToShortlist(property.id);
-                setAdded(true);
-              } finally {
-                setAdding(false);
-              }
-            }}
-          />
-          <Button
-            label={t('property.button.openShortlist', 'Open shortlist')}
-            variant="secondary"
-            onPress={() => navigation.navigate('Shortlist')}
-          />
-        </View>
-      </Card>
-      {property.lat != null && property.lng != null && (
-        <PropertyMapCard
-          lat={property.lat}
-          lng={property.lng}
-          addressLine1={property.addressLine1}
-          city={property.city}
-          district={property.district}
-          title={property.title}
-        />
-      )}
+      <Animated.View style={{ opacity: fade, transform: [{ translateY: rise }] }}>
+        <ScrollView contentContainerStyle={styles.page}>
+          <View style={styles.heroCard}>
+            <View style={styles.heroImageWrap}>
+              <Image
+                source={{ uri: primaryImage }}
+                style={styles.heroImage}
+                resizeMode="cover"
+              />
+              <View style={styles.priceTag}>
+                <Text style={styles.priceTagText}>{monthlyRent}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.title}>{property.title}</Text>
+            <Text style={styles.location}>
+              {(property.addressLine1 ?? property.city) || 'Premium district'}
+            </Text>
+
+            <View style={styles.statsRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>BED</Text>
+                <Text style={styles.statValue}>{property.bedrooms ?? 2} Bed</Text>
+                <Text style={styles.statLabel}>Bedrooms</Text>
+              </View>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>BATH</Text>
+                <Text style={styles.statValue}>2 Bath</Text>
+                <Text style={styles.statLabel}>Bathrooms</Text>
+              </View>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>SQM</Text>
+                <Text style={styles.statValue}>{property.areaSqm ?? 130} sqm</Text>
+                <Text style={styles.statLabel}>Area</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.bodyCard}>
+            <Text style={styles.sectionTitle}>About this residence</Text>
+            <Text style={styles.bodyText}>
+              {property.description ||
+                t(
+                  'property.valueText',
+                  'Premium tower apartment with concierge service, wellness amenities, and smooth tenant operations from viewing to payment.',
+                )}
+            </Text>
+
+            <View style={styles.actionRow}>
+              <OmniButton
+                label={adding ? 'Adding to shortlist...' : 'Reserve Unit'}
+                onPress={async () => {
+                  if (adding) {
+                    return;
+                  }
+
+                  setAdding(true);
+                  try {
+                    await addToShortlist(property.id);
+                    requireAuth({
+                      isAuthenticated,
+                      navigation,
+                      action: () => navigation.push('ViewingTrip'),
+                    });
+                  } finally {
+                    setAdding(false);
+                  }
+                }}
+                disabled={adding}
+              />
+
+              <OmniButton
+                label="Continue to Payment"
+                onPress={() =>
+                  requireAuth({
+                    isAuthenticated,
+                    navigation,
+                    action: () => navigation.push('Payments'),
+                  })
+                }
+              />
+
+              <OmniButton
+                label="Explore Free Services"
+                onPress={() => navigation.push('MoveIn')}
+              />
+            </View>
+          </View>
+        </ScrollView>
+      </Animated.View>
     </FeatureShell>
   );
 }
-
-const styles = StyleSheet.create({
-  section: { gap: mobileTheme.spacing.sm },
-  meta: { color: mobileTheme.colors.primary, fontWeight: '700', fontSize: 16 },
-  text: { color: mobileTheme.colors.secondary, lineHeight: 22 },
-});

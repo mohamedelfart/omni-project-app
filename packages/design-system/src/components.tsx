@@ -161,7 +161,11 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    ...shadows.card,
+    shadowColor: shadows.card.shadowColor,
+    shadowOffset: shadows.card.shadowOffset,
+    shadowOpacity: shadows.card.shadowOpacity,
+    shadowRadius: shadows.card.shadowRadius,
+    elevation: shadows.card.elevation,
   },
   button: {
     minHeight: 52,
@@ -234,7 +238,11 @@ const styles = StyleSheet.create({
   },
   tabItemActive: {
     backgroundColor: colors.card,
-    ...shadows.soft,
+    shadowColor: shadows.soft.shadowColor,
+    shadowOffset: shadows.soft.shadowOffset,
+    shadowOpacity: shadows.soft.shadowOpacity,
+    shadowRadius: shadows.soft.shadowRadius,
+    elevation: shadows.soft.elevation,
   },
   tabLabel: {
     ...typography.caption,
