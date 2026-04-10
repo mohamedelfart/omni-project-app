@@ -5,7 +5,6 @@ import { Button, Card } from '@quickrent/design-system';
 
 import { FeatureShell } from '../../components/shell/feature-shell';
 import { serviceCards } from '../../data/mock';
-import { useSessionStore } from '../../store/session.store';
 import { mobileTheme } from '../../theme';
 
 const destinations: Record<string, string> = {
@@ -18,13 +17,8 @@ const destinations: Record<string, string> = {
 
 export function ServicesHubScreen() {
   const navigation = useNavigation<any>();
-  const isAuthenticated = useSessionStore((state) => state.isAuthenticated);
 
   const handleOpenService = (title: string) => {
-    if (!isAuthenticated) {
-      navigation.navigate('Login');
-      return;
-    }
     navigation.push(destinations[title]);
   };
 

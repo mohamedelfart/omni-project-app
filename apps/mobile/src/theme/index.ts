@@ -1,4 +1,6 @@
-import { colors, radii, spacing, typography } from '@quickrent/design-system';
+import * as DesignSystem from '@quickrent/design-system';
+
+const { colors, radii, spacing, typography } = DesignSystem as any;
 
 export const mobileTheme = {
   colors: {

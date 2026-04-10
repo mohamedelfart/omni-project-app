@@ -1,6 +1,17 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../../features/properties/data/doha_areas.dart';
+
+class InventoryVisibilityPolicy {
+  static bool isTenantVisible(Property property) {
+    return property.status == PropertyStatus.published;
+  }
+
+  static List<Property> tenantVisible(List<Property> inventory) {
+    return inventory.where(isTenantVisible).toList();
+  }
+}
 
 /// ============================================================================
 /// UNIFIED SERVICE MANAGER
@@ -15,12 +26,15 @@ class ServiceManager {
   // Services Map
   final StreamController<ServiceRequest> _requestStreamController =
       StreamController<ServiceRequest>.broadcast();
+  final List<Property> _inventory = <Property>[];
 
   factory ServiceManager() {
     return _instance;
   }
 
-  ServiceManager._internal();
+  ServiceManager._internal() {
+    _inventory.addAll(_generateMockProperties());
+  }
 
   /// Create a new service request
   Future<ServiceRequest> createServiceRequest({
@@ -107,24 +121,181 @@ class ServiceManager {
   }) async {
     try {
       await Future.delayed(const Duration(milliseconds: 1000));
-      return _generateMockProperties();
+      List<Property> results = InventoryVisibilityPolicy.tenantVisible(_inventory);
+
+      if (propertyType != null && propertyType.trim().isNotEmpty) {
+        final String normalized = propertyType.toLowerCase();
+        results = results
+            .where((Property p) => p.propertyType.toLowerCase() == normalized)
+            .toList();
+      }
+
+      if (minPrice != null) {
+        results = results.where((Property p) => p.price >= minPrice).toList();
+      }
+      if (maxPrice != null) {
+        results = results.where((Property p) => p.price <= maxPrice).toList();
+      }
+      if (minBedrooms != null) {
+        results = results.where((Property p) => p.bedrooms >= minBedrooms).toList();
+      }
+      if (maxBedrooms != null) {
+        results = results.where((Property p) => p.bedrooms <= maxBedrooms).toList();
+      }
+
+      return results;
     } catch (e) {
       throw Exception('Failed to search properties: $e');
     }
   }
 
   /// Get property details
-  Future<Property> getPropertyDetails(String propertyId) async {
+  Future<Property> getPropertyDetails(
+    String propertyId, {
+    bool includeUnpublished = false,
+  }) async {
     try {
       await Future.delayed(const Duration(milliseconds: 500));
-      final properties = _generateMockProperties();
-      return properties.firstWhere(
-        (p) => p.id == propertyId,
-        orElse: () => properties.first,
+      final List<Property> source = includeUnpublished
+          ? _inventory
+          : InventoryVisibilityPolicy.tenantVisible(_inventory);
+      return source.firstWhere(
+        (Property p) => p.id == propertyId,
+        orElse: () => throw Exception('Property not found'),
       );
     } catch (e) {
       throw Exception('Failed to load property: $e');
     }
+  }
+
+  Future<List<Property>> dashboardListProperties({
+    required String actorRole,
+  }) async {
+    _assertDashboardRole(actorRole);
+    await Future.delayed(const Duration(milliseconds: 250));
+    return List<Property>.from(_inventory);
+  }
+
+  Future<Property> dashboardCreateProperty({
+    required String actorRole,
+    required Property property,
+  }) async {
+    _assertDashboardRole(actorRole);
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    final Property normalized = Property(
+      id: property.id,
+      title: property.title,
+      description: property.description,
+      propertyType: property.propertyType,
+      areaName: property.areaName,
+      city: property.city,
+      zoneNumber: property.zoneNumber,
+      streetNumber: property.streetNumber,
+      buildingNumber: property.buildingNumber,
+      location: property.location,
+      price: property.price,
+      currency: property.currency,
+      bedrooms: property.bedrooms,
+      bathrooms: property.bathrooms,
+      sizeSqm: property.sizeSqm,
+      parkingCount: property.parkingCount,
+      furnished: property.furnished,
+      amenities: property.amenities,
+      images: property.images,
+      status: property.status,
+      createdBy: property.createdBy,
+      createdAt: property.createdAt,
+      updatedAt: DateTime.now(),
+      vendorId: property.vendorId,
+      rating: property.rating,
+      reviews: property.reviews,
+      isAvailable: property.isAvailable,
+      nationalAddress: property.nationalAddress,
+    );
+
+    _upsertInventory(normalized);
+    return normalized;
+  }
+
+  Future<Property> dashboardUpdateProperty({
+    required String actorRole,
+    required Property property,
+  }) async {
+    _assertDashboardRole(actorRole);
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    final int index = _inventory.indexWhere((Property p) => p.id == property.id);
+    if (index < 0) {
+      throw Exception('Property not found for update');
+    }
+
+    final Property updated = Property(
+      id: property.id,
+      title: property.title,
+      description: property.description,
+      propertyType: property.propertyType,
+      areaName: property.areaName,
+      city: property.city,
+      zoneNumber: property.zoneNumber,
+      streetNumber: property.streetNumber,
+      buildingNumber: property.buildingNumber,
+      location: property.location,
+      price: property.price,
+      currency: property.currency,
+      bedrooms: property.bedrooms,
+      bathrooms: property.bathrooms,
+      sizeSqm: property.sizeSqm,
+      parkingCount: property.parkingCount,
+      furnished: property.furnished,
+      amenities: property.amenities,
+      images: property.images,
+      status: property.status,
+      createdBy: property.createdBy,
+      createdAt: _inventory[index].createdAt,
+      updatedAt: DateTime.now(),
+      vendorId: property.vendorId,
+      rating: property.rating,
+      reviews: property.reviews,
+      isAvailable: property.isAvailable,
+      nationalAddress: property.nationalAddress,
+    );
+
+    _inventory[index] = updated;
+    return updated;
+  }
+
+  Future<Property> dashboardSaveDraft({
+    required String actorRole,
+    required String propertyId,
+  }) async {
+    return _dashboardSetStatus(
+      actorRole: actorRole,
+      propertyId: propertyId,
+      status: PropertyStatus.draft,
+    );
+  }
+
+  Future<Property> dashboardPublishProperty({
+    required String actorRole,
+    required String propertyId,
+  }) async {
+    return _dashboardSetStatus(
+      actorRole: actorRole,
+      propertyId: propertyId,
+      status: PropertyStatus.published,
+    );
+  }
+
+  Future<Property> dashboardHideProperty({
+    required String actorRole,
+    required String propertyId,
+  }) async {
+    return _dashboardSetStatus(
+      actorRole: actorRole,
+      propertyId: propertyId,
+      status: PropertyStatus.hidden,
+    );
   }
 
   /// Stream for real-time updates
@@ -139,6 +310,70 @@ class ServiceManager {
 
   String _generateRequestId() {
     return 'REQ-${DateTime.now().millisecondsSinceEpoch}-${(DateTime.now().millisecond % 1000).toString().padLeft(3, '0')}';
+  }
+
+  void _assertDashboardRole(String actorRole) {
+    final String normalized = actorRole.trim().toLowerCase();
+    if (normalized != 'admin' && normalized != 'command_center') {
+      throw Exception('Only dashboard/command center can manage inventory');
+    }
+  }
+
+  void _upsertInventory(Property property) {
+    final int index = _inventory.indexWhere((Property p) => p.id == property.id);
+    if (index >= 0) {
+      _inventory[index] = property;
+      return;
+    }
+    _inventory.add(property);
+  }
+
+  Future<Property> _dashboardSetStatus({
+    required String actorRole,
+    required String propertyId,
+    required PropertyStatus status,
+  }) async {
+    _assertDashboardRole(actorRole);
+    await Future.delayed(const Duration(milliseconds: 250));
+    final int index = _inventory.indexWhere((Property p) => p.id == propertyId);
+    if (index < 0) {
+      throw Exception('Property not found for status update');
+    }
+
+    final Property current = _inventory[index];
+    final Property updated = Property(
+      id: current.id,
+      title: current.title,
+      description: current.description,
+      propertyType: current.propertyType,
+      areaName: current.areaName,
+      city: current.city,
+      zoneNumber: current.zoneNumber,
+      streetNumber: current.streetNumber,
+      buildingNumber: current.buildingNumber,
+      location: current.location,
+      price: current.price,
+      currency: current.currency,
+      bedrooms: current.bedrooms,
+      bathrooms: current.bathrooms,
+      sizeSqm: current.sizeSqm,
+      parkingCount: current.parkingCount,
+      furnished: current.furnished,
+      amenities: current.amenities,
+      images: current.images,
+      status: status,
+      createdBy: current.createdBy,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+      vendorId: current.vendorId,
+      rating: current.rating,
+      reviews: current.reviews,
+      isAvailable: current.isAvailable,
+      nationalAddress: current.nationalAddress,
+    );
+
+    _inventory[index] = updated;
+    return updated;
   }
 
   List<ServiceRequest> _generateMockRequestHistory(
@@ -175,87 +410,575 @@ class ServiceManager {
       Property(
         id: 'PROP-001',
         title: 'Luxury Villa - The Pearl',
-        description: 'Modern luxury villa in the heart of Dubai',
-        type: 'VILLA',
+        description: 'Modern luxury villa in one of Doha\'s premium districts',
+        propertyType: 'VILLA',
+        areaName: 'The Pearl',
+        city: 'Doha',
+        zoneNumber: 66,
+        streetNumber: 210,
+        buildingNumber: 14,
         location: GeoLocation(
           latitude: 25.1882,
           longitude: 55.2719,
           address: 'The Pearl Island',
-          city: 'Dubai',
-          country: 'AE',
+          city: 'The Pearl',
+          country: 'Qatar',
         ),
-        nationalAddress: '303/45A-2023',
         price: 5000000,
-        currency: 'AED',
+        currency: 'QAR',
         bedrooms: 5,
         bathrooms: 6,
-        area: 850,
+        sizeSqm: 850,
+        parkingCount: 3,
+        furnished: true,
         images: [
-          'https://images.unsplash.com/photo-1613490493576-7fde63acd811?w=500',
-          'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=500',
+          'https://images.unsplash.com/photo-1613977257363-707ba9348227?w=1200&q=85',
+          'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=1200&q=85',
+          'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1200&q=85',
         ],
         amenities: ['Pool', 'Gym', 'Smart Home', 'Parking', 'Garden'],
         rating: 4.8,
         reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
         vendorId: 'VENDOR-001',
         isAvailable: true,
         createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
       ),
       Property(
         id: 'PROP-002',
-        title: 'Modern Apartment - Downtown',
-        description: 'Stylish 2-bedroom apartment in downtown area',
-        type: 'APARTMENT',
+        title: 'Modern Apartment - West Bay',
+        description: 'Stylish 2-bedroom apartment with skyline access',
+        propertyType: 'APARTMENT',
+        areaName: 'West Bay',
+        city: 'Doha',
+        zoneNumber: 63,
+        streetNumber: 801,
+        buildingNumber: 7,
         location: GeoLocation(
-          latitude: 25.1972,
-          longitude: 55.2744,
-          address: 'Downtown Dubai',
-          city: 'Dubai',
-          country: 'AE',
+          latitude: 25.3212,
+          longitude: 51.5310,
+          address: 'West Bay Towers',
+          city: 'West Bay',
+          country: 'Qatar',
         ),
-        nationalAddress: '302/24B-2022',
         price: 1200000,
-        currency: 'AED',
+        currency: 'QAR',
         bedrooms: 2,
         bathrooms: 2,
-        area: 120,
+        sizeSqm: 120,
+        parkingCount: 1,
+        furnished: true,
         images: [
-          'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=500',
+          'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=1200&q=85',
+          'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=1200&q=85',
         ],
         amenities: ['Parking', 'Gym', 'Security'],
         rating: 4.5,
         reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
         vendorId: 'VENDOR-002',
         isAvailable: true,
         createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
       ),
       Property(
         id: 'PROP-003',
-        title: 'Studio - Marina District',
-        description: 'Cozy studio with marina views',
-        type: 'STUDIO',
+        title: 'Studio - Lusail Marina District',
+        description: 'Cozy studio with modern waterfront surroundings',
+        propertyType: 'STUDIO',
+        areaName: 'Lusail',
+        city: 'Doha',
+        zoneNumber: 69,
+        streetNumber: 502,
+        buildingNumber: 19,
         location: GeoLocation(
-          latitude: 25.0867,
-          longitude: 55.1408,
-          address: 'Marina District',
-          city: 'Dubai',
-          country: 'AE',
+          latitude: 25.4231,
+          longitude: 51.5250,
+          address: 'Lusail Marina District',
+          city: 'Lusail',
+          country: 'Qatar',
         ),
-        nationalAddress: '301/12C-2021',
         price: 600000,
-        currency: 'AED',
+        currency: 'QAR',
         bedrooms: 1,
         bathrooms: 1,
-        area: 50,
-        images: [
-          'https://images.unsplash.com/photo-1493857671505-72967e2e2760?w=500',
-        ],
+        sizeSqm: 50,
+        parkingCount: 1,
+        furnished: false,
+        images: [],
         amenities: ['Parking', 'Pool'],
         rating: 4.3,
         reviews: [],
+        status: PropertyStatus.draft,
+        createdBy: 'command-center',
         vendorId: 'VENDOR-003',
         isAvailable: true,
         createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-004',
+        title: 'Family Apartment - Al Sadd',
+        description: 'Well-connected apartment in a central Doha neighborhood',
+        propertyType: 'APARTMENT',
+        areaName: 'Al Sadd',
+        city: 'Doha',
+        zoneNumber: 38,
+        streetNumber: 930,
+        buildingNumber: 5,
+        location: GeoLocation(
+          latitude: 25.2854,
+          longitude: 51.5030,
+          address: 'Al Sadd Center',
+          city: 'Al Sadd',
+          country: 'Qatar',
+        ),
+        price: 780000,
+        currency: 'QAR',
+        bedrooms: 3,
+        bathrooms: 2,
+        sizeSqm: 155,
+        parkingCount: 1,
+        furnished: true,
+        images: [],
+        amenities: ['Parking', 'Gym', 'Security'],
+        rating: 4.4,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-004',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-005',
+        title: 'Coastal Home - Al Wakra',
+        description: 'Spacious unit near Al Wakra family promenade',
+        propertyType: 'VILLA',
+        areaName: 'Al Wakra',
+        city: 'Doha',
+        zoneNumber: 90,
+        streetNumber: 40,
+        buildingNumber: 12,
+        location: GeoLocation(
+          latitude: 25.1715,
+          longitude: 51.6034,
+          address: 'Al Wakra Coastal District',
+          city: 'Al Wakra',
+          country: 'Qatar',
+        ),
+        price: 1320000,
+        currency: 'QAR',
+        bedrooms: 4,
+        bathrooms: 3,
+        sizeSqm: 240,
+        parkingCount: 2,
+        furnished: false,
+        images: [],
+        amenities: ['Parking', 'Garden', 'Security'],
+        rating: 4.5,
+        reviews: [],
+        status: PropertyStatus.hidden,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-005',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-006',
+        title: 'Urban Loft - Msheireb',
+        description: 'Smart loft in the heart of Doha\'s innovation district',
+        propertyType: 'STUDIO',
+        areaName: 'Msheireb',
+        city: 'Doha',
+        zoneNumber: 3,
+        streetNumber: 115,
+        buildingNumber: 22,
+        location: GeoLocation(
+          latitude: 25.2868,
+          longitude: 51.5318,
+          address: 'Msheireb Downtown',
+          city: 'Msheireb',
+          country: 'Qatar',
+        ),
+        price: 650000,
+        currency: 'QAR',
+        bedrooms: 1,
+        bathrooms: 1,
+        sizeSqm: 78,
+        parkingCount: 1,
+        furnished: true,
+        images: [],
+        amenities: ['Gym', 'Smart Access', 'Security'],
+        rating: 4.3,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-006',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-007',
+        title: 'Executive Residence - Al Dafna',
+        description: 'Executive apartment close to Doha business core',
+        propertyType: 'APARTMENT',
+        areaName: 'Al Dafna',
+        city: 'Doha',
+        zoneNumber: 61,
+        streetNumber: 850,
+        buildingNumber: 11,
+        location: GeoLocation(
+          latitude: 25.3234,
+          longitude: 51.5326,
+          address: 'Al Dafna Business District',
+          city: 'Al Dafna',
+          country: 'Qatar',
+        ),
+        price: 960000,
+        currency: 'QAR',
+        bedrooms: 2,
+        bathrooms: 2,
+        sizeSqm: 132,
+        parkingCount: 2,
+        furnished: true,
+        images: [dohaAreas[6].imageUrl],
+        amenities: ['Parking', 'Gym', 'Concierge'],
+        rating: 4.6,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-007',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-008',
+        title: 'Family Compound - Al Rayyan',
+        description: 'Spacious family compound near schools and malls.',
+        propertyType: 'VILLA',
+        areaName: 'Al Rayyan',
+        city: 'Doha',
+        zoneNumber: 52,
+        streetNumber: 120,
+        buildingNumber: 3,
+        location: GeoLocation(
+          latitude: 25.2916,
+          longitude: 51.4244,
+          address: 'Al Rayyan Residential',
+          city: 'Al Rayyan',
+          country: 'Qatar',
+        ),
+        price: 1480000,
+        currency: 'QAR',
+        bedrooms: 4,
+        bathrooms: 4,
+        sizeSqm: 280,
+        parkingCount: 2,
+        furnished: false,
+        images: [],
+        amenities: ['Parking', 'Garden', 'Security'],
+        rating: 4.4,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-008',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-009',
+        title: 'Metro-Ready Apartment - Bin Mahmoud',
+        description: 'Modern apartment close to business district and metro.',
+        propertyType: 'APARTMENT',
+        areaName: 'Bin Mahmoud',
+        city: 'Doha',
+        zoneNumber: 22,
+        streetNumber: 910,
+        buildingNumber: 18,
+        location: GeoLocation(
+          latitude: 25.2859,
+          longitude: 51.5165,
+          address: 'Bin Mahmoud Metro Area',
+          city: 'Bin Mahmoud',
+          country: 'Qatar',
+        ),
+        price: 820000,
+        currency: 'QAR',
+        bedrooms: 2,
+        bathrooms: 2,
+        sizeSqm: 118,
+        parkingCount: 1,
+        furnished: true,
+        images: [
+          'https://images.unsplash.com/photo-1493809842364-78817add7ffb?w=1200&q=85',
+        ],
+        amenities: ['Parking', 'Gym', 'Security'],
+        rating: 4.5,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-009',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-010',
+        title: 'Waterfront Residence - Al Khor',
+        description: 'Calm waterfront residence with family amenities.',
+        propertyType: 'APARTMENT',
+        areaName: 'Al Khor',
+        city: 'Al Khor',
+        zoneNumber: 74,
+        streetNumber: 77,
+        buildingNumber: 9,
+        location: GeoLocation(
+          latitude: 25.6839,
+          longitude: 51.5058,
+          address: 'Al Khor Waterfront',
+          city: 'Al Khor',
+          country: 'Qatar',
+        ),
+        price: 730000,
+        currency: 'QAR',
+        bedrooms: 2,
+        bathrooms: 2,
+        sizeSqm: 124,
+        parkingCount: 1,
+        furnished: false,
+        images: [],
+        amenities: ['Parking', 'Play Area', 'Security'],
+        rating: 4.2,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-010',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-011',
+        title: 'Community Villa - Umm Salal',
+        description: 'Quiet villa in a growing community neighborhood.',
+        propertyType: 'VILLA',
+        areaName: 'Umm Salal',
+        city: 'Umm Salal',
+        zoneNumber: 71,
+        streetNumber: 40,
+        buildingNumber: 15,
+        location: GeoLocation(
+          latitude: 25.4147,
+          longitude: 51.4065,
+          address: 'Umm Salal Community',
+          city: 'Umm Salal',
+          country: 'Qatar',
+        ),
+        price: 1180000,
+        currency: 'QAR',
+        bedrooms: 4,
+        bathrooms: 3,
+        sizeSqm: 246,
+        parkingCount: 2,
+        furnished: false,
+        images: [],
+        amenities: ['Garden', 'Parking', 'Security'],
+        rating: 4.1,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-011',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-012',
+        title: 'Executive Apartment - Al Daayen',
+        description: 'Executive apartment with modern building services.',
+        propertyType: 'APARTMENT',
+        areaName: 'Al Daayen',
+        city: 'Al Daayen',
+        zoneNumber: 67,
+        streetNumber: 601,
+        buildingNumber: 6,
+        location: GeoLocation(
+          latitude: 25.4022,
+          longitude: 51.5100,
+          address: 'Al Daayen District',
+          city: 'Al Daayen',
+          country: 'Qatar',
+        ),
+        price: 910000,
+        currency: 'QAR',
+        bedrooms: 3,
+        bathrooms: 2,
+        sizeSqm: 146,
+        parkingCount: 2,
+        furnished: true,
+        images: [
+          'https://images.unsplash.com/photo-1600607688969-a5bfcd646154?w=1200&q=85',
+        ],
+        amenities: ['Parking', 'Gym', 'Concierge'],
+        rating: 4.4,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-012',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-013',
+        title: 'Premium Home - Madinat Al Shamal',
+        description: 'Large home in the north with private outdoor space.',
+        propertyType: 'VILLA',
+        areaName: 'Madinat Al Shamal',
+        city: 'Madinat Al Shamal',
+        zoneNumber: 101,
+        streetNumber: 21,
+        buildingNumber: 2,
+        location: GeoLocation(
+          latitude: 26.1291,
+          longitude: 51.2004,
+          address: 'Al Shamal North District',
+          city: 'Madinat Al Shamal',
+          country: 'Qatar',
+        ),
+        price: 1040000,
+        currency: 'QAR',
+        bedrooms: 4,
+        bathrooms: 3,
+        sizeSqm: 260,
+        parkingCount: 3,
+        furnished: false,
+        images: [],
+        amenities: ['Parking', 'Garden', 'Storage'],
+        rating: 4.0,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-013',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-014',
+        title: 'Seaside Apartment - Mesaieed',
+        description: 'Affordable apartment with easy industrial access.',
+        propertyType: 'APARTMENT',
+        areaName: 'Mesaieed',
+        city: 'Mesaieed',
+        zoneNumber: 92,
+        streetNumber: 10,
+        buildingNumber: 4,
+        location: GeoLocation(
+          latitude: 24.9927,
+          longitude: 51.5506,
+          address: 'Mesaieed Coastal Area',
+          city: 'Mesaieed',
+          country: 'Qatar',
+        ),
+        price: 620000,
+        currency: 'QAR',
+        bedrooms: 2,
+        bathrooms: 2,
+        sizeSqm: 112,
+        parkingCount: 1,
+        furnished: false,
+        images: [],
+        amenities: ['Parking', 'Security'],
+        rating: 4.0,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-014',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-015',
+        title: 'City Studio - Najma',
+        description: 'Compact city studio ideal for professionals.',
+        propertyType: 'STUDIO',
+        areaName: 'Najma',
+        city: 'Doha',
+        zoneNumber: 17,
+        streetNumber: 305,
+        buildingNumber: 11,
+        location: GeoLocation(
+          latitude: 25.2744,
+          longitude: 51.5435,
+          address: 'Najma District',
+          city: 'Najma',
+          country: 'Qatar',
+        ),
+        price: 520000,
+        currency: 'QAR',
+        bedrooms: 1,
+        bathrooms: 1,
+        sizeSqm: 64,
+        parkingCount: 1,
+        furnished: true,
+        images: [
+          'https://images.unsplash.com/photo-1484154218962-a197022b5858?w=1200&q=85',
+        ],
+        amenities: ['Parking', 'Security'],
+        rating: 4.1,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-015',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      Property(
+        id: 'PROP-016',
+        title: 'Skyline Tower - West Bay Lagoon',
+        description: 'Premium tower unit with lagoon and skyline views.',
+        propertyType: 'APARTMENT',
+        areaName: 'West Bay Lagoon',
+        city: 'Doha',
+        zoneNumber: 66,
+        streetNumber: 880,
+        buildingNumber: 2,
+        location: GeoLocation(
+          latitude: 25.3699,
+          longitude: 51.5409,
+          address: 'West Bay Lagoon',
+          city: 'West Bay Lagoon',
+          country: 'Qatar',
+        ),
+        price: 1720000,
+        currency: 'QAR',
+        bedrooms: 3,
+        bathrooms: 3,
+        sizeSqm: 198,
+        parkingCount: 2,
+        furnished: true,
+        images: [],
+        amenities: ['Parking', 'Gym', 'Pool', 'Concierge'],
+        rating: 4.7,
+        reviews: [],
+        status: PropertyStatus.published,
+        createdBy: 'command-center',
+        vendorId: 'VENDOR-016',
+        isAvailable: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
       ),
     ];
   }

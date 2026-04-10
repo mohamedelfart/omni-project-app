@@ -180,20 +180,60 @@ class User {
 }
 
 /// Property Listing
+enum PropertyStatus {
+  draft,
+  published,
+  hidden;
+
+  String get value {
+    switch (this) {
+      case PropertyStatus.draft:
+        return 'draft';
+      case PropertyStatus.published:
+        return 'published';
+      case PropertyStatus.hidden:
+        return 'hidden';
+    }
+  }
+
+  static PropertyStatus fromValue(String? raw) {
+    switch ((raw ?? '').toLowerCase()) {
+      case 'draft':
+        return PropertyStatus.draft;
+      case 'hidden':
+      case 'unpublished':
+        return PropertyStatus.hidden;
+      case 'published':
+      default:
+        return PropertyStatus.published;
+    }
+  }
+}
+
 class Property {
   final String id;
   final String title;
   final String description;
-  final String type; // VILLA, APARTMENT, STUDIO, etc.
+  final String propertyType; // VILLA, APARTMENT, STUDIO, etc.
+  final String areaName;
+  final String city;
+  final int? zoneNumber;
+  final int? streetNumber;
+  final int? buildingNumber;
   final GeoLocation location;
-  final String nationalAddress;
+  final String? _legacyNationalAddress;
   final double price;
   final String currency;
   final int bedrooms;
   final int bathrooms;
-  final double area;
+  final double sizeSqm;
+  final int parkingCount;
+  final bool furnished;
   final List<String> images;
   final List<String> amenities;
+  final PropertyStatus status;
+  final String createdBy;
+  final DateTime updatedAt;
   final double rating;
   final List<Map<String, dynamic>> reviews;
   final String vendorId;
@@ -204,37 +244,87 @@ class Property {
     required this.id,
     required this.title,
     required this.description,
-    required this.type,
+    String? propertyType,
+    String? type,
+    String? areaName,
+    String? city,
+    this.zoneNumber,
+    this.streetNumber,
+    this.buildingNumber,
     required this.location,
-    required this.nationalAddress,
+    String? nationalAddress,
     required this.price,
-    required this.currency,
+    String? currency,
     required this.bedrooms,
     required this.bathrooms,
-    required this.area,
+    double? sizeSqm,
+    double? area,
+    this.parkingCount = 0,
+    this.furnished = false,
     required this.images,
     required this.amenities,
-    required this.rating,
-    required this.reviews,
-    required this.vendorId,
-    required this.isAvailable,
-    required this.createdAt,
-  });
+    PropertyStatus? status,
+    String? createdBy,
+    DateTime? updatedAt,
+    double? rating,
+    List<Map<String, dynamic>>? reviews,
+    String? vendorId,
+    bool? isAvailable,
+    DateTime? createdAt,
+  })  : propertyType = (propertyType ?? type ?? 'APARTMENT').toUpperCase(),
+        areaName = areaName ?? (location.city ?? ''),
+        city = city ?? (location.city ?? ''),
+        _legacyNationalAddress = nationalAddress,
+        currency = currency ?? 'QAR',
+        sizeSqm = sizeSqm ?? area ?? 0,
+        status = status ?? PropertyStatus.published,
+        createdBy = createdBy ?? vendorId ?? 'command-center',
+        updatedAt = updatedAt ?? createdAt ?? DateTime.now(),
+        rating = rating ?? 0,
+        reviews = reviews ?? const <Map<String, dynamic>>[],
+        vendorId = vendorId ?? createdBy ?? 'command-center',
+        isAvailable = isAvailable ?? true,
+        createdAt = createdAt ?? DateTime.now();
+
+  String get type => propertyType;
+
+  double get area => sizeSqm;
+
+  bool get isPublished => status == PropertyStatus.published;
+
+  String get nationalAddress {
+    if (zoneNumber != null && streetNumber != null && buildingNumber != null) {
+      return 'Zone $zoneNumber, Street $streetNumber, Building $buildingNumber';
+    }
+    return _legacyNationalAddress ?? location.address ?? '';
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
         'description': description,
-        'type': type,
+        'propertyType': propertyType,
+        'type': propertyType,
+        'areaName': areaName,
+        'city': city,
+        'zoneNumber': zoneNumber,
+        'streetNumber': streetNumber,
+        'buildingNumber': buildingNumber,
         'location': location.toJson(),
         'nationalAddress': nationalAddress,
         'price': price,
         'currency': currency,
         'bedrooms': bedrooms,
         'bathrooms': bathrooms,
-        'area': area,
+        'sizeSqm': sizeSqm,
+        'area': sizeSqm,
+        'parkingCount': parkingCount,
+        'furnished': furnished,
         'images': images,
         'amenities': amenities,
+        'status': status.value,
+        'createdBy': createdBy,
+        'updatedAt': updatedAt.toIso8601String(),
         'rating': rating,
         'reviews': reviews,
         'vendorId': vendorId,
@@ -246,16 +336,28 @@ class Property {
         id: json['id'] ?? '',
         title: json['title'] ?? '',
         description: json['description'] ?? '',
-        type: json['type'] ?? 'APARTMENT',
+        propertyType: json['propertyType'] ?? json['type'] ?? 'APARTMENT',
+        areaName: json['areaName'] ?? '',
+        city: json['city'] ?? '',
+        zoneNumber: json['zoneNumber'],
+        streetNumber: json['streetNumber'],
+        buildingNumber: json['buildingNumber'],
         location: GeoLocation.fromJson(json['location'] ?? {}),
-        nationalAddress: json['nationalAddress'] ?? '',
+        nationalAddress: json['nationalAddress'],
         price: (json['price'] ?? 0.0).toDouble(),
-        currency: json['currency'] ?? 'USD',
+        currency: json['currency'] ?? 'QAR',
         bedrooms: json['bedrooms'] ?? 0,
         bathrooms: json['bathrooms'] ?? 0,
-        area: (json['area'] ?? 0.0).toDouble(),
+        sizeSqm: (json['sizeSqm'] ?? json['area'] ?? 0.0).toDouble(),
+        parkingCount: json['parkingCount'] ?? 0,
+        furnished: json['furnished'] ?? false,
         images: List<String>.from(json['images'] ?? []),
         amenities: List<String>.from(json['amenities'] ?? []),
+        status: PropertyStatus.fromValue(json['status']),
+        createdBy: json['createdBy'],
+        updatedAt: json['updatedAt'] != null
+          ? DateTime.tryParse(json['updatedAt'])
+          : null,
         rating: (json['rating'] ?? 0.0).toDouble(),
         reviews: List<Map<String, dynamic>>.from(json['reviews'] ?? []),
         vendorId: json['vendorId'] ?? '',

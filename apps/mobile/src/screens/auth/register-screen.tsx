@@ -28,8 +28,8 @@ export function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerBlock: { gap: mobileTheme.spacing.sm, marginTop: 48 },
-  title: { color: mobileTheme.colors.primary, fontSize: 30, fontWeight: '700' },
+  headerBlock: { gap: mobileTheme.spacing.sm, marginTop: 24 },
+  title: { color: mobileTheme.colors.primary, fontSize: 24, fontWeight: '700' },
   subtitle: { color: mobileTheme.colors.secondary, fontSize: 15, lineHeight: 22 },
-  form: { gap: mobileTheme.spacing.md },
+  form: { gap: mobileTheme.spacing.sm },
 });

@@ -7,11 +7,13 @@ type SessionState = {
   isAuthenticated: boolean;
   role: Role;
   locale: 'en' | 'ar';
+  hasDismissedSignupPrompt: boolean;
   apiToken?: string;
   selectedPropertyId?: string;
   signInAsTenant: () => void;
   signOut: () => void;
   setLocale: (locale: 'en' | 'ar') => void;
+  dismissSignupPrompt: () => void;
   setSelectedPropertyId: (propertyId?: string) => void;
 };
 
@@ -19,6 +21,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   isAuthenticated: false,
   role: 'tenant',
   locale: 'en',
+  hasDismissedSignupPrompt: false,
   signInAsTenant: () => {
     const token = process.env.EXPO_PUBLIC_TENANT_JWT;
     setApiAuthToken(token);
@@ -34,5 +37,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     });
   },
   setLocale: (locale) => set({ locale }),
+  dismissSignupPrompt: () => set({ hasDismissedSignupPrompt: true }),
   setSelectedPropertyId: (selectedPropertyId) => set({ selectedPropertyId }),
 }));

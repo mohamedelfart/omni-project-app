@@ -2,9 +2,19 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "jsx": "react-jsx",
+    "jsx": "react-native",
     "moduleResolution": "bundler",
-    "skipLibCheck": true
+    "ignoreDeprecations": "6.0",
+    "skipLibCheck": true,
+    "paths": {
+      "@quickrent/design-system": [
+        "./src/types/quickrent-design-system.d.ts"
+      ]
+    },
+    "types": [
+      "react",
+      "react-dom"
+    ]
   },
   "include": [
     "App.tsx",

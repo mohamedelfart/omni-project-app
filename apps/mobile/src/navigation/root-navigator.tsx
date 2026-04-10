@@ -12,6 +12,7 @@ import { PaymentsScreen } from '../screens/finance/payments-screen';
 import { RewardsScreen } from '../screens/finance/rewards-screen';
 import { ViewingTripScreen } from '../screens/finance/viewing-trip-screen';
 import { CompareScreen } from '../screens/properties/compare-screen';
+import { MyBookingsScreen } from '../screens/properties/my-bookings-screen';
 import { PropertyDetailsScreen } from '../screens/properties/property-details-screen';
 import { PropertySearchScreen } from '../screens/properties/property-search-screen';
 import { ShortlistScreen } from '../screens/properties/shortlist-screen';
@@ -35,6 +36,7 @@ type RootStackParamList = {
   TenantHome: undefined;
   PropertySearch: undefined;
   PropertyDetails: undefined;
+  MyBookings: undefined;
   Shortlist: undefined;
   Compare: undefined;
   ViewingTrip: undefined;
@@ -53,14 +55,16 @@ type RootStackParamList = {
   Contracts: undefined;
 };
 
-const Stack = createNativeStackNavigator();
+const Stack = createNativeStackNavigator<RootStackParamList>();
+const NavigationContainerCompat = NavigationContainer as any;
+const StackNavigatorCompat = Stack.Navigator as any;
 
 export function RootNavigator() {
   const initialRouteName: keyof RootStackParamList = 'TenantHome';
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator
+    <NavigationContainerCompat>
+      <StackNavigatorCompat
         initialRouteName={initialRouteName}
         screenOptions={{
           headerShown: false,
@@ -76,6 +80,7 @@ export function RootNavigator() {
         <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
         <Stack.Screen name="PropertySearch" component={PropertySearchScreen} />
         <Stack.Screen name="PropertyDetails" component={PropertyDetailsScreen} />
+        <Stack.Screen name="MyBookings" component={MyBookingsScreen} />
         <Stack.Screen name="Shortlist" component={ShortlistScreen} />
         <Stack.Screen name="Compare" component={CompareScreen} />
         <Stack.Screen name="ViewingTrip" component={ViewingTripScreen} />
@@ -92,7 +97,7 @@ export function RootNavigator() {
         <Stack.Screen name="Community" component={CommunityScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="Contracts" component={ContractsScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+      </StackNavigatorCompat>
+    </NavigationContainerCompat>
   );
 }

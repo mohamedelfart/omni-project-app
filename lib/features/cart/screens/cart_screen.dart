@@ -551,6 +551,7 @@ class _CartScreenState extends State<CartScreen> {
       title: 'Bayview Residence, 2BR Apartment',
       description: 'Tenant-ready apartment with marina access.',
       type: 'APARTMENT',
+      areaName: 'West Bay',
       location: GeoLocation(
         latitude: 25.2048,
         longitude: 55.2708,

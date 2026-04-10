@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/properties/screens/property_list_screen.dart';
+import 'features/properties/screens/omnirent_flow_state.dart';
 import 'features/rides/screens/rides_screen.dart';
 import 'features/food/screens/food_screen.dart';
 import 'features/travel/screens/travel_screen.dart';
@@ -20,83 +22,98 @@ class OmniRentApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'QuickRent',
-      theme: ThemeData(
-        brightness: Brightness.light,
-        primaryColor: const Color(0xFF1E3A5F),
-        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1E3A5F),
-          primary: const Color(0xFF1E3A5F),
-          secondary: const Color(0xFFF97316),
-          surface: const Color(0xFFFFFFFF),
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          foregroundColor: Color(0xFF1F2937),
-          titleTextStyle: TextStyle(
-            color: Color(0xFF1F2937),
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'Roboto',
-          ),
-          iconTheme: IconThemeData(color: Color(0xFF1F2937)),
-        ),
-        cardTheme: CardThemeData(
-          color: Colors.white,
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(16)),
-          ),
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFF97316),
-            foregroundColor: Colors.white,
-            elevation: 0,
-            minimumSize: const Size(double.infinity, 52),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(12)),
+    return ValueListenableBuilder<Locale>(
+      valueListenable: OmniRentFlowState.locale,
+      builder: (context, Locale appLocale, child) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'OmniRent',
+          locale: appLocale,
+          supportedLocales: const <Locale>[
+            Locale('en'),
+            Locale('ar'),
+          ],
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          theme: ThemeData(
+            brightness: Brightness.light,
+            primaryColor: const Color(0xFF1E3A5F),
+            scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF002366),
+              primary: const Color(0xFF0047AB),
+              secondary: const Color(0xFF0047AB),
+              surface: const Color(0xFFFFFFFF),
             ),
-            textStyle: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Colors.white,
+              elevation: 0,
+              foregroundColor: Color(0xFF1F2937),
+              titleTextStyle: TextStyle(
+                color: Color(0xFF1F2937),
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'Roboto',
+              ),
+              iconTheme: IconThemeData(color: Color(0xFF1F2937)),
+            ),
+            cardTheme: CardThemeData(
+              color: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(16)),
+              ),
+            ),
+            elevatedButtonTheme: ElevatedButtonThemeData(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0047AB),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                minimumSize: const Size(double.infinity, 52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(12)),
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            inputDecorationTheme: InputDecorationTheme(
+              filled: true,
+              fillColor: const Color(0xFFF8FAFC),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 14,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: const BorderRadius.all(Radius.circular(12)),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: const BorderRadius.all(Radius.circular(12)),
+                borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: const BorderRadius.all(Radius.circular(12)),
+                borderSide: const BorderSide(color: Color(0xFF1E3A5F), width: 2),
+              ),
+              hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
+            ),
+            bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+              backgroundColor: Colors.white,
+              selectedItemColor: Color(0xFF1E3A5F),
+              unselectedItemColor: Color(0xFF9CA3AF),
+              elevation: 8,
+              type: BottomNavigationBarType.fixed,
             ),
           ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: const Color(0xFFF8FAFC),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 14,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: const BorderRadius.all(Radius.circular(12)),
-            borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: const BorderRadius.all(Radius.circular(12)),
-            borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: const BorderRadius.all(Radius.circular(12)),
-            borderSide: const BorderSide(color: Color(0xFF1E3A5F), width: 2),
-          ),
-          hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
-        ),
-        bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-          backgroundColor: Colors.white,
-          selectedItemColor: Color(0xFF1E3A5F),
-          unselectedItemColor: Color(0xFF9CA3AF),
-          elevation: 8,
-          type: BottomNavigationBarType.fixed,
-        ),
-      ),
-      home: const LoginScreen(),
+          home: const PropertyListScreen(),
+        );
+      },
     );
   }
 }
