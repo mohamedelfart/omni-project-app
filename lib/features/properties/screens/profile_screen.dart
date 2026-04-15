@@ -71,6 +71,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
     }
 
+    final String stageLabel = () {
+      switch (userStatus) {
+        case 'Viewing':
+          return _t('Viewing Stage', 'مرحلة المعاينة');
+        case 'Reserved':
+          return _t('Reserved Stage', 'مرحلة الحجز');
+        case 'Living':
+          return _t('Living Stage', 'مرحلة السكن');
+        default:
+          return _t('Browse Stage', 'مرحلة التصفح');
+      }
+    }();
+
+    final String nextStepText = () {
+      if (journeyStep <= 0) {
+        return _t('Continue browsing properties', 'تابع تصفح العقارات');
+      }
+      if (journeyStep == 1) {
+        return _t('Review your cart and book a group tour', 'راجع عربتك واحجز جولة جماعية');
+      }
+      if (journeyStep == 2) {
+        return _t('Confirm your viewing to proceed', 'أكد موعد المعاينة للمتابعة');
+      }
+      if (journeyStep == 3) {
+        return _t('Review reservation details and documents', 'راجع تفاصيل الحجز والمستندات');
+      }
+      return _t('Prepare for move-in and activate services', 'استعد للانتقال وتفعيل الخدمات');
+    }();
+
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F8),
       appBar: AppBar(
@@ -101,6 +130,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 40),
           children: <Widget>[
+            // Tenant greeting / stage context
+            _TenantIntroHeader(
+              userName: userName,
+              stageLabel: stageLabel,
+              guidance: nextStepText,
+            ),
+            const SizedBox(height: 14),
             // SMART INSIGHTS SECTION
             SmartInsights(
               savedCount: savedCount,
@@ -115,6 +151,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
               userName: userName,
               userStatus: userStatus,
               tagline: tagline,
+            ),
+            const SizedBox(height: 22),
+
+            // Next Action (clear guidance, tenant-first)
+            _NextActionCard(
+              stageLabel: stageLabel,
+              nextStepText: nextStepText,
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_t('Next action saved for later.', 'تم حفظ الخطوة التالية لاحقاً.')),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+
+            // Smart Actions (UI only)
+            _SectionTitle(label: _t('Smart Actions', 'إجراءات سريعة')),
+            const SizedBox(height: 10),
+            _SmartActions(
+              onConfirmViewing: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_t('Confirm Viewing is coming soon', 'تأكيد المعاينة قريباً')),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              onOpenCart: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(builder: (_) => const OmniCartScreen()),
+              ),
+              onRequestService: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_t('Service requests are coming soon', 'طلبات الخدمة قريباً')),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 22),
 

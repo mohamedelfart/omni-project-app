@@ -115,29 +115,82 @@ class TenantJourneyProgress extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: List.generate(_steps.length, (i) {
-        final bool active = i <= currentStep;
+        final bool isCurrent = i == currentStep;
+        final bool isCompleted = i < currentStep;
         return Expanded(
-          child: Column(
-            children: [
-              Container(
-                width: 32, height: 32,
-                decoration: BoxDecoration(
-                  color: active ? const Color(0xFF1D4ED8) : const Color(0xFFE0E7EF),
-                  borderRadius: BorderRadius.circular(999),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              final String step = _stepLabel(context, _steps[i]);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    _t(context, 'You are in: $step', 'أنت في: $step'),
+                  ),
+                  behavior: SnackBarBehavior.floating,
                 ),
-                alignment: Alignment.center,
-                child: Text('${i+1}', style: TextStyle(color: active ? Colors.white : const Color(0xFF64748B), fontWeight: FontWeight.bold)),
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: isCurrent ? 38 : 32,
+                    height: isCurrent ? 38 : 32,
+                    decoration: BoxDecoration(
+                      color: isCurrent
+                          ? const Color(0xFF1D4ED8)
+                          : (isCompleted
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFFE0E7EF)),
+                      borderRadius: BorderRadius.circular(999),
+                      border: isCurrent
+                          ? Border.all(
+                              color: const Color(0xFF93C5FD),
+                              width: 2,
+                            )
+                          : null,
+                      boxShadow: isCurrent
+                          ? [
+                              BoxShadow(
+                                color: const Color(0xFF1D4ED8)
+                                    .withValues(alpha: 0.18),
+                                blurRadius: 14,
+                                offset: const Offset(0, 8),
+                              )
+                            ]
+                          : null,
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${i + 1}',
+                      style: TextStyle(
+                        color: (isCurrent || isCompleted)
+                            ? Colors.white
+                            : const Color(0xFF64748B),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _stepLabel(context, _steps[i]),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isCurrent
+                          ? const Color(0xFF1D4ED8)
+                          : (isCompleted
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFF94A3B8)),
+                      fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                _stepLabel(context, _steps[i]),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: active ? const Color(0xFF1D4ED8) : const Color(0xFF94A3B8),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       }),
