@@ -167,7 +167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 );
               },
             ),
-            _PrimaryConfirmViewingButton(),
+            _PrimaryConfirmViewingButton(stage: journeyStep),
             const SizedBox(height: 14),
 
             // Smart Actions (UI only)
@@ -471,8 +471,28 @@ class _NextActionCard extends StatelessWidget {
 }
 
 class _PrimaryConfirmViewingButton extends StatelessWidget {
+  final int stage;
+
+  const _PrimaryConfirmViewingButton({required this.stage});
+
+  String _ctaLabel(BuildContext context) {
+    switch (stage) {
+      case 0:
+        return OmniRentI18n.t(context, 'Browse Properties', 'تصفح العقارات');
+      case 1:
+        return OmniRentI18n.t(context, 'Request Viewing', 'طلب معاينة');
+      case 2:
+        return OmniRentI18n.t(context, 'Confirm Viewing', 'تأكيد المعاينة');
+      case 3:
+        return OmniRentI18n.t(context, 'View Reservation', 'عرض الحجز');
+      default:
+        return OmniRentI18n.t(context, 'Manage Services', 'إدارة الخدمات');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final String ctaLabel = _ctaLabel(context);
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 12),
@@ -483,12 +503,12 @@ class _PrimaryConfirmViewingButton extends StatelessWidget {
         ),
         onPressed: () {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Confirm Viewing clicked')),
+            SnackBar(content: Text('$ctaLabel clicked')),
           );
         },
-        child: const Text(
-          'Confirm Viewing',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        child: Text(
+          ctaLabel,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
       ),
     );
