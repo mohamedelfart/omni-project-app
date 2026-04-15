@@ -33,8 +33,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ── Helpers ───────────────────────────────────────────────────────────────
   String _t(String en, String ar) => OmniRentI18n.t(context, en, ar);
 
+  int _normalizeStage(int stage) {
+    if (stage < 0) return 0;
+    if (stage > 4) return 4;
+    return stage;
+  }
+
+  String _stageLabel(int stage) {
+    switch (_normalizeStage(stage)) {
+      case 0:
+        return _t('Browse Stage', 'مرحلة التصفح');
+      case 1:
+        return _t('Cart Stage', 'مرحلة العربة');
+      case 2:
+        return _t('Viewing Stage', 'مرحلة المعاينة');
+      case 3:
+        return _t('Reserved Stage', 'مرحلة الحجز');
+      default:
+        return _t('Move-In Stage', 'مرحلة الانتقال');
+    }
+  }
+
   String _stageCtaLabel(int stage) {
-    switch (stage) {
+    switch (_normalizeStage(stage)) {
       case 0:
         return _t('Browse Properties', 'تصفح العقارات');
       case 1:
@@ -49,7 +70,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _stageNextAction(int stage) {
-    switch (stage) {
+    switch (_normalizeStage(stage)) {
       case 0:
         return _t('Add a property to your cart', 'أضف عقاراً إلى عربتك');
       case 1:
@@ -73,7 +94,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _stageSmartHint(int stage) {
-    switch (stage) {
+    switch (_normalizeStage(stage)) {
       case 0:
         return _t(
           'Start by exploring properties that match your needs.',
@@ -140,19 +161,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
     }
 
-    final String stageLabel = () {
-      switch (userStatus) {
-        case 'Viewing':
-          return _t('Viewing Stage', 'مرحلة المعاينة');
-        case 'Reserved':
-          return _t('Reserved Stage', 'مرحلة الحجز');
-        case 'Living':
-          return _t('Living Stage', 'مرحلة السكن');
-        default:
-          return _t('Browse Stage', 'مرحلة التصفح');
-      }
-    }();
-
+    final String stageLabel = _stageLabel(journeyStep);
     final String nextStepText = _stageNextAction(journeyStep);
     final String smartHintText = _stageSmartHint(journeyStep);
 
@@ -551,6 +560,7 @@ class _SmartHintCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool ar = OmniRentI18n.isArabic(context);
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 4),
@@ -561,6 +571,7 @@ class _SmartHintCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Icon(
             Icons.lightbulb_outline_rounded,
@@ -569,13 +580,28 @@ class _SmartHintCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              hintText,
-              style: const TextStyle(
-                color: Color(0xFF475569),
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment:
+                  ar ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                Text(
+                  OmniRentI18n.t(context, 'Smart Hint', 'تلميح ذكي'),
+                  style: const TextStyle(
+                    color: Color(0xFF1E293B),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hintText,
+                  style: const TextStyle(
+                    color: Color(0xFF475569),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -697,7 +723,7 @@ class _SmartActions extends StatelessWidget {
         ),
         _ActionChipCard(
           icon: Icons.support_agent_rounded,
-          label: OmniRentI18n.t(context, 'Request Service', 'طلب خدمة'),
+          label: OmniRentI18n.t(context, 'Manage Services', 'إدارة الخدمات'),
           color: const Color(0xFF7C3AED),
           isPrimary: _isPrimaryForStage('service'),
           onTap: onRequestService,
