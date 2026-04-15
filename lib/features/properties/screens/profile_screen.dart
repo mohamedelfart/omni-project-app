@@ -321,6 +321,251 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
+class _TenantIntroHeader extends StatelessWidget {
+  final String userName;
+  final String stageLabel;
+  final String guidance;
+
+  const _TenantIntroHeader({
+    required this.userName,
+    required this.stageLabel,
+    required this.guidance,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool ar = OmniRentI18n.isArabic(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: ar ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Text(
+            OmniRentI18n.t(context, 'Welcome, $userName', 'مرحباً، $userName'),
+            style: const TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            OmniRentI18n.t(context, 'You are currently in: $stageLabel', 'أنت حالياً في: $stageLabel'),
+            style: const TextStyle(
+              color: Color(0xFF475569),
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            OmniRentI18n.t(context, 'Next step: $guidance', 'الخطوة التالية: $guidance'),
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NextActionCard extends StatelessWidget {
+  final String stageLabel;
+  final String nextStepText;
+  final VoidCallback onTap;
+
+  const _NextActionCard({
+    required this.stageLabel,
+    required this.nextStepText,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool ar = OmniRentI18n.isArabic(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF6FF),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFBFDBFE)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDBEAFE),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.bolt_rounded,
+                  color: Color(0xFF1D4ED8),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment:
+                      ar ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      OmniRentI18n.t(context, 'Next Action', 'الإجراء التالي'),
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      nextStepText,
+                      style: const TextStyle(
+                        color: Color(0xFF475569),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      OmniRentI18n.t(
+                        context,
+                        'Stage: $stageLabel',
+                        'المرحلة: $stageLabel',
+                      ),
+                      style: const TextStyle(
+                        color: Color(0xFF64748B),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Icon(Icons.chevron_right_rounded, color: Color(0xFF1D4ED8)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SmartActions extends StatelessWidget {
+  final VoidCallback onConfirmViewing;
+  final VoidCallback onOpenCart;
+  final VoidCallback onRequestService;
+
+  const _SmartActions({
+    required this.onConfirmViewing,
+    required this.onOpenCart,
+    required this.onRequestService,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _ActionChipCard(
+          icon: Icons.check_circle_outline_rounded,
+          label: OmniRentI18n.t(context, 'Confirm Viewing', 'تأكيد المعاينة'),
+          color: const Color(0xFF1D4ED8),
+          onTap: onConfirmViewing,
+        ),
+        _ActionChipCard(
+          icon: Icons.shopping_bag_outlined,
+          label: OmniRentI18n.t(context, 'Open Cart', 'فتح العربة'),
+          color: const Color(0xFF16A34A),
+          onTap: onOpenCart,
+        ),
+        _ActionChipCard(
+          icon: Icons.support_agent_rounded,
+          label: OmniRentI18n.t(context, 'Request Service', 'طلب خدمة'),
+          color: const Color(0xFF7C3AED),
+          onTap: onRequestService,
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionChipCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ActionChipCard({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: Icon(icon, size: 18, color: color),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ===========================================================================
 //  1. PROFILE HEADER
 // ===========================================================================
