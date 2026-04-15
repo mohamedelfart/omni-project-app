@@ -1,10 +1,12 @@
-import 'dart:async';
-
+import '_service_chip.dart';
+import 'viewing_request_screen.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
+import '../helpers/viewing_status_mapper.dart';
+import 'omnicart_screen.dart';
 import 'omnirent_flow_state.dart';
 import 'profile_screen.dart';
 import 'property_flow_ui.dart';
@@ -140,6 +142,11 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
                       ),
                     ],
                   ),
+                  if (mapPropertyViewingStateToTenantStatus(property.viewingState) !=
+                      null) ...[
+                    const SizedBox(height: 10),
+                    _TenantViewingContextBadge(state: property.viewingState),
+                  ],
                   const SizedBox(height: 16),
                   Text(
                     'QAR ${monthlyPrice.toStringAsFixed(0)} / month',
@@ -295,6 +302,57 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
                       );
                     }).toList(),
                   ),
+                 const SizedBox(height: 24),
+                 // --- Services Section ---
+                 Text(
+                   OmniRentI18n.t(context, 'Included Services', 'الخدمات المشمولة'),
+                   style: const TextStyle(
+                     color: Color(0xFF0F172A),
+                     fontSize: 18,
+                     fontWeight: FontWeight.w700,
+                   ),
+                 ),
+                 const SizedBox(height: 10),
+                 Wrap(
+                   spacing: 10,
+                   runSpacing: 10,
+                   children: [
+                     ServiceChip(icon: Icons.local_shipping_outlined, label: 'Free Moving'),
+                     ServiceChip(icon: Icons.cleaning_services_outlined, label: 'Free Cleaning'),
+                     ServiceChip(icon: Icons.home_repair_service_outlined, label: 'Free Setup'),
+                   ],
+                 ),
+                 const SizedBox(height: 20),
+                 Text(
+                   OmniRentI18n.t(context, 'Optional / Paid Services', 'خدمات إضافية / مدفوعة'),
+                   style: const TextStyle(
+                     color: Color(0xFF0F172A),
+                     fontSize: 18,
+                     fontWeight: FontWeight.w700,
+                   ),
+                 ),
+                 const SizedBox(height: 10),
+                 // Placeholder for future paid services
+                 Container(
+                   padding: const EdgeInsets.all(14),
+                   decoration: BoxDecoration(
+                     color: Colors.white,
+                     borderRadius: BorderRadius.circular(16),
+                     border: Border.all(color: Color(0xFFE2E8F0)),
+                   ),
+                   child: Text(
+                     OmniRentI18n.t(
+                       context,
+                       'No paid services available yet.',
+                       'لا توجد خدمات مدفوعة حالياً.',
+                     ),
+                     style: const TextStyle(
+                       color: Color(0xFF64748B),
+                       fontSize: 13,
+                       fontWeight: FontWeight.w500,
+                     ),
+                   ),
+                 ),
                 ],
               ),
             ),
@@ -305,29 +363,86 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-          child: ValueListenableBuilder<Map<String, Property>>(
-            valueListenable: OmniRentFlowState.cart,
-            builder: (context, Map<String, Property> cart, child) {
-              final bool inCart = cart.containsKey(property.id);
-              return PropertyPrimaryButton(
-                label: inCart
-                    ? OmniRentI18n.t(
-                        context,
-                        'Added to OmniCart',
-                        'تمت الإضافة إلى العربة',
-                      )
-                    : OmniRentI18n.t(
-                        context,
-                        'Add to OmniCart',
-                        'أضف إلى العربة',
+          child: Row(
+            children: [
+              Expanded(
+                child: ValueListenableBuilder<Map<String, Property>>(
+                  valueListenable: OmniRentFlowState.cart,
+                  builder: (context, Map<String, Property> cart, child) {
+                    final bool inCart = cart.containsKey(property.id);
+                    return PropertyPrimaryButton(
+                      label: inCart
+                          ? OmniRentI18n.t(
+                              context,
+                              'Go to Cart',
+                              'اذهب إلى العربة',
+                            )
+                          : OmniRentI18n.t(
+                              context,
+                              'Add to OmniCart',
+                              'أضف إلى العربة',
+                            ),
+                      icon: inCart ? Icons.shopping_cart_rounded : Icons.add_rounded,
+                      onPressed: () {
+                        if (inCart) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const OmniCartScreen(),
+                            ),
+                          );
+                        } else {
+                          OmniRentFlowState.toggleCart(property);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                OmniRentI18n.t(
+                                  context,
+                                  'Added to cart',
+                                  'تمت الإضافة إلى العربة',
+                                ),
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        }
+                      },
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFF1D4ED8),
+                    foregroundColor: Colors.white,
+                    minimumSize: Size(double.infinity, 52),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ViewingRequestScreen(property: property),
                       ),
-                icon: inCart ? Icons.check_rounded : Icons.add_rounded,
-                onPressed: () => OmniRentFlowState.toggleCart(property),
-              );
-            },
+                    );
+                  },
+                  child: Text(OmniRentI18n.t(context, 'Request Viewing', 'طلب معاينة')),
+                ),
+              ),
+            ],
           ),
         ),
       ),
+      // --- Under Viewing Badge Widget (reuse from list) ---
+      // If you want to show the badge in details hero, add similar logic as in list.
     );
   }
 
@@ -376,6 +491,54 @@ class _AmenityChip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TenantViewingContextBadge extends StatelessWidget {
+  final PropertyViewingState state;
+
+  const _TenantViewingContextBadge({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final TenantFacingStatus? mapped =
+        mapPropertyViewingStateToTenantStatus(state);
+    if (mapped == null) {
+      return const SizedBox.shrink();
+    }
+
+    final Color color = tenantFacingStatusColor(mapped);
+    final String label = tenantFacingStatusLabel(
+      mapped,
+      ar: OmniRentI18n.isArabic(context),
+    );
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(tenantFacingStatusIcon(mapped), size: 14, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -505,7 +668,7 @@ class _PropertyGalleryHeroState extends State<PropertyGalleryHero> {
                       ],
                     );
                   },
-                  errorBuilder: (_, __, ___) => PremiumVisualAsset(
+                  errorBuilder: (_, _, _) => PremiumVisualAsset(
                     imageUrl: PremiumVisualCatalog.apartmentProperty,
                     semanticLabel: 'Property visual',
                     aspectRatio: 1.8,
@@ -706,7 +869,7 @@ class _FullscreenGalleryViewerState extends State<_FullscreenGalleryViewer> {
                           ],
                         );
                       },
-                      errorBuilder: (_, __, ___) => const Icon(
+                      errorBuilder: (_, _, _) => const Icon(
                         Icons.broken_image_outlined,
                         color: Colors.white54,
                         size: 64,

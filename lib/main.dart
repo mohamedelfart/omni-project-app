@@ -1,7 +1,8 @@
+import 'features/properties/screens/property_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'features/auth/screens/login_screen.dart';
-import 'features/properties/screens/property_list_screen.dart';
+// import 'features/command_center/command_center_real_os_screen.dart';
 import 'features/properties/screens/omnirent_flow_state.dart';
 import 'features/rides/screens/rides_screen.dart';
 import 'features/food/screens/food_screen.dart';

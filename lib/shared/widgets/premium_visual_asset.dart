@@ -232,7 +232,7 @@ class PremiumPropertyPhoto extends StatelessWidget {
                   ],
                 );
               },
-              errorBuilder: (_, __, ___) =>
+              errorBuilder: (_, _, _) =>
                   buildPropertyFallback(semanticLabel: semanticLabel),
             )
           else

@@ -1,7 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/models.dart';
+import '../brain/brain.dart';
+import '../brain/sla/sla_engine.dart';
+import '../brain/routing/routing_engine.dart';
 import '../../features/properties/data/doha_areas.dart';
+import '../../features/command_center/models/unified_operational_item.dart';
 
 class InventoryVisibilityPolicy {
   static bool isTenantVisible(Property property) {
@@ -20,13 +24,256 @@ class InventoryVisibilityPolicy {
 
 /// Unified Service Manager
 /// Handles all service requests across the platform
+
 class ServiceManager {
+  // Centralized TicketAction log
+  final List<TicketAction> _ticketActions = <TicketAction>[];
+  final StreamController<SLAEvaluationResult> _slaOutputStreamController = StreamController<SLAEvaluationResult>.broadcast();
+  final StreamController<RoutingResult> _routingOutputStreamController = StreamController<RoutingResult>.broadcast();
+  final StreamController<BrainOutput> _brainOutputStreamController = StreamController<BrainOutput>.broadcast();
+
+  Stream<SLAEvaluationResult> get slaOutputStream => _slaOutputStreamController.stream;
+  Stream<RoutingResult> get routingOutputStream => _routingOutputStreamController.stream;
+  Stream<BrainOutput> get brainOutputStream => _brainOutputStreamController.stream;
+
+  void _setupSLAEvaluation() {
+    _requestStreamController.stream.listen((ServiceRequest request) {
+      final sla = SLAEngine.evaluate(request);
+      _slaOutputStreamController.add(sla);
+    });
+  }
+  void _setupRoutingEvaluation() {
+    _requestStreamController.stream.listen((ServiceRequest request) {
+      final routing = RoutingEngine.evaluate(request);
+      _routingOutputStreamController.add(routing);
+    });
+  }
+  void _setupBrainEvaluation() {
+    _requestStreamController.stream.listen((ServiceRequest request) {
+      final output = Brain.evaluateRequest(request);
+      _brainOutputStreamController.add(output);
+    });
+  }
+
+  /// Central method for all ticket mutations (MVP, now with escalation)
+  Future<TicketAction> handleTicketAction(TicketActionRequest request) async {
+    // Validate
+    final ticket = _tickets.firstWhere((t) => t.ticketId == request.ticketId, orElse: () => throw Exception('Ticket not found'));
+
+    // Snapshot before
+    final stateBefore = {
+      'assignedTo': ticket.assignedTo,
+      'assignedTeam': ticket.assignedTeam,
+      'status': ticket.status,
+      'priority': ticket.request.serviceDetails['priority'],
+    };
+
+    // Simple approval logic (MVP)
+    String decisionStatus = 'approved';
+    String executionStatus = 'executed';
+
+
+    // Execute mutation
+    if (request.actionType == 'assignment') {
+      ticket.assignedTo = request.payload['assignedTo'];
+      ticket.assignedTeam = request.payload['assignedTeam'];
+      ticket.assignedAt = DateTime.now();
+      ticket.updatedAt = DateTime.now();
+      ticket.updatedBy = request.sourceType;
+    } else if (request.actionType == 'escalation') {
+      // Escalation: update priority and optionally assignment
+      final newPriority = request.payload['priority'];
+      if (newPriority != null) {
+        ticket.request.serviceDetails['priority'] = newPriority;
+      }
+      if (request.payload['assignedTo'] != null) {
+        ticket.assignedTo = request.payload['assignedTo'];
+        ticket.assignedAt = DateTime.now();
+      }
+      if (request.payload['assignedTeam'] != null) {
+        ticket.assignedTeam = request.payload['assignedTeam'];
+      }
+      ticket.updatedAt = DateTime.now();
+      ticket.updatedBy = request.sourceType;
+    } else if (request.actionType == 'reassign') {
+      // Reassign: only update assignment fields if changed
+      bool changed = false;
+      if (request.payload['assignedTo'] != null && request.payload['assignedTo'] != ticket.assignedTo) {
+        ticket.assignedTo = request.payload['assignedTo'];
+        changed = true;
+      }
+      if (request.payload['assignedTeam'] != null && request.payload['assignedTeam'] != ticket.assignedTeam) {
+        ticket.assignedTeam = request.payload['assignedTeam'];
+        changed = true;
+      }
+      if (changed) {
+        ticket.assignedAt = DateTime.now();
+      }
+      ticket.updatedAt = DateTime.now();
+      ticket.updatedBy = request.sourceType;
+    } else {
+      // For unsupported actions, reject
+      decisionStatus = 'rejected';
+      executionStatus = 'failed';
+    }
+
+    // Snapshot after
+    final stateAfter = {
+      'assignedTo': ticket.assignedTo,
+      'assignedTeam': ticket.assignedTeam,
+      'status': ticket.status,
+      'priority': ticket.request.serviceDetails['priority'],
+    };
+
+    final action = TicketAction(
+      id: 'action-${DateTime.now().millisecondsSinceEpoch}',
+      ticketId: request.ticketId,
+      actionType: request.actionType,
+      sourceType: request.sourceType,
+      reasonCode: request.reasonCode,
+      payload: request.payload,
+      decisionStatus: decisionStatus,
+      executionStatus: executionStatus,
+      stateBefore: stateBefore,
+      stateAfter: stateAfter,
+      createdAt: DateTime.now(),
+    );
+    _ticketActions.add(action);
+    return action;
+  }
+
+  /// Assign a ServiceTicket to a user/team (now routed through TicketAction)
+  Future<ServiceTicket?> assignTicket({
+    required String ticketId,
+    String? assignedTo,
+    String? assignedTeam,
+    String? updatedBy,
+  }) async {
+    final action = await handleTicketAction(TicketActionRequest(
+      ticketId: ticketId,
+      actionType: 'assignment',
+      sourceType: updatedBy ?? 'command_center',
+      reasonCode: 'manual_assign',
+      payload: {
+        'assignedTo': assignedTo,
+        'assignedTeam': assignedTeam,
+      },
+    ));
+    if (action.executionStatus == 'executed') {
+      try {
+        return _tickets.firstWhere((t) => t.ticketId == ticketId);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /// Returns a unified list of UnifiedOperationalItem for Command Center
+  Future<List<UnifiedOperationalItem>> getUnifiedOperationalItems() async {
+    // Gather all requests and tickets
+    final List<ServiceRequest> requests = await getAllRequests();
+    final List<ServiceTicket> tickets = getAllTickets();
+
+    // Map request id to ticket
+    final Map<String, ServiceTicket> ticketMap = {
+      for (final t in tickets) t.request.id: t
+    };
+
+    // Build unified list
+    final List<UnifiedOperationalItem> items = requests.map((req) {
+      final ticket = ticketMap[req.id];
+      return UnifiedOperationalItem(ticket: ticket, request: req);
+    }).toList();
+    return items;
+  }
+
+      /// Returns all requests (for migration safety)
+      Future<List<ServiceRequest>> getAllRequests() async {
+        // This should be replaced with real data source in production
+        // For now, gather from _requestStreamController if possible
+        // (Or use a persistent store if available)
+        // Placeholder: return empty list if not implemented
+        return [];
+      }
+    // Additive: ServiceTicket management (Phase 1)
+    final StreamController<ServiceTicket> _ticketStreamController = StreamController<ServiceTicket>.broadcast();
+    final List<ServiceTicket> _tickets = <ServiceTicket>[];
+
+    Stream<ServiceTicket> get ticketStream => _ticketStreamController.stream;
+
+
+    /// Additive: Create a ServiceTicket for a ServiceRequest and distribute (Phase 2)
+    Future<ServiceTicket> createServiceTicket({
+      required ServiceRequest request,
+      String createdBy = 'system',
+      String status = 'open',
+      int escalationLevel = 0,
+      String? escalationReason,
+      List<String>? previousAssignees,
+      List<TicketHandoff>? handoffHistory,
+    }) async {
+      // Step 1: Create ticket with minimal fields
+      final ticket = ServiceTicket(
+        ticketId: _generateTicketId(),
+        request: request,
+        status: status,
+        assignedTo: null,
+        assignedTeam: null,
+        assignedAt: null,
+        createdBy: createdBy,
+        escalationLevel: escalationLevel,
+        escalationReason: escalationReason,
+        previousAssignees: previousAssignees,
+        handoffHistory: handoffHistory,
+      );
+
+      // Step 2: Distribute using DistributionEngine
+      final distributionResult = DistributionEngine.distribute(ticket);
+
+      // Step 3: Update ticket assignment fields (additive, safe)
+      ticket.assignedTo = distributionResult.assignedTo;
+      ticket.assignedTeam = distributionResult.assignedTeam;
+      ticket.updatedAt = DateTime.now();
+      // Optionally: assignedVendor, adapterRoute, escalation, fallback, audit log
+      // (Extend ServiceTicket if needed in future phases)
+
+      // Step 4: Audit log (MVP: add to handoffHistory if escalated/fallback)
+      if (distributionResult.escalated || distributionResult.fallback) {
+        ticket.handoffHistory.add(TicketHandoff(
+          from: createdBy,
+          to: distributionResult.assignedTo ?? 'unassigned',
+          at: DateTime.now(),
+          reason: distributionResult.auditNote,
+        ));
+      }
+
+      _tickets.add(ticket);
+      _ticketStreamController.add(ticket);
+      return ticket;
+    }
+
+    /// List all tickets (additive, for audit/future migration)
+    List<ServiceTicket> getAllTickets() => List.unmodifiable(_tickets);
+
+    /// Find tickets by request id
+    List<ServiceTicket> findTicketsByRequestId(String requestId) {
+      return _tickets.where((t) => t.request.id == requestId).toList();
+    }
+
+    /// Generate unique ticket id
+    String _generateTicketId() {
+      return 'TICKET-[0m${DateTime.now().millisecondsSinceEpoch}-${_tickets.length + 1}';
+    }
   static final ServiceManager _instance = ServiceManager._internal();
 
   // Services Map
   final StreamController<ServiceRequest> _requestStreamController =
       StreamController<ServiceRequest>.broadcast();
+  final StreamController<ViewingRequest> _viewingRequestStreamController =
+      StreamController<ViewingRequest>.broadcast();
   final List<Property> _inventory = <Property>[];
+  final List<ViewingRequest> _viewingRequests = <ViewingRequest>[];
 
   factory ServiceManager() {
     return _instance;
@@ -34,6 +281,9 @@ class ServiceManager {
 
   ServiceManager._internal() {
     _inventory.addAll(_generateMockProperties());
+    _setupBrainEvaluation();
+    _setupRoutingEvaluation();
+    _setupSLAEvaluation();
   }
 
   /// Create a new service request
@@ -211,6 +461,7 @@ class ServiceManager {
       rating: property.rating,
       reviews: property.reviews,
       isAvailable: property.isAvailable,
+      viewingState: property.viewingState,
       nationalAddress: property.nationalAddress,
     );
 
@@ -258,6 +509,7 @@ class ServiceManager {
       rating: property.rating,
       reviews: property.reviews,
       isAvailable: property.isAvailable,
+      viewingState: property.viewingState,
       nationalAddress: property.nationalAddress,
     );
 
@@ -298,18 +550,673 @@ class ServiceManager {
     );
   }
 
+  Future<ViewingRequest> createViewingRequest({
+    required String propertyId,
+    required DateTime viewingDateTime,
+    required String tenantId,
+    required String tenantName,
+    String? tenantPhone,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 250));
+
+    final int propertyIndex = _inventory.indexWhere(
+      (Property p) => p.id == propertyId,
+    );
+    if (propertyIndex < 0) {
+      throw Exception('Property not found for viewing request');
+    }
+
+    final Property property = _inventory[propertyIndex];
+    final List<ViewingRequestStatus> completed = <ViewingRequestStatus>[
+      ViewingRequestStatus.requestSubmitted,
+    ];
+
+    ViewingRequestStatus currentStatus =
+        ViewingRequestStatus.requestSubmitted;
+
+    if (property.vendorId.trim().isNotEmpty) {
+      completed.add(ViewingRequestStatus.coordinatorAssigned);
+      currentStatus = ViewingRequestStatus.coordinatorAssigned;
+    }
+
+    final DateTime now = DateTime.now();
+    final ViewingRequest request = ViewingRequest(
+      id: _generateViewingRequestId(),
+      propertyId: property.id,
+      propertyTitle: property.title,
+      viewingDateTime: viewingDateTime,
+      tenantId: tenantId,
+      tenantName: tenantName,
+      tenantPhone: tenantPhone,
+      coordinatorId: property.vendorId,
+      coordinatorName: property.vendorId,
+      notes: <String>[
+        'Request submitted by $tenantName',
+      ],
+      currentStatus: currentStatus,
+      completedStatuses: completed,
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    _viewingRequests.insert(0, request);
+    _viewingRequestStreamController.add(request);
+
+    await _setPropertyViewingState(
+      propertyId: property.id,
+      state: PropertyViewingState.underViewing,
+    );
+
+    return request;
+  }
+
+  Future<ViewingRequest> updateViewingRequestStatus({
+    required String requestId,
+    required ViewingRequestStatus newStatus,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    final int index =
+        _viewingRequests.indexWhere((ViewingRequest r) => r.id == requestId);
+    if (index < 0) {
+      throw Exception('Viewing request not found');
+    }
+
+    final ViewingRequest current = _viewingRequests[index];
+    _assertStatusTransitionAllowed(
+      currentStatus: current.currentStatus,
+      newStatus: newStatus,
+    );
+    final List<ViewingRequestStatus> completed =
+        List<ViewingRequestStatus>.from(current.completedStatuses);
+    if (!completed.contains(newStatus)) {
+      completed.add(newStatus);
+    }
+
+    final ViewingRequest updated = ViewingRequest(
+      id: current.id,
+      propertyId: current.propertyId,
+      propertyTitle: current.propertyTitle,
+      viewingDateTime: current.viewingDateTime,
+      tenantId: current.tenantId,
+      tenantName: current.tenantName,
+      tenantPhone: current.tenantPhone,
+      coordinatorId: current.coordinatorId,
+      coordinatorName: current.coordinatorName,
+      notes: current.notes,
+      currentStatus: newStatus,
+      completedStatuses: completed,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+    );
+
+    _viewingRequests[index] = updated;
+    _viewingRequestStreamController.add(updated);
+
+    if (newStatus == ViewingRequestStatus.unitReserved) {
+      await _setPropertyViewingState(
+        propertyId: updated.propertyId,
+        state: PropertyViewingState.reserved,
+      );
+    }
+    if (newStatus == ViewingRequestStatus.unitReleased) {
+      await _setPropertyViewingState(
+        propertyId: updated.propertyId,
+        state: PropertyViewingState.available,
+      );
+    }
+
+    return updated;
+  }
+
+  Future<ViewingRequest> resolveViewingDecision({
+    required String requestId,
+    required bool reserveUnit,
+  }) async {
+    final ViewingRequest withDecisionPending = await updateViewingRequestStatus(
+      requestId: requestId,
+      newStatus: ViewingRequestStatus.tenantDecisionPending,
+    );
+
+    final ViewingRequest result = await updateViewingRequestStatus(
+      requestId: withDecisionPending.id,
+      newStatus: reserveUnit
+          ? ViewingRequestStatus.unitReserved
+          : ViewingRequestStatus.unitReleased,
+    );
+
+    // Business rule: tenant can have multiple viewings, but only one active
+    // reservation at a time. When one request is reserved, other active
+    // requests for the same tenant are auto-released.
+    if (reserveUnit) {
+      await _autoReleaseOtherActiveRequestsForTenant(
+        tenantId: result.tenantId,
+        keepRequestId: result.id,
+      );
+      await _syncPropertyViewingStateFromRequests(propertyId: result.propertyId);
+    }
+
+    return result;
+  }
+
+  ViewingActionIntent? getPrimaryViewingIntent(ViewingRequest request) {
+    switch (request.currentStatus) {
+      case ViewingRequestStatus.requestSubmitted:
+        return ViewingActionIntent.assignCoordinator;
+      case ViewingRequestStatus.coordinatorAssigned:
+        return ViewingActionIntent.vendorAccept;
+      case ViewingRequestStatus.vendorConfirmed:
+        return ViewingActionIntent.confirmSchedule;
+      case ViewingRequestStatus.viewingScheduled:
+        return ViewingActionIntent.completeViewing;
+      case ViewingRequestStatus.viewingCompleted:
+      case ViewingRequestStatus.tenantDecisionPending:
+        return ViewingActionIntent.reserveUnit;
+      case ViewingRequestStatus.unitReserved:
+      case ViewingRequestStatus.unitReleased:
+      case ViewingRequestStatus.vendorRejected:
+        return null;
+    }
+  }
+
+  Future<ViewingRequest> submitViewingIntent({
+    required String requestId,
+    required ViewingActionIntent intent,
+    String? actorId,
+    String? actorName,
+    String? note,
+  }) async {
+    final ViewingRequest current = _requireViewingRequest(requestId);
+
+    if (intent == ViewingActionIntent.runPrimaryAction) {
+      final ViewingActionIntent? primary = getPrimaryViewingIntent(current);
+      if (primary == null) {
+        throw Exception('No primary action available for this viewing case');
+      }
+      return submitViewingIntent(
+        requestId: requestId,
+        intent: primary,
+        actorId: actorId,
+        actorName: actorName,
+        note: note,
+      );
+    }
+
+    _assertViewingIntentLegal(current: current, intent: intent);
+
+    switch (intent) {
+      case ViewingActionIntent.assignCoordinator:
+        final String resolvedCoordinatorId =
+            _resolveCoordinatorId(current, preferredActorId: actorId);
+        final String resolvedCoordinatorName = _resolveCoordinatorName(
+          current,
+          coordinatorId: resolvedCoordinatorId,
+          preferredActorName: actorName,
+        );
+        return assignViewingCoordinator(
+          requestId: requestId,
+          coordinatorId: resolvedCoordinatorId,
+          coordinatorName: resolvedCoordinatorName,
+        );
+      case ViewingActionIntent.vendorAccept:
+        return vendorAcceptAssignment(requestId: requestId);
+      case ViewingActionIntent.vendorReject:
+        return rejectVendorAssignment(
+          requestId: requestId,
+          rejectedVendorId: actorId ?? current.coordinatorId ?? '',
+        );
+      case ViewingActionIntent.confirmSchedule:
+        return updateViewingRequestStatus(
+          requestId: requestId,
+          newStatus: ViewingRequestStatus.viewingScheduled,
+        );
+      case ViewingActionIntent.completeViewing:
+        return updateViewingRequestStatus(
+          requestId: requestId,
+          newStatus: ViewingRequestStatus.viewingCompleted,
+        );
+      case ViewingActionIntent.reserveUnit:
+        return resolveViewingDecision(
+          requestId: requestId,
+          reserveUnit: true,
+        );
+      case ViewingActionIntent.releaseUnit:
+        return resolveViewingDecision(
+          requestId: requestId,
+          reserveUnit: false,
+        );
+      case ViewingActionIntent.addCaseNote:
+        return addViewingCaseNote(
+          requestId: requestId,
+          note: note ?? 'Case note added by operations',
+        );
+      case ViewingActionIntent.runPrimaryAction:
+        throw Exception('Primary action must be resolved before execution');
+    }
+  }
+
+  Future<void> _autoReleaseOtherActiveRequestsForTenant({
+    required String tenantId,
+    required String keepRequestId,
+  }) async {
+    final List<int> targetIndexes = <int>[];
+
+    for (int i = 0; i < _viewingRequests.length; i++) {
+      final ViewingRequest request = _viewingRequests[i];
+      final bool isSameTenant = request.tenantId == tenantId;
+      final bool isSameRequest = request.id == keepRequestId;
+      final bool isClosed =
+          request.currentStatus == ViewingRequestStatus.unitReserved ||
+          request.currentStatus == ViewingRequestStatus.unitReleased;
+
+      if (isSameTenant && !isSameRequest && !isClosed) {
+        targetIndexes.add(i);
+      }
+    }
+
+    for (final int index in targetIndexes) {
+      final ViewingRequest current = _viewingRequests[index];
+      final List<ViewingRequestStatus> completed =
+          List<ViewingRequestStatus>.from(current.completedStatuses);
+      if (!completed.contains(ViewingRequestStatus.unitReleased)) {
+        completed.add(ViewingRequestStatus.unitReleased);
+      }
+
+      final ViewingRequest updated = ViewingRequest(
+        id: current.id,
+        propertyId: current.propertyId,
+        propertyTitle: current.propertyTitle,
+        viewingDateTime: current.viewingDateTime,
+        tenantId: current.tenantId,
+        tenantName: current.tenantName,
+        tenantPhone: current.tenantPhone,
+        coordinatorId: current.coordinatorId,
+        coordinatorName: current.coordinatorName,
+        notes: <String>[
+          ...current.notes,
+          'Auto-released because another unit was reserved by the same tenant.',
+        ],
+        currentStatus: ViewingRequestStatus.unitReleased,
+        completedStatuses: completed,
+        createdAt: current.createdAt,
+        updatedAt: DateTime.now(),
+      );
+
+      _viewingRequests[index] = updated;
+      _viewingRequestStreamController.add(updated);
+      await _syncPropertyViewingStateFromRequests(propertyId: updated.propertyId);
+    }
+  }
+
+  Future<void> _syncPropertyViewingStateFromRequests({
+    required String propertyId,
+  }) async {
+    final List<ViewingRequest> related = _viewingRequests
+        .where((ViewingRequest r) => r.propertyId == propertyId)
+        .toList();
+
+    final bool hasReserved = related.any(
+      (ViewingRequest r) => r.currentStatus == ViewingRequestStatus.unitReserved,
+    );
+    final bool hasActive = related.any(
+      (ViewingRequest r) =>
+          r.currentStatus != ViewingRequestStatus.unitReserved &&
+          r.currentStatus != ViewingRequestStatus.unitReleased,
+    );
+
+    final PropertyViewingState nextState = hasReserved
+        ? PropertyViewingState.reserved
+        : hasActive
+            ? PropertyViewingState.underViewing
+            : PropertyViewingState.available;
+
+    await _setPropertyViewingState(propertyId: propertyId, state: nextState);
+  }
+
+  Future<ViewingRequest> assignViewingCoordinator({
+    required String requestId,
+    required String coordinatorId,
+    required String coordinatorName,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    final int index =
+        _viewingRequests.indexWhere((ViewingRequest r) => r.id == requestId);
+    if (index < 0) {
+      throw Exception('Viewing request not found for coordinator assignment');
+    }
+
+    final ViewingRequest current = _viewingRequests[index];
+    _assertViewingIntentLegal(
+      current: current,
+      intent: ViewingActionIntent.assignCoordinator,
+    );
+    final List<ViewingRequestStatus> completed =
+        List<ViewingRequestStatus>.from(current.completedStatuses);
+    if (!completed.contains(ViewingRequestStatus.coordinatorAssigned)) {
+      completed.add(ViewingRequestStatus.coordinatorAssigned);
+    }
+
+    final ViewingRequest updated = ViewingRequest(
+      id: current.id,
+      propertyId: current.propertyId,
+      propertyTitle: current.propertyTitle,
+      viewingDateTime: current.viewingDateTime,
+      tenantId: current.tenantId,
+      tenantName: current.tenantName,
+      tenantPhone: current.tenantPhone,
+      coordinatorId: coordinatorId,
+      coordinatorName: coordinatorName,
+      notes: <String>[
+        ...current.notes,
+        'Coordinator assigned: $coordinatorName',
+      ],
+      currentStatus: ViewingRequestStatus.coordinatorAssigned,
+      completedStatuses: completed,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+    );
+
+    _viewingRequests[index] = updated;
+    _viewingRequestStreamController.add(updated);
+    return updated;
+  }
+
+  Future<ViewingRequest> addViewingCaseNote({
+    required String requestId,
+    required String note,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+
+    final int index =
+        _viewingRequests.indexWhere((ViewingRequest r) => r.id == requestId);
+    if (index < 0) {
+      throw Exception('Viewing request not found for notes update');
+    }
+
+    final ViewingRequest current = _viewingRequests[index];
+    final ViewingRequest updated = ViewingRequest(
+      id: current.id,
+      propertyId: current.propertyId,
+      propertyTitle: current.propertyTitle,
+      viewingDateTime: current.viewingDateTime,
+      tenantId: current.tenantId,
+      tenantName: current.tenantName,
+      tenantPhone: current.tenantPhone,
+      coordinatorId: current.coordinatorId,
+      coordinatorName: current.coordinatorName,
+      notes: <String>[...current.notes, note],
+      currentStatus: current.currentStatus,
+      completedStatuses: current.completedStatuses,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+    );
+
+    _viewingRequests[index] = updated;
+    _viewingRequestStreamController.add(updated);
+    return updated;
+  }
+
+  Future<ViewingRequest?> getViewingRequestById(String requestId) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final int index =
+        _viewingRequests.indexWhere((ViewingRequest r) => r.id == requestId);
+    if (index < 0) return null;
+    return _viewingRequests[index];
+  }
+
+  Future<List<ViewingRequest>> getViewingRequestsForTenant(String tenantId) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    return _viewingRequests
+        .where((ViewingRequest request) => request.tenantId == tenantId)
+        .toList();
+  }
+
+  Future<List<ViewingRequest>> getViewingRequestsForCommandCenter() async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    return List<ViewingRequest>.from(_viewingRequests);
+  }
+
+  Future<List<ViewingRequest>> getViewingAssignmentsForVendor(
+    String coordinatorId,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    return _viewingRequests
+        .where((ViewingRequest request) => request.coordinatorId == coordinatorId)
+        .toList();
+  }
+
+  // ── Mock Vendor Pool — simulation only, no distance/routing logic ──────────
+  static const List<Map<String, String>> _mockVendorPool = <Map<String, String>>[
+    <String, String>{'id': 'VENDOR-DEMO-001', 'name': 'Ali Hassan'},
+    <String, String>{'id': 'VENDOR-DEMO-002', 'name': 'Omar Khalid'},
+    <String, String>{'id': 'VENDOR-DEMO-003', 'name': 'Sara Ahmed'},
+  ];
+
+  /// Vendor accepts an assignment. Advances status to vendorConfirmed.
+  Future<ViewingRequest> vendorAcceptAssignment({
+    required String requestId,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    final ViewingRequest current = _requireViewingRequest(requestId);
+    _assertViewingIntentLegal(
+      current: current,
+      intent: ViewingActionIntent.vendorAccept,
+    );
+    return updateViewingRequestStatus(
+      requestId: requestId,
+      newStatus: ViewingRequestStatus.vendorConfirmed,
+    );
+  }
+
+  /// Vendor rejects an assignment. Core sets transient vendorRejected state,
+  /// then immediately reassigns to the next available vendor in the mock pool.
+  Future<ViewingRequest> rejectVendorAssignment({
+    required String requestId,
+    required String rejectedVendorId,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    final int index =
+        _viewingRequests.indexWhere((ViewingRequest r) => r.id == requestId);
+    if (index < 0) throw Exception('Viewing request not found for rejection');
+
+    final ViewingRequest current = _viewingRequests[index];
+    _assertViewingIntentLegal(
+      current: current,
+      intent: ViewingActionIntent.vendorReject,
+    );
+
+    // Step 1: set transient vendorRejected state and emit
+    final ViewingRequest rejected = ViewingRequest(
+      id: current.id,
+      propertyId: current.propertyId,
+      propertyTitle: current.propertyTitle,
+      viewingDateTime: current.viewingDateTime,
+      tenantId: current.tenantId,
+      tenantName: current.tenantName,
+      tenantPhone: current.tenantPhone,
+      coordinatorId: current.coordinatorId,
+      coordinatorName: current.coordinatorName,
+      notes: <String>[...current.notes, 'Assignment rejected by $rejectedVendorId'],
+      currentStatus: ViewingRequestStatus.vendorRejected,
+      completedStatuses: List<ViewingRequestStatus>.from(current.completedStatuses),
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+    );
+    _viewingRequests[index] = rejected;
+    _viewingRequestStreamController.add(rejected);
+
+    // Step 2: Core picks next vendor from pool (simple simulation — no distance logic)
+    final Map<String, String> nextVendor = _mockVendorPool.firstWhere(
+      (Map<String, String> v) => v['id'] != rejectedVendorId,
+      orElse: () => _mockVendorPool.first,
+    );
+
+    // Step 3: Reassign via existing Core method → state returns to coordinatorAssigned
+    return assignViewingCoordinator(
+      requestId: requestId,
+      coordinatorId: nextVendor['id']!,
+      coordinatorName: nextVendor['name']!,
+    );
+  }
+
   /// Stream for real-time updates
   Stream<ServiceRequest> get requestStream => _requestStreamController.stream;
+  Stream<ViewingRequest> get viewingRequestStream =>
+      _viewingRequestStreamController.stream;
 
   /// Cleanup
   void dispose() {
     _requestStreamController.close();
+    _viewingRequestStreamController.close();
+    _brainOutputStreamController.close();
+    _routingOutputStreamController.close();
+    _slaOutputStreamController.close();
   }
 
   // ========== Helper Methods ==========
 
   String _generateRequestId() {
     return 'REQ-${DateTime.now().millisecondsSinceEpoch}-${(DateTime.now().millisecond % 1000).toString().padLeft(3, '0')}';
+  }
+
+  String _generateViewingRequestId() {
+    return 'VIEW-${DateTime.now().microsecondsSinceEpoch}';
+  }
+
+  ViewingRequest _requireViewingRequest(String requestId) {
+    final int index =
+        _viewingRequests.indexWhere((ViewingRequest request) => request.id == requestId);
+    if (index < 0) {
+      throw Exception('Viewing request not found');
+    }
+    return _viewingRequests[index];
+  }
+
+  void _assertViewingIntentLegal({
+    required ViewingRequest current,
+    required ViewingActionIntent intent,
+  }) {
+    final ViewingRequestStatus status = current.currentStatus;
+
+    switch (intent) {
+      case ViewingActionIntent.assignCoordinator:
+        if (status != ViewingRequestStatus.requestSubmitted &&
+            status != ViewingRequestStatus.coordinatorAssigned &&
+            status != ViewingRequestStatus.vendorRejected) {
+          throw Exception('Coordinator assignment is not allowed from $status');
+        }
+        return;
+      case ViewingActionIntent.vendorAccept:
+      case ViewingActionIntent.vendorReject:
+        if (status != ViewingRequestStatus.coordinatorAssigned) {
+          throw Exception('Vendor action is not allowed from $status');
+        }
+        return;
+      case ViewingActionIntent.confirmSchedule:
+        if (status != ViewingRequestStatus.vendorConfirmed) {
+          throw Exception('Schedule confirmation is not allowed from $status');
+        }
+        return;
+      case ViewingActionIntent.completeViewing:
+        if (status != ViewingRequestStatus.viewingScheduled) {
+          throw Exception('Viewing completion is not allowed from $status');
+        }
+        return;
+      case ViewingActionIntent.reserveUnit:
+      case ViewingActionIntent.releaseUnit:
+        if (status != ViewingRequestStatus.viewingCompleted &&
+            status != ViewingRequestStatus.tenantDecisionPending) {
+          throw Exception('Viewing decision is not allowed from $status');
+        }
+        return;
+      case ViewingActionIntent.addCaseNote:
+        return;
+      case ViewingActionIntent.runPrimaryAction:
+        return;
+    }
+  }
+
+  void _assertStatusTransitionAllowed({
+    required ViewingRequestStatus currentStatus,
+    required ViewingRequestStatus newStatus,
+  }) {
+    if (currentStatus == newStatus) {
+      return;
+    }
+
+    final Set<ViewingRequestStatus> allowed = switch (currentStatus) {
+      ViewingRequestStatus.requestSubmitted => <ViewingRequestStatus>{
+        ViewingRequestStatus.coordinatorAssigned,
+      },
+      ViewingRequestStatus.coordinatorAssigned => <ViewingRequestStatus>{
+        ViewingRequestStatus.vendorConfirmed,
+      },
+      ViewingRequestStatus.vendorConfirmed => <ViewingRequestStatus>{
+        ViewingRequestStatus.viewingScheduled,
+      },
+      ViewingRequestStatus.viewingScheduled => <ViewingRequestStatus>{
+        ViewingRequestStatus.viewingCompleted,
+      },
+      ViewingRequestStatus.viewingCompleted => <ViewingRequestStatus>{
+        ViewingRequestStatus.tenantDecisionPending,
+      },
+      ViewingRequestStatus.tenantDecisionPending => <ViewingRequestStatus>{
+        ViewingRequestStatus.unitReserved,
+        ViewingRequestStatus.unitReleased,
+      },
+      ViewingRequestStatus.unitReserved => <ViewingRequestStatus>{},
+      ViewingRequestStatus.unitReleased => <ViewingRequestStatus>{},
+      ViewingRequestStatus.vendorRejected => <ViewingRequestStatus>{
+        ViewingRequestStatus.coordinatorAssigned,
+      },
+    };
+
+    if (!allowed.contains(newStatus)) {
+      throw Exception(
+        'Illegal viewing status transition: $currentStatus -> $newStatus',
+      );
+    }
+  }
+
+  String _resolveCoordinatorId(
+    ViewingRequest current, {
+    String? preferredActorId,
+  }) {
+    final String preferred = preferredActorId?.trim() ?? '';
+    if (preferred.isNotEmpty) {
+      return preferred;
+    }
+
+    final String currentCoordinator = current.coordinatorId?.trim() ?? '';
+    if (currentCoordinator.isNotEmpty) {
+      return currentCoordinator;
+    }
+
+    return _mockVendorPool.first['id']!;
+  }
+
+  String _resolveCoordinatorName(
+    ViewingRequest current, {
+    required String coordinatorId,
+    String? preferredActorName,
+  }) {
+    final String preferred = preferredActorName?.trim() ?? '';
+    if (preferred.isNotEmpty) {
+      return preferred;
+    }
+
+    final String currentCoordinator = current.coordinatorName?.trim() ?? '';
+    if (currentCoordinator.isNotEmpty) {
+      return currentCoordinator;
+    }
+
+    final Map<String, String> matched = _mockVendorPool.firstWhere(
+      (Map<String, String> vendor) => vendor['id'] == coordinatorId,
+      orElse: () => <String, String>{'name': 'Auto Coordinator'},
+    );
+    return matched['name']!;
   }
 
   void _assertDashboardRole(String actorRole) {
@@ -369,6 +1276,55 @@ class ServiceManager {
       rating: current.rating,
       reviews: current.reviews,
       isAvailable: current.isAvailable,
+      viewingState: current.viewingState,
+      nationalAddress: current.nationalAddress,
+    );
+
+    _inventory[index] = updated;
+    return updated;
+  }
+
+  Future<Property> _setPropertyViewingState({
+    required String propertyId,
+    required PropertyViewingState state,
+  }) async {
+    final int index = _inventory.indexWhere((Property p) => p.id == propertyId);
+    if (index < 0) {
+      throw Exception('Property not found for viewing-state update');
+    }
+
+    final Property current = _inventory[index];
+    final bool isAvailable = state != PropertyViewingState.reserved;
+
+    final Property updated = Property(
+      id: current.id,
+      title: current.title,
+      description: current.description,
+      propertyType: current.propertyType,
+      areaName: current.areaName,
+      city: current.city,
+      zoneNumber: current.zoneNumber,
+      streetNumber: current.streetNumber,
+      buildingNumber: current.buildingNumber,
+      location: current.location,
+      price: current.price,
+      currency: current.currency,
+      bedrooms: current.bedrooms,
+      bathrooms: current.bathrooms,
+      sizeSqm: current.sizeSqm,
+      parkingCount: current.parkingCount,
+      furnished: current.furnished,
+      amenities: current.amenities,
+      images: current.images,
+      status: current.status,
+      createdBy: current.createdBy,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+      vendorId: current.vendorId,
+      rating: current.rating,
+      reviews: current.reviews,
+      isAvailable: isAvailable,
+      viewingState: state,
       nationalAddress: current.nationalAddress,
     );
 

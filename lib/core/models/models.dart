@@ -1,9 +1,14 @@
+export 'ticket_action.dart';
+export '../distribution/distribution_engine.dart';
 import 'package:flutter/material.dart';
+// import 'service_ticket.dart';
 
 // ============================================================================
 // OMNI-RESILIENT GLOBAL LIFESTYLE OS
 // Data Models & Entities
 // ============================================================================
+
+export 'service_ticket.dart';
 
 /// Unified Request Model - Core of the system
 /// Represents any service request (Ride, Property, Food, etc.)
@@ -90,6 +95,156 @@ class ServiceRequest {
         completedAt: json['completedAt'] != null 
             ? DateTime.tryParse(json['completedAt']) 
             : null,
+      );
+}
+
+enum ViewingRequestStatus {
+  requestSubmitted,
+  coordinatorAssigned,
+  vendorConfirmed,
+  viewingScheduled,
+  viewingCompleted,
+  tenantDecisionPending,
+  unitReserved,
+  unitReleased,
+  // Transient state: set briefly by Core when vendor rejects, then Core reassigns.
+  vendorRejected;
+
+  String get value {
+    switch (this) {
+      case ViewingRequestStatus.requestSubmitted:
+        return 'request_submitted';
+      case ViewingRequestStatus.coordinatorAssigned:
+        return 'coordinator_assigned';
+      case ViewingRequestStatus.vendorConfirmed:
+        return 'vendor_confirmed';
+      case ViewingRequestStatus.viewingScheduled:
+        return 'viewing_scheduled';
+      case ViewingRequestStatus.viewingCompleted:
+        return 'viewing_completed';
+      case ViewingRequestStatus.tenantDecisionPending:
+        return 'tenant_decision_pending';
+      case ViewingRequestStatus.unitReserved:
+        return 'unit_reserved';
+      case ViewingRequestStatus.unitReleased:
+        return 'unit_released';
+      case ViewingRequestStatus.vendorRejected:
+        return 'vendor_rejected';
+    }
+  }
+
+  static ViewingRequestStatus fromValue(String? raw) {
+    switch ((raw ?? '').toLowerCase()) {
+      case 'request_submitted':
+        return ViewingRequestStatus.requestSubmitted;
+      case 'coordinator_assigned':
+        return ViewingRequestStatus.coordinatorAssigned;
+      case 'vendor_confirmed':
+        return ViewingRequestStatus.vendorConfirmed;
+      case 'viewing_scheduled':
+        return ViewingRequestStatus.viewingScheduled;
+      case 'viewing_completed':
+        return ViewingRequestStatus.viewingCompleted;
+      case 'tenant_decision_pending':
+        return ViewingRequestStatus.tenantDecisionPending;
+      case 'unit_reserved':
+        return ViewingRequestStatus.unitReserved;
+      case 'unit_released':
+        return ViewingRequestStatus.unitReleased;
+      case 'vendor_rejected':
+        return ViewingRequestStatus.vendorRejected;
+      default:
+        return ViewingRequestStatus.requestSubmitted;
+    }
+  }
+}
+
+enum ViewingActionIntent {
+  assignCoordinator,
+  vendorAccept,
+  vendorReject,
+  confirmSchedule,
+  completeViewing,
+  reserveUnit,
+  releaseUnit,
+  addCaseNote,
+  runPrimaryAction,
+}
+
+class ViewingRequest {
+  final String id;
+  final String propertyId;
+  final String propertyTitle;
+  final DateTime viewingDateTime;
+  final String tenantId;
+  final String tenantName;
+  final String? tenantPhone;
+  final String? coordinatorId;
+  final String? coordinatorName;
+  final List<String> notes;
+  final ViewingRequestStatus currentStatus;
+  final List<ViewingRequestStatus> completedStatuses;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  ViewingRequest({
+    required this.id,
+    required this.propertyId,
+    required this.propertyTitle,
+    required this.viewingDateTime,
+    required this.tenantId,
+    required this.tenantName,
+    this.tenantPhone,
+    this.coordinatorId,
+    this.coordinatorName,
+    this.notes = const <String>[],
+    required this.currentStatus,
+    required this.completedStatuses,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  bool isStepDone(ViewingRequestStatus step) {
+    return completedStatuses.contains(step);
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'propertyId': propertyId,
+        'propertyTitle': propertyTitle,
+        'viewingDateTime': viewingDateTime.toIso8601String(),
+        'tenantId': tenantId,
+        'tenantName': tenantName,
+        'tenantPhone': tenantPhone,
+        'coordinatorId': coordinatorId,
+        'coordinatorName': coordinatorName,
+        'notes': notes,
+        'currentStatus': currentStatus.value,
+        'completedStatuses':
+            completedStatuses.map((ViewingRequestStatus e) => e.value).toList(),
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
+  factory ViewingRequest.fromJson(Map<String, dynamic> json) => ViewingRequest(
+        id: json['id'] ?? '',
+        propertyId: json['propertyId'] ?? '',
+        propertyTitle: json['propertyTitle'] ?? '',
+        viewingDateTime:
+            DateTime.tryParse(json['viewingDateTime'] ?? '') ?? DateTime.now(),
+        tenantId: json['tenantId'] ?? '',
+        tenantName: json['tenantName'] ?? 'Tenant',
+        tenantPhone: json['tenantPhone'],
+        coordinatorId: json['coordinatorId'],
+        coordinatorName: json['coordinatorName'],
+        notes: List<String>.from(json['notes'] ?? const <String>[]),
+        currentStatus: ViewingRequestStatus.fromValue(json['currentStatus']),
+        completedStatuses: ((json['completedStatuses'] ?? const <dynamic>[])
+                as List<dynamic>)
+            .map((dynamic e) => ViewingRequestStatus.fromValue(e as String?))
+            .toList(),
+        createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
+        updatedAt: DateTime.tryParse(json['updatedAt'] ?? '') ?? DateTime.now(),
       );
 }
 
@@ -210,7 +365,99 @@ enum PropertyStatus {
   }
 }
 
+enum PropertyViewingState {
+  available,
+  underViewing,
+  reserved;
+
+  String get value {
+    switch (this) {
+      case PropertyViewingState.available:
+        return 'available';
+      case PropertyViewingState.underViewing:
+        return 'under_viewing';
+      case PropertyViewingState.reserved:
+        return 'reserved';
+    }
+  }
+
+  static PropertyViewingState fromValue(String? raw) {
+    switch ((raw ?? '').toLowerCase()) {
+      case 'under_viewing':
+        return PropertyViewingState.underViewing;
+      case 'reserved':
+        return PropertyViewingState.reserved;
+      case 'available':
+      default:
+        return PropertyViewingState.available;
+    }
+  }
+}
+
 class Property {
+    Property copyWith({
+      String? id,
+      String? title,
+      String? description,
+      String? propertyType,
+      String? areaName,
+      String? city,
+      int? zoneNumber,
+      int? streetNumber,
+      int? buildingNumber,
+      GeoLocation? location,
+      String? nationalAddress,
+      double? price,
+      String? currency,
+      int? bedrooms,
+      int? bathrooms,
+      double? sizeSqm,
+      int? parkingCount,
+      bool? furnished,
+      List<String>? images,
+      List<String>? amenities,
+      PropertyStatus? status,
+      String? createdBy,
+      DateTime? updatedAt,
+      double? rating,
+      List<Map<String, dynamic>>? reviews,
+      String? vendorId,
+      bool? isAvailable,
+      PropertyViewingState? viewingState,
+      DateTime? createdAt,
+    }) {
+      return Property(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        description: description ?? this.description,
+        propertyType: propertyType ?? this.propertyType,
+        areaName: areaName ?? this.areaName,
+        city: city ?? this.city,
+        zoneNumber: zoneNumber ?? this.zoneNumber,
+        streetNumber: streetNumber ?? this.streetNumber,
+        buildingNumber: buildingNumber ?? this.buildingNumber,
+        location: location ?? this.location,
+        nationalAddress: nationalAddress ?? _legacyNationalAddress,
+        price: price ?? this.price,
+        currency: currency ?? this.currency,
+        bedrooms: bedrooms ?? this.bedrooms,
+        bathrooms: bathrooms ?? this.bathrooms,
+        sizeSqm: sizeSqm ?? this.sizeSqm,
+        parkingCount: parkingCount ?? this.parkingCount,
+        furnished: furnished ?? this.furnished,
+        images: images ?? List<String>.from(this.images),
+        amenities: amenities ?? List<String>.from(this.amenities),
+        status: status ?? this.status,
+        createdBy: createdBy ?? this.createdBy,
+        updatedAt: updatedAt ?? this.updatedAt,
+        rating: rating ?? this.rating,
+        reviews: reviews ?? List<Map<String, dynamic>>.from(this.reviews),
+        vendorId: vendorId ?? this.vendorId,
+        isAvailable: isAvailable ?? this.isAvailable,
+        viewingState: viewingState ?? this.viewingState,
+        createdAt: createdAt ?? this.createdAt,
+      );
+    }
   final String id;
   final String title;
   final String description;
@@ -238,6 +485,7 @@ class Property {
   final List<Map<String, dynamic>> reviews;
   final String vendorId;
   final bool isAvailable;
+  final PropertyViewingState viewingState;
   final DateTime createdAt;
 
   Property({
@@ -270,6 +518,7 @@ class Property {
     List<Map<String, dynamic>>? reviews,
     String? vendorId,
     bool? isAvailable,
+    PropertyViewingState? viewingState,
     DateTime? createdAt,
   })  : propertyType = (propertyType ?? type ?? 'APARTMENT').toUpperCase(),
         areaName = areaName ?? (location.city ?? ''),
@@ -284,6 +533,7 @@ class Property {
         reviews = reviews ?? const <Map<String, dynamic>>[],
         vendorId = vendorId ?? createdBy ?? 'command-center',
         isAvailable = isAvailable ?? true,
+        viewingState = viewingState ?? PropertyViewingState.available,
         createdAt = createdAt ?? DateTime.now();
 
   String get type => propertyType;
@@ -329,6 +579,7 @@ class Property {
         'reviews': reviews,
         'vendorId': vendorId,
         'isAvailable': isAvailable,
+        'viewingState': viewingState.value,
         'createdAt': createdAt.toIso8601String(),
       };
 
@@ -362,6 +613,7 @@ class Property {
         reviews: List<Map<String, dynamic>>.from(json['reviews'] ?? []),
         vendorId: json['vendorId'] ?? '',
         isAvailable: json['isAvailable'] ?? true,
+        viewingState: PropertyViewingState.fromValue(json['viewingState']),
         createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
       );
 }

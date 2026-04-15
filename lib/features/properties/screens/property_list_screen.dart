@@ -1,14 +1,48 @@
+import '../data/doha_areas.dart';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
+import '../widgets/property_status_badge.dart';
 import '../../../core/services/service_manager.dart';
-import '../data/doha_areas.dart';
+
+import '../helpers/viewing_status_mapper.dart';
 import 'omnicart_screen.dart';
 import 'omnirent_flow_state.dart';
-import 'profile_screen.dart';
 import 'property_details_screen.dart';
 import 'property_flow_ui.dart';
+
+// --- Under Viewing Badge Widget ---
+class _UnderViewingBadge extends StatelessWidget {
+  final PropertyViewingState state;
+  const _UnderViewingBadge({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    if (state == PropertyViewingState.underViewing) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF08A),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: const Color(0xFFFACC15), width: 1.2),
+        ),
+        child: Text(
+          OmniRentI18n.t(context, 'Under Viewing', 'قيد المعاينة'),
+          style: const TextStyle(
+            color: Color(0xFFB45309),
+            fontWeight: FontWeight.w800,
+            fontSize: 12,
+            letterSpacing: 0.2,
+          ),
+        ),
+      );
+    }
+    // fallback to old badge for other states
+    return _ViewingStateBadge(state: state);
+  }
+}
 
 class PropertyListScreen extends StatefulWidget {
   const PropertyListScreen({super.key});
@@ -18,6 +52,42 @@ class PropertyListScreen extends StatefulWidget {
 }
 
 class _PropertyListScreenState extends State<PropertyListScreen> {
+
+  // Update a property by id and set its viewingState
+  void markPropertyUnderViewing(String propertyId) {
+    setState(() {
+      final idx = _properties.indexWhere((p) => p.id == propertyId);
+      if (idx != -1) {
+        _properties[idx] = _properties[idx].copyWith(
+          viewingState: PropertyViewingState.underViewing,
+        );
+        // Also update filtered list if present
+        final fidx = _filtered.indexWhere((p) => p.id == propertyId);
+        if (fidx != -1) {
+          _filtered[fidx] = _filtered[fidx].copyWith(
+            viewingState: PropertyViewingState.underViewing,
+          );
+        }
+      }
+    });
+  }
+
+    List<String> get _availableAreas {
+      final Set<String> areas = <String>{};
+      for (final DohaArea area in dohaAreas) {
+        final String name = area.name.trim();
+        if (name.isNotEmpty) {
+          areas.add(name);
+        }
+      }
+      for (final Property property in _properties) {
+        final String area = property.areaName.trim();
+        if (area.isNotEmpty) {
+          areas.add(area);
+        }
+      }
+      return areas.toList();
+    }
   final ServiceManager _serviceManager = ServiceManager();
   final TextEditingController _searchController = TextEditingController();
 
@@ -31,35 +101,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
   String _query = '';
   _AdvancedSearchFilters _filters = const _AdvancedSearchFilters();
 
-  static const List<String> _preferredAreaOrder = <String>[
-    'doha',
-    'the pearl',
-    'west bay',
-    'west bay lagoon',
-    'lusail',
-    'jabal thuaileb',
-    'msheireb',
-    'al dafna',
-    'al sadd',
-    'al mansoura',
-    'bin mahmoud',
-    'najma',
-    'al gharrafa',
-    'muraikh',
-    'al aziziyah',
-    'ain khaled',
-    'muaither',
-    'al wakra',
-    'al wakrah',
-    'al wukair',
-    'madinat khalifa',
-    'al rayyan',
-    'al daayen',
-    'umm salal',
-    'al khor',
-    'mesaieed',
-    'madinat al shamal',
-  ];
+
 
   @override
   void initState() {
@@ -260,37 +302,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
     _applySearchAndFilters();
   }
 
-  List<String> get _availableAreas {
-    final Set<String> areas = <String>{};
-    for (final DohaArea area in dohaAreas) {
-      final String name = area.name.trim();
-      if (name.isNotEmpty) {
-        areas.add(name);
-      }
-    }
-    for (final Property property in _properties) {
-      final String area = property.areaName.trim();
-      if (area.isNotEmpty) {
-        areas.add(area);
-      }
-    }
-    final List<String> ordered = areas.toList()
-      ..sort((String a, String b) {
-        final int indexA = _preferredAreaOrder.indexOf(a.toLowerCase());
-        final int indexB = _preferredAreaOrder.indexOf(b.toLowerCase());
-        if (indexA >= 0 && indexB >= 0) {
-          return indexA.compareTo(indexB);
-        }
-        if (indexA >= 0) {
-          return -1;
-        }
-        if (indexB >= 0) {
-          return 1;
-        }
-        return a.compareTo(b);
-      });
-    return ordered;
-  }
+
 
   int get _activeAdvancedFilterCount => _filters.activeCount;
 
@@ -311,134 +323,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          OmniRentI18n.t(
-                            context,
-                            'Find your next home',
-                            'ابحث عن منزلك القادم',
-                          ),
-                          style: const TextStyle(
-                            color: Color(0xFF0F172A),
-                            fontSize: 28,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.4,
-                          ),
-                        ),
-                      ),
-                      const OmniLanguageSwitcher(),
-                      const SizedBox(width: 8),
-                      OmniCartAction(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const OmniCartScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(width: 10),
-                      OmniLoginAction(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const ProfileScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    OmniRentI18n.t(
-                      context,
-                      'Premium rentals in Doha with a calm, guided browsing experience.',
-                      'إيجارات فاخرة في الدوحة مع تجربة تصفح هادئة وموجهة.',
-                    ),
-                    style: const TextStyle(
-                      color: Color(0xFF64748B),
-                      fontSize: 14,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.04),
-                            blurRadius: 18,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: TextField(
-                        controller: _searchController,
-                        onChanged: _onSearchChanged,
-                        decoration: InputDecoration(
-                          hintText: OmniRentI18n.t(
-                            context,
-                            'Search apartments, areas, landmarks',
-                            'ابحث عن شقق ومناطق ومعالم',
-                          ),
-                          hintStyle: const TextStyle(
-                            color: Color(0xFF94A3B8),
-                            fontWeight: FontWeight.w500,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.search_rounded,
-                            color: Color(0xFF64748B),
-                          ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(vertical: 18),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  _AdvancedFilterButton(
-                    activeCount: _activeAdvancedFilterCount,
-                    isExpanded: _isFilterExpanded,
-                    onTap: _toggleInlineFilters,
-                  ),
-                ],
-              ),
-            ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 260),
-              curve: Curves.easeOutCubic,
-              child: _isFilterExpanded
-                  ? Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                      child: _InlineFiltersPanel(
-                        initialFilters: _filters,
-                        areaOptions: _availableAreas,
-                        onApply: _applyInlineFilters,
-                        onReset: _resetInlineFilters,
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-            const SizedBox(height: 6),
+            // ...existing code...
             Expanded(
               child: ValueListenableBuilder<Map<String, Property>>(
                 valueListenable: OmniRentFlowState.cart,
@@ -479,8 +364,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) =>
-                                  PropertyDetailsScreen(property: property),
+                              builder: (_) => PropertyDetailsScreen(property: property),
                             ),
                           );
                         },
@@ -590,11 +474,20 @@ class _PropertyCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final double monthlyPrice = property.price / 12;
     final String areaLabel = property.areaName.isNotEmpty
-      ? property.areaName
-      : (property.location.city?.isNotEmpty ?? false)
-        ? property.location.city!
-        : OmniRentI18n.t(context, 'Doha', 'الدوحة');
+        ? property.areaName
+        : (property.location.city?.isNotEmpty ?? false)
+            ? property.location.city!
+            : OmniRentI18n.t(context, 'Doha', 'الدوحة');
     final String? areaImageUrl = dohaAreaImageForName(areaLabel);
+
+    // MOCK: Add isUnderViewing for demo (replace with real logic later)
+    final bool isUnderViewing = property.viewingState == PropertyViewingState.underViewing;
+    // Future: Add more status logic here
+    PropertyStatusBadgeType? badgeType;
+    if (isUnderViewing) {
+      badgeType = PropertyStatusBadgeType.underViewing;
+    }
+    // else if (...) badgeType = ...;
 
     return GestureDetector(
       onTap: onTap,
@@ -672,6 +565,12 @@ class _PropertyCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (badgeType != null)
+                    Positioned(
+                      left: 12,
+                      top: 48,
+                      child: PropertyStatusBadge(type: badgeType),
+                    ),
                 ],
               ),
               const SizedBox(height: 16),
@@ -757,17 +656,41 @@ class _PropertyCard extends StatelessWidget {
                 label: inCart
                     ? OmniRentI18n.t(
                         context,
-                        'Added to OmniCart',
-                        'تمت الإضافة إلى العربة',
+                        'Go to Cart',
+                        'اذهب إلى العربة',
                       )
                     : OmniRentI18n.t(
                         context,
                         'Add to OmniCart',
                         'أضف إلى العربة',
                       ),
-                icon: inCart ? Icons.check_rounded : Icons.add_rounded,
-                onPressed: onAddToCart,
+                icon: inCart ? Icons.shopping_cart_rounded : Icons.add_rounded,
+                onPressed: () {
+                  if (inCart) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const OmniCartScreen(),
+                      ),
+                    );
+                  } else {
+                    onAddToCart();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          OmniRentI18n.t(
+                            context,
+                            'Added to cart',
+                            'تمت الإضافة إلى العربة',
+                          ),
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
               ),
+            // ...existing code...
             ],
           ),
         ),
@@ -791,6 +714,56 @@ class _CardImageGallery extends StatefulWidget {
 
   @override
   State<_CardImageGallery> createState() => _CardImageGalleryState();
+}
+
+class _ViewingStateBadge extends StatelessWidget {
+  final PropertyViewingState state;
+
+  const _ViewingStateBadge({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final TenantFacingStatus? mapped =
+        mapPropertyViewingStateToTenantStatus(state);
+    if (mapped == null) {
+      return const SizedBox.shrink();
+    }
+
+    final String label = tenantFacingStatusLabel(
+      mapped,
+      ar: OmniRentI18n.isArabic(context),
+    );
+    final Color color = tenantFacingStatusColor(mapped);
+    final IconData icon = tenantFacingStatusIcon(mapped);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            icon,
+            size: 12,
+            color: Colors.white,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CardImageGalleryState extends State<_CardImageGallery> {
@@ -1312,16 +1285,16 @@ class _InlineFiltersPanelState extends State<_InlineFiltersPanel> {
               ),
             ),
             _FilterSection(
-              title: OmniRentI18n.t(context, 'Area', 'المنطقة'),
+              title: OmniRentI18n.t(context, 'Location', 'الموقع'),
               child: _SearchableAreaField(
                 value: _draft.area,
                 items: <String>[
                   'all',
-                  ...widget.areaOptions.map((String area) => area.toLowerCase()),
+                  ...widget.areaOptions.map((String loc) => loc.toLowerCase()),
                 ],
                 labelBuilder: (String value) {
                   if (value == 'all') {
-                    return OmniRentI18n.t(context, 'All Areas', 'كل المناطق');
+                    return OmniRentI18n.t(context, 'All Qatar', 'كل قطر');
                   }
                   return widget.areaOptions.firstWhere(
                     (String option) => option.toLowerCase() == value,

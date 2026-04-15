@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
+import '../../entry/screens/app_entry_screen.dart';
 import '../../home/screens/tenant_home_screen.dart';
+import '../../vendor/screens/vendor_assignments_screen.dart';
+// import '../../command_center/screens/command_center_home_screen.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
 
 // ============================================================================
-// LOGIN SCREEN — QuickRent
+// LOGIN SCREEN — OmniRent
 // ============================================================================
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.role = UserRole.tenant});
+
+  final UserRole role;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -34,9 +39,14 @@ class _LoginScreenState extends State<LoginScreen> {
     await Future.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
     setState(() => _isLoading = false);
+    final Widget destination = switch (widget.role) {
+      UserRole.tenant => const TenantHomeScreen(),
+      UserRole.vendor => const VendorAssignmentsScreen(vendorId: 'VENDOR-DEMO-001'),
+      UserRole.admin  => const TenantHomeScreen(), // Disabled Command Center
+    };
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const TenantHomeScreen()),
+      MaterialPageRoute(builder: (_) => destination),
     );
   }
 
@@ -61,7 +71,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     width: 122,
                     child: PremiumVisualAsset(
                       imageUrl: PremiumVisualCatalog.login,
-                      semanticLabel: 'QuickRent',
+                      semanticLabel: 'OmniRent',
                       aspectRatio: 1,
                     ),
                   ),
@@ -69,7 +79,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   // ── App Name ───────────────────────────────────
                   const Text(
-                    'QuickRent',
+                    'OmniRent',
                     style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.bold,

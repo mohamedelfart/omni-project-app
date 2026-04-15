@@ -28,10 +28,10 @@ class FinalConfirmationPaymentScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back_rounded, color: Color(0xFF0F172A)),
           onPressed: () => Navigator.pop(context),
         ),
-        actions: const [
+        actions: [
           Padding(
-            padding: EdgeInsets.only(right: 12),
-            child: OmniLanguageSwitcher(),
+            padding: const EdgeInsets.only(right: 12),
+            child: const OmniLanguageSwitcher(),
           ),
         ],
       ),
