@@ -10,6 +10,7 @@ import '../../../core/services/service_manager.dart';
 import '../helpers/viewing_status_mapper.dart';
 import 'omnicart_screen.dart';
 import 'omnirent_flow_state.dart';
+import 'profile_screen.dart';
 import 'property_details_screen.dart';
 import 'property_flow_ui.dart';
 
@@ -323,7 +324,38 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // ...existing code...
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      OmniRentI18n.t(context, 'Browse', 'تصفح'),
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const OmniLanguageSwitcher(),
+                  const SizedBox(width: 10),
+                  IconButton(
+                    tooltip: OmniRentI18n.t(context, 'Profile', 'الملف الشخصي'),
+                    icon: const Icon(Icons.person_outline_rounded),
+                    color: const Color(0xFF0F172A),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ProfileScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
             Expanded(
               child: ValueListenableBuilder<Map<String, Property>>(
                 valueListenable: OmniRentFlowState.cart,

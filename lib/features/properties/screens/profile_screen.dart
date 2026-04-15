@@ -37,8 +37,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     // Mock user journey state
     final String userName = 'Tenant User';
-    final String userStatus = 'Viewing'; // Exploring / Viewing / Reserved / Living
-    final String tagline = 'Your journey to premium living starts here.';
+    final String userStatus = 'Viewing'; // Exploring / Viewing / Reserved / Living (key)
+    final String tagline = _t('Your journey to premium living starts here.', 'رحلتك إلى سكن مميز تبدأ من هنا.');
     final int journeyStep = 2; // 0: Browse, 1: Cart, 2: Viewing, 3: Reserved, 4: Move In
 
     // Mock stats
@@ -47,16 +47,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
     String smartInsight;
     switch (userStatus) {
       case 'Viewing':
-        smartInsight = 'You are actively exploring premium listings.';
+        smartInsight = _t(
+          'You are actively exploring premium listings.',
+          'أنت تستكشف العقارات المميزة حالياً.',
+        );
         break;
       case 'Reserved':
-        smartInsight = 'You are close to booking your next home!';
+        smartInsight = _t(
+          'You are close to booking your next home!',
+          'أنت على وشك حجز منزلك القادم!',
+        );
         break;
       case 'Living':
-        smartInsight = 'Enjoy your new home and exclusive benefits!';
+        smartInsight = _t(
+          'Enjoy your new home and exclusive benefits!',
+          'استمتع بمنزلك الجديد وبالمزايا الحصرية!',
+        );
         break;
       default:
-        smartInsight = 'Start your journey to premium living.';
+        smartInsight = _t(
+          'Start your journey to premium living.',
+          'ابدأ رحلتك نحو سكن مميز.',
+        );
     }
 
     return Scaffold(
