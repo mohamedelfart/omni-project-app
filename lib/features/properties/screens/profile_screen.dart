@@ -54,6 +54,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  String _stageStatusKey(int stage) {
+    switch (_normalizeStage(stage)) {
+      case 0:
+        return 'Exploring';
+      case 1:
+      case 2:
+        return 'Viewing';
+      case 3:
+        return 'Reserved';
+      default:
+        return 'Living';
+    }
+  }
+
   String _stageCtaLabel(int stage) {
     switch (_normalizeStage(stage)) {
       case 0:
@@ -66,6 +80,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return _t('View Reservation', 'عرض الحجز');
       default:
         return _t('Manage Services', 'إدارة الخدمات');
+    }
+  }
+
+  String _stageSmartInsight(int stage) {
+    switch (_normalizeStage(stage)) {
+      case 0:
+        return _t(
+          'Start your journey to premium living.',
+          'ابدأ رحلتك نحو سكن مميز.',
+        );
+      case 1:
+      case 2:
+        return _t(
+          'You are actively exploring premium listings.',
+          'أنت تستكشف العقارات المميزة حالياً.',
+        );
+      case 3:
+        return _t(
+          'You are close to booking your next home!',
+          'أنت على وشك حجز منزلك القادم!',
+        );
+      default:
+        return _t(
+          'Enjoy your new home and exclusive benefits!',
+          'استمتع بمنزلك الجديد وبالمزايا الحصرية!',
+        );
     }
   }
 
@@ -127,40 +167,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     // Mock user journey state
     final String userName = 'Tenant User';
-    final String userStatus = 'Viewing'; // Exploring / Viewing / Reserved / Living (key)
     final String tagline = _t('Your journey to premium living starts here.', 'رحلتك إلى سكن مميز تبدأ من هنا.');
     final int journeyStep = 2; // 0: Browse, 1: Cart, 2: Viewing, 3: Reserved, 4: Move In
 
     // Mock stats
     final int savedCount = 3;
     final int viewingCount = 1;
-    String smartInsight;
-    switch (userStatus) {
-      case 'Viewing':
-        smartInsight = _t(
-          'You are actively exploring premium listings.',
-          'أنت تستكشف العقارات المميزة حالياً.',
-        );
-        break;
-      case 'Reserved':
-        smartInsight = _t(
-          'You are close to booking your next home!',
-          'أنت على وشك حجز منزلك القادم!',
-        );
-        break;
-      case 'Living':
-        smartInsight = _t(
-          'Enjoy your new home and exclusive benefits!',
-          'استمتع بمنزلك الجديد وبالمزايا الحصرية!',
-        );
-        break;
-      default:
-        smartInsight = _t(
-          'Start your journey to premium living.',
-          'ابدأ رحلتك نحو سكن مميز.',
-        );
-    }
-
+    final String userStatus = _stageStatusKey(journeyStep);
+    final String smartInsight = _stageSmartInsight(journeyStep);
+    final String stageCtaLabel = _stageCtaLabel(journeyStep);
     final String stageLabel = _stageLabel(journeyStep);
     final String nextStepText = _stageNextAction(journeyStep);
     final String smartHintText = _stageSmartHint(journeyStep);
@@ -232,7 +247,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 );
               },
             ),
-            _PrimaryConfirmViewingButton(stage: journeyStep),
+            _PrimaryConfirmViewingButton(ctaLabel: stageCtaLabel),
             _SmartHintCard(hintText: smartHintText),
             const SizedBox(height: 14),
 
@@ -611,28 +626,12 @@ class _SmartHintCard extends StatelessWidget {
 }
 
 class _PrimaryConfirmViewingButton extends StatelessWidget {
-  final int stage;
+  final String ctaLabel;
 
-  const _PrimaryConfirmViewingButton({required this.stage});
-
-  String _ctaLabel(BuildContext context) {
-    switch (stage) {
-      case 0:
-        return OmniRentI18n.t(context, 'Browse Properties', 'تصفح العقارات');
-      case 1:
-        return OmniRentI18n.t(context, 'Request Viewing', 'طلب معاينة');
-      case 2:
-        return OmniRentI18n.t(context, 'Confirm Viewing', 'تأكيد المعاينة');
-      case 3:
-        return OmniRentI18n.t(context, 'View Reservation', 'عرض الحجز');
-      default:
-        return OmniRentI18n.t(context, 'Manage Services', 'إدارة الخدمات');
-    }
-  }
+  const _PrimaryConfirmViewingButton({required this.ctaLabel});
 
   @override
   Widget build(BuildContext context) {
-    final String ctaLabel = _ctaLabel(context);
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 12),
