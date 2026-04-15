@@ -326,34 +326,44 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      OmniRentI18n.t(context, 'Browse', 'تصفح'),
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
+              child: Directionality(
+                // Keep actions pinned to the physical top-right even in RTL.
+                textDirection: TextDirection.ltr,
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Align(
+                        alignment: OmniRentI18n.isArabic(context)
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: Text(
+                          OmniRentI18n.t(context, 'Browse', 'تصفح'),
+                          style: const TextStyle(
+                            color: Color(0xFF0F172A),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                  const OmniLanguageSwitcher(),
-                  const SizedBox(width: 10),
-                  IconButton(
-                    tooltip: OmniRentI18n.t(context, 'Profile', 'الملف الشخصي'),
-                    icon: const Icon(Icons.person_outline_rounded),
-                    color: const Color(0xFF0F172A),
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute<void>(
-                          builder: (_) => const ProfileScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                ],
+                    const OmniLanguageSwitcher(),
+                    const SizedBox(width: 10),
+                    IconButton(
+                      tooltip:
+                          OmniRentI18n.t(context, 'Profile', 'الملف الشخصي'),
+                      icon: const Icon(Icons.person_outline_rounded),
+                      color: const Color(0xFF0F172A),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ProfileScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
             Expanded(
