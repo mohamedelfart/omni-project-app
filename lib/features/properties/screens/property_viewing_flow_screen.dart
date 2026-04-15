@@ -4,7 +4,6 @@ import '../../../core/models/models.dart';
 import '../../../core/services/service_manager.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
 import 'property_flow_ui.dart';
-import 'viewing_status_screen.dart';
 
 class PropertyViewingFlowScreen extends StatefulWidget {
   final List<Property> selectedProperties;

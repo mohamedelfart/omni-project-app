@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/models/models.dart';
 import '../../../core/services/service_manager.dart';
 import '../models/unified_operational_item.dart';
 import 'command_center_viewing_screen.dart' as viewing;
@@ -22,8 +21,6 @@ class _CommandCenterHomeScreenState extends State<CommandCenterHomeScreen> {
   final ServiceManager _serviceManager = ServiceManager();
 
   List<UnifiedOperationalItem> _operationalItems = [];
-  int _totalProperties = 0;
-  int _pendingActions = 0;
   bool _isLoadingHome = true;
 
   @override
@@ -36,13 +33,11 @@ class _CommandCenterHomeScreenState extends State<CommandCenterHomeScreen> {
     setState(() => _isLoadingHome = true);
 
     final List<UnifiedOperationalItem> items = await _serviceManager.getUnifiedOperationalItems();
-    final List<Property> properties = await _serviceManager.dashboardListProperties(actorRole: 'ADMIN');
+    await _serviceManager.dashboardListProperties(actorRole: 'ADMIN');
 
     if (!mounted) return;
     setState(() {
       _operationalItems = items;
-      _pendingActions = items.where((item) => item.status == 'PENDING').length;
-      _totalProperties = properties.length;
       _isLoadingHome = false;
     });
   }
