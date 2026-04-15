@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
+import '../../../core/services/service_manager.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
-import 'free_move_in_services_screen.dart';
 import 'property_flow_ui.dart';
+import 'viewing_status_screen.dart';
 
 class PropertyViewingFlowScreen extends StatefulWidget {
   final List<Property> selectedProperties;
@@ -19,28 +20,22 @@ class PropertyViewingFlowScreen extends StatefulWidget {
 }
 
 class _PropertyViewingFlowScreenState extends State<PropertyViewingFlowScreen> {
-  late DateTime _selectedDate;
+  final ServiceManager _serviceManager = ServiceManager();
+  DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
-  int _selectedHour12 = 10;
-  int _selectedMinute = 0;
+
+  final DateTime _minDate = DateTime.now();
+  int _selectedHour12 = 12;
   String _selectedPeriod = 'AM';
-
-  DateTime get _minDate {
-    final DateTime now = DateTime.now();
-    return DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
-  }
-
-  DateTime get _maxDate {
-    return DateTime(_minDate.year, _minDate.month + 12, _minDate.day)
-        .subtract(const Duration(days: 1));
-  }
+  int _selectedMinute = 0;
 
   Property get _property => widget.selectedProperties.first;
 
   @override
   void initState() {
     super.initState();
-    _selectedDate = DateTime.now().add(const Duration(days: 1));
+    _selectedDate = null;
+    _selectedTime = null;
   }
 
   bool _sameDay(DateTime a, DateTime b) {
@@ -81,9 +76,10 @@ class _PropertyViewingFlowScreenState extends State<PropertyViewingFlowScreen> {
   }
 
   void _confirmDateSelection() {
+    if (_selectedDate == null) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Event date set to ${_formatDate(_selectedDate)}'),
+        content: Text('Event date set to ${_formatDate(_selectedDate!)}'),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -102,134 +98,35 @@ class _PropertyViewingFlowScreenState extends State<PropertyViewingFlowScreen> {
   }
 
   Widget _buildDateCard() {
-    final List<DateTime> months = _calendarMonths();
-
     return _SectionCard(
       title: 'Select Date',
       child: Column(
         children: <Widget>[
-          Container(
-            height: 560,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFF),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-            ),
-            child: ListView.separated(
-              itemCount: months.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 16),
-              itemBuilder: (BuildContext context, int monthIndex) {
-                final DateTime month = months[monthIndex];
-                final List<DateTime?> cells = _calendarCellsForMonth(month);
-
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      '${_monthName(month.month)} ${month.year}',
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: const <Widget>[
-                        Expanded(child: _WeekDayLabel(label: 'Sun')),
-                        Expanded(child: _WeekDayLabel(label: 'Mon')),
-                        Expanded(child: _WeekDayLabel(label: 'Tue')),
-                        Expanded(child: _WeekDayLabel(label: 'Wed')),
-                        Expanded(child: _WeekDayLabel(label: 'Thu')),
-                        Expanded(child: _WeekDayLabel(label: 'Fri')),
-                        Expanded(child: _WeekDayLabel(label: 'Sat')),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: cells.length,
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 7,
-                        crossAxisSpacing: 6,
-                        mainAxisSpacing: 6,
-                        childAspectRatio: 0.95,
-                      ),
-                      itemBuilder: (BuildContext context, int index) {
-                        final DateTime? date = cells[index];
-                        if (date == null) {
-                          return const SizedBox.shrink();
-                        }
-
-                        final bool isDisabled =
-                            date.isBefore(_minDate) || date.isAfter(_maxDate);
-                        final bool isSelected = _sameDay(date, _selectedDate);
-
-                        return GestureDetector(
-                          onTap: isDisabled
-                              ? null
-                              : () {
-                                  setState(() => _selectedDate = date);
-                                },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 160),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? const Color(0xFF1D4ED8)
-                                  : (isDisabled
-                                      ? const Color(0xFFF8FAFC)
-                                      : Colors.white),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isSelected
-                                    ? const Color(0xFF1D4ED8)
-                                    : const Color(0xFFE2E8F0),
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              '${date.day}',
-                              style: TextStyle(
-                                color: isSelected
-                                    ? Colors.white
-                                    : (isDisabled
-                                        ? const Color(0xFFCBD5E1)
-                                        : const Color(0xFF0F172A)),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _confirmDateSelection,
-              style: ElevatedButton.styleFrom(
-                elevation: 0,
-                backgroundColor: const Color(0xFF1D4ED8),
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
+          InkWell(
+            onTap: () async {
+              final now = DateTime.now();
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: now,
+                firstDate: now,
+                lastDate: now.add(const Duration(days: 60)),
+              );
+              if (picked != null) setState(() => _selectedDate = picked);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: const Text(
-                'Create Event',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined, color: Colors.blue.shade700),
+                  const SizedBox(width: 12),
+                  Text(_selectedDate == null
+                      ? 'Choose date'
+                      : '${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}'),
+                ],
               ),
             ),
           ),
@@ -243,94 +140,28 @@ class _PropertyViewingFlowScreenState extends State<PropertyViewingFlowScreen> {
       title: 'Set Time',
       child: Column(
         children: <Widget>[
-          Container(
-            width: 130,
-            height: 130,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFFEFF6FF),
-              border: Border.all(color: const Color(0xFFCFE2FF), width: 2),
-            ),
-            alignment: Alignment.center,
-            child: Stack(
-              alignment: Alignment.center,
-              children: <Widget>[
-                const Icon(
-                  Icons.schedule_rounded,
-                  size: 52,
-                  color: Color(0xFF1D4ED8),
-                ),
-                Positioned(
-                  bottom: 30,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    child: Text(
-                      _selectedTime == null ? '--:--' : _formatTime(context),
-                      style: const TextStyle(
-                        color: Color(0xFF334155),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _TimeSelect(
-                  label: 'Hour',
-                  value: _selectedHour12,
-                  items: List<int>.generate(12, (int i) => i + 1),
-                  onChanged: (int value) => setState(() => _selectedHour12 = value),
-                ),
+          InkWell(
+            onTap: () async {
+              final picked = await showTimePicker(
+                context: context,
+                initialTime: TimeOfDay.now(),
+              );
+              if (picked != null) setState(() => _selectedTime = picked);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _TimeSelect(
-                  label: 'Minute',
-                  value: _selectedMinute,
-                  items: List<int>.generate(60, (int i) => i),
-                  formatter: (int value) => value.toString().padLeft(2, '0'),
-                  onChanged: (int value) => setState(() => _selectedMinute = value),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _PeriodSelect(
-                  value: _selectedPeriod,
-                  onChanged: (String value) => setState(() => _selectedPeriod = value),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _applySelectedTime,
-              style: ElevatedButton.styleFrom(
-                elevation: 0,
-                backgroundColor: const Color(0xFF1D4ED8),
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: const Text(
-                'Set Time',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Row(
+                children: [
+                  Icon(Icons.access_time, color: Colors.blue.shade700),
+                  const SizedBox(width: 12),
+                  Text(_selectedTime == null
+                      ? 'Choose time'
+                      : _selectedTime!.format(context)),
+                ],
               ),
             ),
           ),
@@ -495,7 +326,7 @@ class _PropertyViewingFlowScreenState extends State<PropertyViewingFlowScreen> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  _formatDate(_selectedDate),
+                  _selectedDate == null ? '—' : _formatDate(_selectedDate!),
                   style: const TextStyle(
                     color: Color(0xFF0F172A),
                     fontSize: 14,
@@ -526,14 +357,58 @@ class _PropertyViewingFlowScreenState extends State<PropertyViewingFlowScreen> {
           const SizedBox(height: 18),
           PropertyPrimaryButton(
             label: 'Confirm Viewing',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => FreeMoveInServicesScreen(property: _property),
-                ),
-              );
-            },
+            onPressed: (_selectedDate != null && _selectedTime != null)
+                ? () async {
+                    final NavigatorState navigator = Navigator.of(context);
+                    final ScaffoldMessengerState messenger =
+                        ScaffoldMessenger.of(context);
+                    final DateTime viewingDateTime = DateTime(
+                      _selectedDate!.year,
+                      _selectedDate!.month,
+                      _selectedDate!.day,
+                      _selectedTime!.hour,
+                      _selectedTime!.minute,
+                    );
+                    try {
+                      final ViewingRequest request =
+                          await _serviceManager.createViewingRequest(
+                        propertyId: _property.id,
+                        viewingDateTime: viewingDateTime,
+                        tenantId: 'tenant-demo-001',
+                        tenantName: 'Tenant User',
+                      );
+                      if (!mounted) return;
+                      setState(() {
+                        _selectedDate = null;
+                        _selectedTime = null;
+                      });
+                      // Show success and return to HomeScreen
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('Success'),
+                          content: const Text('Viewing request submitted!'),
+                          actions: [
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                Navigator.of(context).popUntil((route) => route.isFirst);
+                              },
+                              child: const Text('OK'),
+                            ),
+                          ],
+                        ),
+                      );
+                    } catch (e) {
+                      if (!mounted) return;
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to create viewing request: $e'),
+                        ),
+                      );
+                    }
+                  }
+                : null,
           ),
           const SizedBox(height: 10),
           Align(

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
+import 'property_flow_ui.dart';
 import 'omnicart_screen.dart';
 import 'omnirent_flow_state.dart';
-import 'property_flow_ui.dart';
+
+import '_smart_insights.dart';
+import '_living_dashboard_widgets.dart';
 
 // ===========================================================================
 //  OMNIRENT PROFILE HUB — Premium Tenant Account Screen
@@ -32,6 +35,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Mock user journey state
+    final String userName = 'Tenant User';
+    final String userStatus = 'Viewing'; // Exploring / Viewing / Reserved / Living
+    final String tagline = 'Your journey to premium living starts here.';
+    final int journeyStep = 2; // 0: Browse, 1: Cart, 2: Viewing, 3: Reserved, 4: Move In
+
+    // Mock stats
+    final int savedCount = 3;
+    final int viewingCount = 1;
+    String smartInsight;
+    switch (userStatus) {
+      case 'Viewing':
+        smartInsight = 'You are actively exploring premium listings.';
+        break;
+      case 'Reserved':
+        smartInsight = 'You are close to booking your next home!';
+        break;
+      case 'Living':
+        smartInsight = 'Enjoy your new home and exclusive benefits!';
+        break;
+      default:
+        smartInsight = 'Start your journey to premium living.';
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F8),
       appBar: AppBar(
@@ -43,7 +70,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          _t('My Profile', 'ملفي الشخصي'),
+          _t('Living Dashboard', 'لوحة المعيشة'),
           style: const TextStyle(
             color: Color(0xFF0F172A),
             fontSize: 18,
@@ -62,29 +89,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 40),
           children: <Widget>[
-            // ── 1. PROFILE HEADER ────────────────────────────────────────
-            _ProfileHeader(
-              isVerified: _isVerified,
-              onEditTap: () => _showEditProfileSheet(),
+            // SMART INSIGHTS SECTION
+            SmartInsights(
+              savedCount: savedCount,
+              viewingCount: viewingCount,
+              journeyStage: userStatus,
+              smartInsight: smartInsight,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 18),
 
-            // ── 2. MY ACTIVITY ────────────────────────────────────────────
-            _SectionTitle(label: _t('My Activity', 'نشاطي')),
-            const SizedBox(height: 12),
-            _ActivityGrid(
-              viewingCount: _viewingCount,
-              reservationCount: _reservationCount,
-              savedCount: _savedPropertyIds.length,
+            // 1. HERO SECTION
+            LivingHeroSection(
+              userName: userName,
+              userStatus: userStatus,
+              tagline: tagline,
+            ),
+            const SizedBox(height: 22),
+
+            // 2. TENANT JOURNEY
+            TenantJourneyProgress(currentStep: journeyStep),
+            const SizedBox(height: 28),
+
+            // 3. QUICK ACTIONS
+            QuickActions(
               onCartTap: () => Navigator.push(
                 context,
-                MaterialPageRoute<void>(
-                    builder: (_) => const OmniCartScreen()),
+                MaterialPageRoute<void>(builder: (_) => const OmniCartScreen()),
               ),
               onViewingsTap: () => _showEmptySheet(
                 _t('My Viewings', 'معايناتي'),
-                _t('No viewings scheduled yet.',
-                    'لا توجد معاينات مجدولة بعد.'),
+                _t('No viewings scheduled yet.', 'لا توجد معاينات مجدولة بعد.'),
               ),
               onReservationsTap: () => _showEmptySheet(
                 _t('My Reservations', 'حجوزاتي'),
@@ -92,135 +126,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               onSavedTap: () => _showEmptySheet(
                 _t('Saved Properties', 'العقارات المحفوظة'),
-                _t('No saved properties yet.',
-                    'لا توجد عقارات محفوظة بعد.'),
+                _t('No saved properties yet.', 'لا توجد عقارات محفوظة بعد.'),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 28),
 
-            // ── 3. MY BENEFITS ────────────────────────────────────────────
-            _SectionTitle(label: _t('My Benefits', 'مزاياي')),
+            // 4. BENEFITS (IMPROVED)
+            _SectionTitle(label: _t('Included Benefits', 'المزايا المضمّنة')),
             const SizedBox(height: 12),
-            const _BenefitsCard(),
-            const SizedBox(height: 24),
+            BenefitsCardPremium(),
+            const SizedBox(height: 28),
 
-            // ── 4. DOCUMENTS & CONTRACTS ──────────────────────────────────
-            _SectionTitle(label: _t('Documents', 'المستندات')),
-            const SizedBox(height: 12),
-            _OmniCard(
-              child: Column(
-                children: <Widget>[
-                  _DocRow(
-                    icon: Icons.description_outlined,
-                    label: _t('Lease Documents', 'وثائق عقد الإيجار'),
-                    onTap: () => _showEmptySheet(
-                      _t('Lease Documents', 'وثائق عقد الإيجار'),
-                      _t('No documents available yet.',
-                          'لا توجد مستندات بعد.'),
-                    ),
-                  ),
-                  _RowDivider(),
-                  _DocRow(
-                    icon: Icons.receipt_long_outlined,
-                    label: _t('Reservation Confirmations',
-                        'تأكيدات الحجز'),
-                    onTap: () => _showEmptySheet(
-                      _t('Reservation Confirmations', 'تأكيدات الحجز'),
-                      _t('No confirmations yet.', 'لا توجد تأكيدات بعد.'),
-                    ),
-                  ),
-                  _RowDivider(),
-                  _DocRow(
-                    icon: Icons.credit_card_outlined,
-                    label: _t('Payment Receipts', 'إيصالات الدفع'),
-                    onTap: () => _showEmptySheet(
-                      _t('Payment Receipts', 'إيصالات الدفع'),
-                      _t('No receipts yet.', 'لا توجد إيصالات بعد.'),
-                    ),
-                  ),
-                ],
-              ),
+            // 5. DOCUMENTS & SETTINGS (COMPACT)
+            Row(
+              children: [
+                Expanded(child: DocumentsCompact(onShow: _showEmptySheet)),
+                const SizedBox(width: 16),
+                Expanded(child: SettingsCompact(
+                  notificationsEnabled: _notificationsEnabled,
+                  onToggleNotifications: (v) => setState(() => _notificationsEnabled = v),
+                  onShow: _showEmptySheet,
+                  onComingSoon: _showComingSoon,
+                )),
+              ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 28),
 
-            // ── 5. ACCOUNT SETTINGS ───────────────────────────────────────
-            _SectionTitle(label: _t('Account Settings', 'إعدادات الحساب')),
-            const SizedBox(height: 12),
-            _OmniCard(
-              child: Column(
-                children: <Widget>[
-                  // Language switcher row
-                  _SettingsRow(
-                    icon: Icons.language_outlined,
-                    label: _t('Language', 'اللغة'),
-                    trailing: const OmniLanguageSwitcher(),
-                  ),
-                  _RowDivider(),
-                  // Notifications toggle
-                  _ToggleRow(
-                    icon: Icons.notifications_outlined,
-                    label: _t('Notifications', 'الإشعارات'),
-                    value: _notificationsEnabled,
-                    onChanged: (bool v) =>
-                        setState(() => _notificationsEnabled = v),
-                  ),
-                  _RowDivider(),
-                  _SettingsRow(
-                    icon: Icons.payment_outlined,
-                    label: _t('Payment Methods', 'طرق الدفع'),
-                    onTap: () => _showEmptySheet(
-                      _t('Payment Methods', 'طرق الدفع'),
-                      _t('No payment methods saved.',
-                          'لا توجد طرق دفع محفوظة.'),
-                    ),
-                  ),
-                  _RowDivider(),
-                  _SettingsRow(
-                    icon: Icons.shield_outlined,
-                    label: _t('Privacy & Security', 'الخصوصية والأمان'),
-                    onTap: () => _showComingSoon(),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
+            // 6. EARNING MODE PLACEHOLDER (ENHANCED)
+            EarningModePlaceholderEnhanced(),
 
-            // ── 6. SUPPORT ───────────────────────────────────────────────
-            _SectionTitle(label: _t('Support', 'الدعم')),
-            const SizedBox(height: 12),
-            _OmniCard(
-              child: Column(
-                children: <Widget>[
-                  _SettingsRow(
-                    icon: Icons.help_outline_rounded,
-                    label: _t('Help Center', 'مركز المساعدة'),
-                    onTap: () => _showComingSoon(),
-                  ),
-                  _RowDivider(),
-                  _SettingsRow(
-                    icon: Icons.headset_mic_outlined,
-                    label: _t('Contact Support', 'تواصل مع الدعم'),
-                    onTap: () => _showComingSoon(),
-                  ),
-                  _RowDivider(),
-                  _SettingsRow(
-                    icon: Icons.quiz_outlined,
-                    label: _t('FAQ', 'الأسئلة الشائعة'),
-                    onTap: () => _showComingSoon(),
-                  ),
-                  _RowDivider(),
-                  _SettingsRow(
-                    icon: Icons.chat_bubble_outline_rounded,
-                    label: _t('Live Chat', 'الدردشة المباشرة'),
-                    accentColor: const Color(0xFF16A34A),
-                    onTap: () => _showComingSoon(),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // ── 7. LOGOUT ────────────────────────────────────────────────
+            const SizedBox(height: 32),
+            // 7. LOGOUT
             _LogoutButton(
               onTap: () => _confirmLogout(),
             ),

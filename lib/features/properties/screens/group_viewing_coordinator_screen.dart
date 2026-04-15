@@ -1,8 +1,8 @@
 ﻿import 'package:flutter/material.dart';
 
 import '../../../core/models/models.dart';
+import '../../../core/services/service_manager.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
-import 'free_move_in_services_screen.dart';
 import 'property_flow_ui.dart';
 
 // ---------------------------------------------------------------------------
@@ -11,10 +11,12 @@ import 'property_flow_ui.dart';
 
 class GroupViewingCoordinatorScreen extends StatefulWidget {
   final List<Property> properties;
+  final void Function(String propertyId)? onViewingConfirmed;
 
   const GroupViewingCoordinatorScreen({
     super.key,
     required this.properties,
+    this.onViewingConfirmed,
   });
 
   @override
@@ -24,11 +26,9 @@ class GroupViewingCoordinatorScreen extends StatefulWidget {
 
 class _GroupViewingCoordinatorScreenState
     extends State<GroupViewingCoordinatorScreen> {
-  late DateTime _selectedDate;
+  final ServiceManager _serviceManager = ServiceManager();
+  DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
-  int _selectedHour12 = 10;
-  int _selectedMinute = 0;
-  String _selectedPeriod = 'AM';
 
   static const List<String> _enMonths = <String>[
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -42,9 +42,8 @@ class _GroupViewingCoordinatorScreenState
   @override
   void initState() {
     super.initState();
-    final DateTime today = DateTime.now();
-    _selectedDate = DateTime(today.year, today.month, today.day)
-        .add(const Duration(days: 1));
+    _selectedDate = null;
+    _selectedTime = null;
   }
 
   DateTime get _minDate {
@@ -109,26 +108,19 @@ class _GroupViewingCoordinatorScreenState
         .formatTimeOfDay(_selectedTime!, alwaysUse24HourFormat: false);
   }
 
-  void _applySelectedTime() {
-    final int normalizedHour = _selectedHour12 % 12;
-    final int hour24 =
-        _selectedPeriod == 'PM' ? normalizedHour + 12 : normalizedHour;
-    setState(() {
-      _selectedTime = TimeOfDay(hour: hour24, minute: _selectedMinute);
-    });
-  }
+  // Removed _applySelectedTime (no longer needed)
 
   static String _to12h(int h24) {
     final int h = h24 % 12 == 0 ? 12 : h24 % 12;
     return h.toString();
   }
 
-  String _fmtDate() =>
-      '${_selectedDate.day.toString().padLeft(2, '0')}/${_selectedDate.month.toString().padLeft(2, '0')}/${_selectedDate.year}';
+  String _fmtDate() {
+    if (_selectedDate == null) return '--/--/----';
+    return '${_selectedDate!.day.toString().padLeft(2, '0')}/${_selectedDate!.month.toString().padLeft(2, '0')}/${_selectedDate!.year}';
+  }
 
-  Widget _buildDateCard(BuildContext context, bool ar) {
-    final List<DateTime> months = _calendarMonths();
-
+  Widget _buildDateCard(BuildContext context) {
     return OmniCardSurface(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -143,111 +135,32 @@ class _GroupViewingCoordinatorScreenState
             ),
           ),
           const SizedBox(height: 12),
-          Container(
-            height: 560,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFF),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-            ),
-            child: ListView.separated(
-              itemCount: months.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 16),
-              itemBuilder: (BuildContext context, int monthIndex) {
-                final DateTime month = months[monthIndex];
-                final List<DateTime?> cells = _calendarCellsForMonth(month);
-                final String monthLabel = ar
-                    ? '${_arMonths[month.month - 1]} ${month.year}'
-                    : '${_enMonths[month.month - 1]} ${month.year}';
-
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      monthLabel,
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: const <Widget>[
-                        Expanded(child: _WeekDayLabel(label: 'Sun')),
-                        Expanded(child: _WeekDayLabel(label: 'Mon')),
-                        Expanded(child: _WeekDayLabel(label: 'Tue')),
-                        Expanded(child: _WeekDayLabel(label: 'Wed')),
-                        Expanded(child: _WeekDayLabel(label: 'Thu')),
-                        Expanded(child: _WeekDayLabel(label: 'Fri')),
-                        Expanded(child: _WeekDayLabel(label: 'Sat')),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: cells.length,
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 7,
-                        crossAxisSpacing: 6,
-                        mainAxisSpacing: 6,
-                        childAspectRatio: 0.95,
-                      ),
-                      itemBuilder: (BuildContext context, int index) {
-                        final DateTime? date = cells[index];
-                        if (date == null) {
-                          return const SizedBox.shrink();
-                        }
-
-                        final bool isDisabled = !_isSelectable(date);
-                        final bool isSelected = date.year == _selectedDate.year &&
-                            date.month == _selectedDate.month &&
-                            date.day == _selectedDate.day;
-
-                        return GestureDetector(
-                          onTap: isDisabled
-                              ? null
-                              : () {
-                                  setState(() => _selectedDate = date);
-                                },
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 160),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? const Color(0xFF1D4ED8)
-                                  : (isDisabled
-                                      ? const Color(0xFFF8FAFC)
-                                      : Colors.white),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isSelected
-                                    ? const Color(0xFF1D4ED8)
-                                    : const Color(0xFFE2E8F0),
-                              ),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              '${date.day}',
-                              style: TextStyle(
-                                color: isSelected
-                                    ? Colors.white
-                                    : (isDisabled
-                                        ? const Color(0xFFCBD5E1)
-                                        : const Color(0xFF0F172A)),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                );
-              },
+          InkWell(
+            onTap: () async {
+              final now = DateTime.now();
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: now,
+                firstDate: now,
+                lastDate: now.add(const Duration(days: 60)),
+              );
+              if (picked != null) setState(() => _selectedDate = picked);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined, color: Colors.blue.shade700),
+                  const SizedBox(width: 12),
+                  Text(_selectedDate == null
+                      ? 'Choose date'
+                      : '${_selectedDate!.year}-${_selectedDate!.month.toString().padLeft(2, '0')}-${_selectedDate!.day.toString().padLeft(2, '0')}'),
+                ],
+              ),
             ),
           ),
         ],
@@ -270,87 +183,28 @@ class _GroupViewingCoordinatorScreenState
             ),
           ),
           const SizedBox(height: 14),
-          Container(
-            width: double.infinity,
-            height: 140,
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFCFE2FF), width: 2),
-            ),
-            alignment: Alignment.center,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: <Widget>[
-                const Icon(
-                  Icons.schedule_rounded,
-                  size: 48,
-                  color: Color(0xFF1D4ED8),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _selectedTime == null
-                      ? '--:--'
-                      : _formatSelectedTime(context),
-                  style: const TextStyle(
-                    color: Color(0xFF334155),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _TimeSelect(
-                  label: OmniRentI18n.t(context, 'Hour', 'الساعة'),
-                  value: _selectedHour12,
-                  items: List<int>.generate(12, (int i) => i + 1),
-                  onChanged: (int value) => setState(() => _selectedHour12 = value),
-                ),
+          InkWell(
+            onTap: () async {
+              final picked = await showTimePicker(
+                context: context,
+                initialTime: TimeOfDay.now(),
+              );
+              if (picked != null) setState(() => _selectedTime = picked);
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(12),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _TimeSelect(
-                  label: OmniRentI18n.t(context, 'Minute', 'الدقيقة'),
-                  value: _selectedMinute,
-                  items: List<int>.generate(60, (int i) => i),
-                  formatter: (int value) => value.toString().padLeft(2, '0'),
-                  onChanged: (int value) => setState(() => _selectedMinute = value),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _PeriodSelect(
-                  label: OmniRentI18n.t(context, 'Period', 'الفترة'),
-                  value: _selectedPeriod,
-                  onChanged: (String value) => setState(() => _selectedPeriod = value),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _applySelectedTime,
-              style: ElevatedButton.styleFrom(
-                elevation: 0,
-                backgroundColor: const Color(0xFF1D4ED8),
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: Text(
-                OmniRentI18n.t(context, 'Set Time', 'تأكيد الوقت'),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Row(
+                children: [
+                  Icon(Icons.access_time, color: Colors.blue.shade700),
+                  const SizedBox(width: 12),
+                  Text(_selectedTime == null
+                      ? 'Choose time'
+                      : _selectedTime!.format(context)),
+                ],
               ),
             ),
           ),
@@ -443,7 +297,7 @@ class _GroupViewingCoordinatorScreenState
                     children: <Widget>[
                       SizedBox(
                         width: dateCardWidth,
-                        child: _buildDateCard(context, ar),
+                        child: _buildDateCard(context),
                       ),
                       const SizedBox(width: 14),
                       SizedBox(
@@ -566,8 +420,8 @@ class _GroupViewingCoordinatorScreenState
                               )
                             : Column(
                                 key: ValueKey<String>(
-                                  '${_selectedDate.year}-${_selectedDate.month}-'
-                                  '${_selectedDate.day}-${_selectedTime?.hour}-${_selectedTime?.minute}-$ar',
+                                  '${_selectedDate?.year ?? '--'}-${_selectedDate?.month ?? '--'}-'
+                                  '${_selectedDate?.day ?? '--'}-${_selectedTime != null ? _selectedTime!.hour.toString().padLeft(2, '0') : '--'}:${_selectedTime != null ? _selectedTime!.minute.toString().padLeft(2, '0') : '--'}-$ar',
                                 ),
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: List<Widget>.generate(
@@ -631,18 +485,66 @@ class _GroupViewingCoordinatorScreenState
               'تأكيد جدول المعاينة',
             ),
             onPressed:
-                (widget.properties.isEmpty || _selectedTime == null)
+                (widget.properties.isEmpty || _selectedDate == null || _selectedTime == null)
                     ? null
-                    : () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute<void>(
-                            builder: (_) => FreeMoveInServicesScreen(
-                              property: widget.properties.first,
-                              tourPlan: _buildSuggestions(context),
-                            ),
-                          ),
+                    : () async {
+                        final NavigatorState navigator = Navigator.of(context);
+                        final ScaffoldMessengerState messenger =
+                            ScaffoldMessenger.of(context);
+                        final TimeOfDay selectedTime = _selectedTime!;
+                        final List<String> suggestions =
+                            _buildSuggestions(context);
+                        final DateTime viewingDateTime = DateTime(
+                          _selectedDate!.year,
+                          _selectedDate!.month,
+                          _selectedDate!.day,
+                          selectedTime.hour,
+                          selectedTime.minute,
                         );
+                        try {
+                          final ViewingRequest request =
+                              await _serviceManager.createViewingRequest(
+                            propertyId: widget.properties.first.id,
+                            viewingDateTime: viewingDateTime,
+                            tenantId: 'tenant-demo-001',
+                            tenantName: 'Tenant User',
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _selectedDate = null;
+                            _selectedTime = null;
+                          });
+                          // Update property state in parent (PropertyListScreen)
+                          if (widget.onViewingConfirmed != null) {
+                            widget.onViewingConfirmed!(widget.properties.first.id);
+                          }
+                          // Show success and return to HomeScreen
+                          showDialog(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Success'),
+                              content: const Text('Viewing request submitted!'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.of(context).pop();
+                                    Navigator.of(context).popUntil((route) => route.isFirst);
+                                  },
+                                  child: const Text('OK'),
+                                ),
+                              ],
+                            ),
+                          );
+                        } catch (e) {
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Failed to create viewing request: $e',
+                              ),
+                            ),
+                          );
+                        }
                       },
           ),
         ),
