@@ -33,6 +33,75 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ── Helpers ───────────────────────────────────────────────────────────────
   String _t(String en, String ar) => OmniRentI18n.t(context, en, ar);
 
+  String _stageCtaLabel(int stage) {
+    switch (stage) {
+      case 0:
+        return _t('Browse Properties', 'تصفح العقارات');
+      case 1:
+        return _t('Request Viewing', 'طلب معاينة');
+      case 2:
+        return _t('Confirm Viewing', 'تأكيد المعاينة');
+      case 3:
+        return _t('View Reservation', 'عرض الحجز');
+      default:
+        return _t('Manage Services', 'إدارة الخدمات');
+    }
+  }
+
+  String _stageNextAction(int stage) {
+    switch (stage) {
+      case 0:
+        return _t('Add a property to your cart', 'أضف عقاراً إلى عربتك');
+      case 1:
+        return _t(
+          'Request a viewing for your selected property',
+          'اطلب معاينة للعقار الذي اخترته',
+        );
+      case 2:
+        return _t('Confirm your viewing to proceed', 'أكد المعاينة للمتابعة');
+      case 3:
+        return _t(
+          'Review your reservation details',
+          'راجع تفاصيل الحجز الخاصة بك',
+        );
+      default:
+        return _t(
+          'Manage your included living services',
+          'أدر خدمات المعيشة المضمنة لديك',
+        );
+    }
+  }
+
+  String _stageSmartHint(int stage) {
+    switch (stage) {
+      case 0:
+        return _t(
+          'Start by exploring properties that match your needs.',
+          'ابدأ باستكشاف العقارات التي تناسب احتياجاتك.',
+        );
+      case 1:
+        return _t(
+          'Your shortlist is ready. Request a viewing to continue.',
+          'قائمتك المختصرة جاهزة. اطلب معاينة للمتابعة.',
+        );
+      case 2:
+        return _t(
+          'You are one step away from confirmation.',
+          'أنت على بُعد خطوة واحدة من التأكيد.',
+        );
+      case 3:
+        return _t(
+          'Your reservation is active. Prepare your documents.',
+          'حجزك نشط حالياً. جهّز مستنداتك.',
+        );
+      default:
+        return _t(
+          'Your living services are now your main workspace.',
+          'خدمات المعيشة أصبحت الآن مساحة العمل الرئيسية لك.',
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Mock user journey state
@@ -84,21 +153,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     }();
 
-    final String nextStepText = () {
-      if (journeyStep <= 0) {
-        return _t('Continue browsing properties', 'تابع تصفح العقارات');
-      }
-      if (journeyStep == 1) {
-        return _t('Review your cart and book a group tour', 'راجع عربتك واحجز جولة جماعية');
-      }
-      if (journeyStep == 2) {
-        return _t('Confirm your viewing to proceed', 'أكد موعد المعاينة للمتابعة');
-      }
-      if (journeyStep == 3) {
-        return _t('Review reservation details and documents', 'راجع تفاصيل الحجز والمستندات');
-      }
-      return _t('Prepare for move-in and activate services', 'استعد للانتقال وتفعيل الخدمات');
-    }();
+    final String nextStepText = _stageNextAction(journeyStep);
+    final String smartHintText = _stageSmartHint(journeyStep);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F8),
@@ -168,12 +224,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
               },
             ),
             _PrimaryConfirmViewingButton(stage: journeyStep),
+            _SmartHintCard(hintText: smartHintText),
             const SizedBox(height: 14),
 
             // Smart Actions (UI only)
             _SectionTitle(label: _t('Smart Actions', 'إجراءات سريعة')),
             const SizedBox(height: 10),
             _SmartActions(
+              stage: journeyStep,
               onConfirmViewing: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -186,6 +244,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 context,
                 MaterialPageRoute<void>(builder: (_) => const OmniCartScreen()),
               ),
+              onBrowseListings: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_t('Open listings from Home screen.', 'افتح القوائم من الشاشة الرئيسية.')),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              onViewReservation: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_t('Reservation details are coming soon', 'تفاصيل الحجز قريباً')),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
               onRequestService: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -470,6 +544,46 @@ class _NextActionCard extends StatelessWidget {
   }
 }
 
+class _SmartHintCard extends StatelessWidget {
+  final String hintText;
+
+  const _SmartHintCard({required this.hintText});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.lightbulb_outline_rounded,
+            size: 18,
+            color: Color(0xFF1D4ED8),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              hintText,
+              style: const TextStyle(
+                color: Color(0xFF475569),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PrimaryConfirmViewingButton extends StatelessWidget {
   final int stage;
 
@@ -516,15 +630,36 @@ class _PrimaryConfirmViewingButton extends StatelessWidget {
 }
 
 class _SmartActions extends StatelessWidget {
+  final int stage;
   final VoidCallback onConfirmViewing;
   final VoidCallback onOpenCart;
+  final VoidCallback onBrowseListings;
+  final VoidCallback onViewReservation;
   final VoidCallback onRequestService;
 
   const _SmartActions({
+    required this.stage,
     required this.onConfirmViewing,
     required this.onOpenCart,
+    required this.onBrowseListings,
+    required this.onViewReservation,
     required this.onRequestService,
   });
+
+  bool _isPrimaryForStage(String actionId) {
+    switch (stage) {
+      case 0:
+        return actionId == 'browse';
+      case 1:
+        return actionId == 'cart';
+      case 2:
+        return actionId == 'confirm';
+      case 3:
+        return actionId == 'reservation';
+      default:
+        return actionId == 'service';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -533,21 +668,38 @@ class _SmartActions extends StatelessWidget {
       runSpacing: 10,
       children: [
         _ActionChipCard(
+          icon: Icons.apartment_rounded,
+          label: OmniRentI18n.t(context, 'Browse Properties', 'تصفح العقارات'),
+          color: const Color(0xFF2563EB),
+          isPrimary: _isPrimaryForStage('browse'),
+          onTap: onBrowseListings,
+        ),
+        _ActionChipCard(
           icon: Icons.check_circle_outline_rounded,
           label: OmniRentI18n.t(context, 'Confirm Viewing', 'تأكيد المعاينة'),
           color: const Color(0xFF1D4ED8),
+          isPrimary: _isPrimaryForStage('confirm'),
           onTap: onConfirmViewing,
         ),
         _ActionChipCard(
           icon: Icons.shopping_bag_outlined,
           label: OmniRentI18n.t(context, 'Open Cart', 'فتح العربة'),
           color: const Color(0xFF16A34A),
+          isPrimary: _isPrimaryForStage('cart'),
           onTap: onOpenCart,
+        ),
+        _ActionChipCard(
+          icon: Icons.assignment_turned_in_outlined,
+          label: OmniRentI18n.t(context, 'View Reservation', 'عرض الحجز'),
+          color: const Color(0xFF0EA5E9),
+          isPrimary: _isPrimaryForStage('reservation'),
+          onTap: onViewReservation,
         ),
         _ActionChipCard(
           icon: Icons.support_agent_rounded,
           label: OmniRentI18n.t(context, 'Request Service', 'طلب خدمة'),
           color: const Color(0xFF7C3AED),
+          isPrimary: _isPrimaryForStage('service'),
           onTap: onRequestService,
         ),
       ],
@@ -559,12 +711,14 @@ class _ActionChipCard extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
+  final bool isPrimary;
   final VoidCallback onTap;
 
   const _ActionChipCard({
     required this.icon,
     required this.label,
     required this.color,
+    this.isPrimary = false,
     required this.onTap,
   });
 
@@ -580,7 +734,20 @@ class _ActionChipCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE2E8F0)),
+            color: isPrimary ? color.withValues(alpha: 0.10) : Colors.white,
+            border: Border.all(
+              color: isPrimary ? color.withValues(alpha: 0.75) : const Color(0xFFE2E8F0),
+              width: isPrimary ? 1.5 : 1,
+            ),
+            boxShadow: isPrimary
+                ? [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.16),
+                      blurRadius: 10,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
