@@ -167,6 +167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 );
               },
             ),
+            _PrimaryConfirmViewingButton(),
             const SizedBox(height: 14),
 
             // Smart Actions (UI only)
@@ -463,6 +464,31 @@ class _NextActionCard extends StatelessWidget {
               const Icon(Icons.chevron_right_rounded, color: Color(0xFF1D4ED8)),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PrimaryConfirmViewingButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 12),
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          backgroundColor: Colors.blue,
+        ),
+        onPressed: () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Confirm Viewing clicked')),
+          );
+        },
+        child: const Text(
+          'Confirm Viewing',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
       ),
     );
