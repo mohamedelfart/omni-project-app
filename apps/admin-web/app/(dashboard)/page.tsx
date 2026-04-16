@@ -1,64 +1,45 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { io } from 'socket.io-client';
 
-type CommandCenterViewingRequest = {
+type DashboardRequest = {
   id: string;
-  serviceType: string;
-  status: string;
-  city: string;
-  country: string;
+  tenantId: string;
+  vendorId?: string;
+  type: 'cleaning' | 'moving' | 'maintenance';
+  status: 'pending' | 'assigned' | 'in_progress' | 'completed';
   createdAt: string;
-  user?: {
-    fullName?: string | null;
-    phoneNumber?: string | null;
-  };
-  metadata?: {
-    ticketCode?: string;
-  };
-  viewingRequest?: {
-    items: Array<{
-      property: {
-        id: string;
-        title: string;
-        city: string;
-        district?: string | null;
-      };
-    }>;
-  } | null;
+  updatedAt: string;
 };
 
-const statusColors: Record<string, string> = {
-  ASSIGNED: '#1D4ED8',
-  EN_ROUTE: '#7C3AED',
-  IN_PROGRESS: '#D97706',
-  COMPLETED: '#059669',
-  SUBMITTED: '#0F766E',
-};
+const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString();
 }
 
 export default function AdminOverviewPage() {
-  const [requests, setRequests] = useState<CommandCenterViewingRequest[]>([]);
+  const [requests, setRequests] = useState<DashboardRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [vendorId, setVendorId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
+    const accessToken = getAccessToken();
 
-    const load = async (initial = false) => {
-      if (initial) {
-        setLoading(true);
-      }
-
+    const load = async () => {
       try {
-        const response = await fetch('/api/requests?serviceType=viewing-transport', { cache: 'no-store' });
+        const response = await fetch('/api/requests', {
+          cache: 'no-store',
+          headers: buildAuthHeaders(accessToken),
+        });
         const payload = await response.json();
 
         if (!response.ok) {
-          throw new Error(payload?.error ?? 'Failed to load viewing requests');
+          throw new Error(payload?.error ?? 'Failed to load requests');
         }
 
         if (!cancelled) {
@@ -67,92 +48,110 @@ export default function AdminOverviewPage() {
         }
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Failed to load viewing requests');
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load requests');
         }
       } finally {
-        if (initial && !cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     };
 
-    void load(true);
-    const interval = setInterval(() => {
-      void load();
-    }, 8000);
+    void load();
+    const socket = io(`${socketBase}/requests`, {
+      transports: ['websocket'],
+      auth: { token: accessToken },
+    });
+    socket.on('request.created', () => void load());
+    socket.on('request.assigned', () => void load());
+    socket.on('request.updated', () => void load());
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      socket.disconnect();
     };
   }, []);
 
-  const activeRequests = requests.filter((request) => request.status !== 'COMPLETED').length;
+  const assignVendor = async (requestId: string) => {
+    const accessToken = getAccessToken();
+    if (!vendorId.trim()) {
+      setError('Provide vendor id to assign');
+      return;
+    }
+    const response = await fetch('/api/requests', {
+      method: 'POST',
+      headers: buildAuthHeaders(accessToken),
+      body: JSON.stringify({ requestId, vendorId: vendorId.trim() }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      setError(payload?.error ?? 'Failed to assign vendor');
+      return;
+    }
+    setRequests((current) => current.map((request) => (request.id === requestId ? payload : request)));
+    setError(null);
+  };
 
   return (
     <section style={{ display: 'grid', gap: 18 }}>
-      <header style={{ display: 'grid', gap: 8 }}>
-        <h1 style={{ marginTop: 0, fontSize: 38, color: '#1E3A5F', marginBottom: 0 }}>Viewing Flow Command Center</h1>
-        <p style={{ color: '#6B7280', marginTop: 0, marginBottom: 0, maxWidth: 760 }}>
-          Live queue for Core-routed viewing tickets. Every ticket on this board originated from the tenant app and is mirrored through QuickRent Core.
-        </p>
-      </header>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14 }}>
-        {[
-          { title: 'Viewing Tickets', value: String(requests.length) },
-          { title: 'Active', value: String(activeRequests) },
-          { title: 'Completed', value: String(requests.filter((request) => request.status === 'COMPLETED').length) },
-          { title: 'Last Refresh', value: loading ? 'Loading' : 'Live' },
-        ].map((metric) => (
-          <article
-            key={metric.title}
-            style={{
-              background: 'rgba(255,255,255,0.82)',
-              border: '1px solid #D9E2EC',
-              borderRadius: 20,
-              padding: 20,
-              backdropFilter: 'blur(18px)',
-            }}
-          >
-            <div style={{ color: '#6B7280', fontSize: 14 }}>{metric.title}</div>
-            <div style={{ fontSize: 30, fontWeight: 700, color: '#1E3A5F', marginTop: 8 }}>{metric.value}</div>
-          </article>
-        ))}
+      <h1 style={{ margin: 0 }}>Dashboard Requests</h1>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          value={vendorId}
+          onChange={(event) => setVendorId(event.target.value)}
+          placeholder="Vendor ID"
+          style={{ padding: 8, border: '1px solid #ddd', borderRadius: 6 }}
+        />
+        <span style={{ fontSize: 12, color: '#666', alignSelf: 'center' }}>Used for Assign action</span>
       </div>
 
       {error ? (
-        <article style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 18, padding: 18, color: '#991B1B' }}>
+        <article style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: 12, color: '#991B1B' }}>
           {error}
         </article>
       ) : null}
 
-      <article style={{ background: 'rgba(255,255,255,0.86)', border: '1px solid #D9E2EC', borderRadius: 20, padding: 20 }}>
-        <h2 style={{ marginTop: 0, color: '#1E3A5F' }}>Live Viewing Queue</h2>
+      <article style={{ background: '#FFF', border: '1px solid #ddd', borderRadius: 8, padding: 12 }}>
+        <h2 style={{ marginTop: 0 }}>All Requests</h2>
         <div style={{ display: 'grid', gap: 12 }}>
           {!loading && requests.length === 0 ? (
-            <div style={{ border: '1px dashed #CBD5E1', borderRadius: 16, padding: 20, color: '#64748B' }}>
-              No viewing tickets available from Core.
+            <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 12, color: '#64748B' }}>
+              No requests
             </div>
           ) : null}
           {requests.map((request) => (
-            <div key={request.id} style={{ border: '1px solid #E5EDF5', borderRadius: 16, padding: 16, background: '#FFFFFF', display: 'grid', gap: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
-                <strong style={{ color: '#1E3A5F' }}>{request.metadata?.ticketCode ?? request.id}</strong>
-                <span style={{ color: statusColors[request.status] ?? '#475569', fontWeight: 800 }}>{request.status}</span>
+            <div key={request.id} style={{ border: '1px solid #E5EDF5', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
+              <div>
+                <strong>{request.id}</strong> - {request.type} - {request.status}
               </div>
-              <div style={{ color: '#334155', fontWeight: 700 }}>{request.user?.fullName ?? 'Tenant'} • {request.user?.phoneNumber ?? 'No phone'}</div>
-              <div style={{ color: '#64748B' }}>
-                {(request.viewingRequest?.items ?? []).map((item) => item.property.title).join(' • ') || 'No properties attached'}
+              <div style={{ color: '#64748B', fontSize: 14 }}>
+                tenant: {request.tenantId} | vendor: {request.vendorId ?? 'unassigned'}
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: '#64748B', fontSize: 14, flexWrap: 'wrap' }}>
-                <span>{request.country} / {request.city}</span>
+              <div style={{ color: '#64748B', fontSize: 14 }}>
                 <span>{formatDate(request.createdAt)}</span>
               </div>
+              {request.status === 'pending' ? (
+                <button onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
+                  Assign Vendor
+                </button>
+              ) : null}
             </div>
           ))}
         </div>
       </article>
     </section>
   );
+}
+
+function getAccessToken() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('quickrent_access_token')
+    ?? localStorage.getItem('accessToken')
+    ?? localStorage.getItem('token')
+    ?? '';
+}
+
+function buildAuthHeaders(token: string) {
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
 }

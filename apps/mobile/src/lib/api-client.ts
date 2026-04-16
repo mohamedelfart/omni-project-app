@@ -6,6 +6,10 @@ export function setApiAuthToken(token?: string) {
   apiAuthToken = token;
 }
 
+export function getApiAuthToken() {
+  return apiAuthToken;
+}
+
 export async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

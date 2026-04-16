@@ -1,4 +1,10 @@
-import { IsArray, IsDateString, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsString } from 'class-validator';
+
+export const REQUEST_TYPES = ['cleaning', 'moving', 'maintenance'] as const;
+export const REQUEST_STATUSES = ['pending', 'assigned', 'in_progress', 'completed'] as const;
+
+export type RequestType = (typeof REQUEST_TYPES)[number];
+export type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
 export class CreateUnifiedRequestDto {
   @IsString()
@@ -68,4 +74,23 @@ export class DispatchInstructionDto {
 
   @IsOptional()
   payload?: Record<string, unknown>;
+}
+
+export class CreateRealtimeRequestDto {
+  @IsIn(REQUEST_TYPES)
+  type!: RequestType;
+
+  @IsOptional()
+  @IsString()
+  vendorId?: string;
+}
+
+export class AssignVendorDto {
+  @IsString()
+  vendorId!: string;
+}
+
+export class UpdateRealtimeRequestStatusDto {
+  @IsIn(['assigned', 'in_progress', 'completed'])
+  status!: Exclude<RequestStatus, 'pending'>;
 }

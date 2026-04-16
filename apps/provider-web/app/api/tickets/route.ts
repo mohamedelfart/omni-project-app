@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing Authorization bearer token' }, { status: 401 });
   }
 
-  const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/vendor/tickets/me`, {
+  const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/unified-requests/realtime/vendor/me`, {
     headers: {
       Authorization: authHeader,
       'Content-Type': 'application/json',

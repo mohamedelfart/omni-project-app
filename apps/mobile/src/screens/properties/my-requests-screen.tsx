@@ -1,66 +1,109 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigation } from '@react-navigation/native';
-import { useTranslation } from 'react-i18next';
-import { Image, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { io } from 'socket.io-client';
+import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { OmniSkeleton } from '../../components/omni-skeleton';
-import { useTicketStore } from '../../store/ticket.store';
+import { apiRequest, getApiAuthToken } from '../../lib/api-client';
+
+type TenantRequest = {
+  id: string;
+  tenantId: string;
+  vendorId?: string;
+  type: 'cleaning' | 'moving' | 'maintenance';
+  status: 'pending' | 'assigned' | 'in_progress' | 'completed';
+  createdAt: string;
+  updatedAt: string;
+};
 
 export function MyRequestsScreen() {
   const navigation = useNavigation<any>();
-  const { t, i18n } = useTranslation();
-  const tickets = useTicketStore((state) => state.tickets);
+  const [requests, setRequests] = useState<TenantRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const socketBaseUrl = useMemo(() => (
+    (process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '')
+  ), []);
 
-  const isArabic = i18n.language === 'ar';
+  const loadRequests = async () => {
+    try {
+      const result = await apiRequest<TenantRequest[]>('/unified-requests/realtime/me', { method: 'GET' });
+      setRequests(result);
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Failed to load requests');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const createRequest = async (type: TenantRequest['type']) => {
+    try {
+      const result = await apiRequest<TenantRequest>('/unified-requests/realtime', {
+        method: 'POST',
+        body: JSON.stringify({ type }),
+      });
+      setRequests((current) => [result, ...current]);
+      setError(null);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : 'Failed to create request');
+    }
+  };
 
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 380);
-    return () => clearTimeout(timer);
-  }, []);
+    void loadRequests();
+    const socket = io(`${socketBaseUrl}/requests`, {
+      transports: ['websocket'],
+      auth: { token: getApiAuthToken() ?? '' },
+    });
+    socket.on('request.created', () => void loadRequests());
+    socket.on('request.assigned', () => void loadRequests());
+    socket.on('request.updated', () => void loadRequests());
+    return () => socket.disconnect();
+  }, [socketBaseUrl]);
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={[styles.header, isArabic && styles.rowRtl]}>
+      <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.85}>
-          <Text style={styles.backBtnText}>{isArabic ? '→' : '←'}</Text>
+          <Text style={styles.backBtnText}>{'←'}</Text>
         </TouchableOpacity>
         <View>
-          <Text style={[styles.title, isArabic && styles.textRtl]}>{t('requests.title')}</Text>
-          <Text style={[styles.subTitle, isArabic && styles.textRtl]}>{t('requests.subtitle')}</Text>
+          <Text style={styles.title}>My Requests</Text>
+          <Text style={styles.subTitle}>Create and track rental service requests</Text>
         </View>
       </View>
+      <View style={styles.actions}>
+        <TouchableOpacity style={styles.actionButton} onPress={() => void createRequest('cleaning')}>
+          <Text style={styles.actionButtonText}>Create Cleaning</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.actionButton} onPress={() => void createRequest('moving')}>
+          <Text style={styles.actionButtonText}>Create Moving</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.actionButton} onPress={() => void createRequest('maintenance')}>
+          <Text style={styles.actionButtonText}>Create Maintenance</Text>
+        </TouchableOpacity>
+      </View>
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
       {isLoading ? (
         <View style={styles.emptyWrap}>
-          <OmniSkeleton height={20} width="48%" />
-          <OmniSkeleton height={14} width="72%" style={{ marginTop: 8 }} />
-          <OmniSkeleton height={82} radius={12} style={{ marginTop: 12 }} />
+          <Text style={styles.emptyText}>Loading...</Text>
         </View>
-      ) : tickets.length === 0 ? (
+      ) : requests.length === 0 ? (
         <View style={styles.emptyWrap}>
-          <Text style={[styles.emptyText, isArabic && styles.textRtl]}>{t('requests.empty')}</Text>
+          <Text style={styles.emptyText}>No requests yet</Text>
         </View>
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-          {tickets.map((ticket) => (
-            <View key={ticket.id} style={styles.card}>
-              <Image source={{ uri: ticket.propertyImage }} style={styles.cardImage} resizeMode="cover" />
+          {requests.map((request) => (
+            <View key={request.id} style={styles.card}>
               <View style={{ flex: 1, gap: 4 }}>
-                <Text style={[styles.cardTitle, isArabic && styles.textRtl]} numberOfLines={1}>
-                  {ticket.propertyTitle}
-                </Text>
-                <Text style={[styles.cardMeta, isArabic && styles.textRtl]} numberOfLines={1}>
-                  {ticket.id} • {ticket.propertyAddress}
-                </Text>
-                <Text style={[styles.cardMeta, isArabic && styles.textRtl]}>
-                  {t('requests.serviceType')}: {ticket.serviceType}
-                </Text>
-                <Text style={[styles.cardMeta, isArabic && styles.textRtl]}>
-                  {t('requests.dateTime', { date: ticket.requestedDate, time: ticket.requestedTime })}
-                </Text>
+                <Text style={styles.cardTitle} numberOfLines={1}>{request.id}</Text>
+                <Text style={styles.cardMeta}>type: {request.type}</Text>
+                <Text style={styles.cardMeta}>tenant: {request.tenantId}</Text>
+                <Text style={styles.cardMeta}>vendor: {request.vendorId ?? 'unassigned'}</Text>
                 <View style={styles.statusChip}>
-                  <Text style={styles.statusText}>{t(`tickets.status.${ticket.status}`)}</Text>
+                  <Text style={styles.statusText}>{request.status}</Text>
                 </View>
               </View>
             </View>
@@ -83,8 +126,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  rowRtl: { flexDirection: 'row-reverse' },
-  textRtl: { textAlign: 'right' },
   backBtn: {
     width: 34,
     height: 34,
@@ -98,6 +139,16 @@ const styles = StyleSheet.create({
   backBtnText: { color: '#2B4F7D', fontSize: 16, fontWeight: '700' },
   title: { color: '#152C49', fontSize: 17, fontWeight: '700' },
   subTitle: { color: '#6E839C', fontSize: 12 },
+  actions: { flexDirection: 'row', paddingHorizontal: 14, gap: 8, marginTop: 10 },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#255B9C',
+    alignItems: 'center',
+  },
+  actionButtonText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  errorText: { color: '#B42318', paddingHorizontal: 14, marginTop: 8 },
   content: { padding: 14, gap: 10 },
   emptyWrap: {
     margin: 16,
@@ -117,7 +168,6 @@ const styles = StyleSheet.create({
     gap: 10,
     flexDirection: 'row',
   },
-  cardImage: { width: 84, height: 84, borderRadius: 10 },
   cardTitle: { color: '#172E4C', fontSize: 14, fontWeight: '700' },
   cardMeta: { color: '#6C819B', fontSize: 12 },
   statusChip: {
