@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-  title: 'QuickRent Command Center',
-  description: 'Global command center for QuickRent operations',
+  title: 'OmniRent Command Center',
+  description: 'Global command center for OmniRent operations',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

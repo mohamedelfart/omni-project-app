@@ -22,6 +22,14 @@ export async function GET(request: NextRequest) {
   });
 
   const payload = await response.json().catch(() => ({ error: 'Upstream command center response was not valid JSON' }));
+  if (!response.ok) {
+    console.error('Admin requests proxy GET failed', {
+      upstreamUrl: upstreamUrl.toString(),
+      status: response.status,
+      payload,
+    });
+    return NextResponse.json(payload, { status: response.status });
+  }
   const body = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
   return NextResponse.json(body, { status: response.status });
 }

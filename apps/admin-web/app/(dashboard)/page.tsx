@@ -34,13 +34,24 @@ export default function AdminOverviewPage() {
 
     const load = async () => {
       try {
+        if (!accessToken) {
+          console.error('Missing admin token');
+          if (!cancelled) {
+            setLoading(false);
+          }
+          return;
+        }
+
+        console.log('loading requests...');
         const response = await fetch('/api/requests', {
           cache: 'no-store',
           headers: buildAuthHeaders(accessToken),
         });
+        console.log('requests response status:', response.status);
         const payload = await response.json();
 
         if (!response.ok) {
+          console.error('Dashboard load requests failed', { status: response.status, payload });
           throw new Error(payload?.error ?? 'Failed to load requests');
         }
 
@@ -49,6 +60,7 @@ export default function AdminOverviewPage() {
           setError(null);
         }
       } catch (loadError) {
+        console.error('Dashboard load requests error:', loadError);
         if (!cancelled) {
           setError(loadError instanceof Error ? loadError.message : 'Failed to load requests');
         }

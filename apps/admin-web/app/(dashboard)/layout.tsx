@@ -47,7 +47,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         {/* Logo */}
         <div style={{ padding: '8px 12px 20px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: 8 }}>
           <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: '-0.5px' }}>
-            <span style={{ color: '#F97316' }}>Quick</span>Rent
+            <span style={{ color: '#F97316' }}>Omni</span>Rent
           </div>
           <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 }}>
             Admin Console
@@ -74,11 +74,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                   textDecoration: 'none',
                   fontSize: 14,
                   fontWeight: 500,
-                  transition: 'background 0.15s',
                   marginBottom: 2,
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.1)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
                 <span style={{ fontSize: 16 }}>{item.icon}</span>
                 {item.title}
