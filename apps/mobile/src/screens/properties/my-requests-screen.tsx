@@ -13,6 +13,8 @@ type TenantRequest = {
   status: 'pending' | 'assigned' | 'in_progress' | 'completed';
   createdAt: string;
   updatedAt: string;
+  propertyIds?: string[];
+  primaryPropertyId?: string;
 };
 
 export function MyRequestsScreen() {

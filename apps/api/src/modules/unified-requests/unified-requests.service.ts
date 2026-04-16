@@ -121,9 +121,10 @@ export class UnifiedRequestsService {
         serviceType: dto.type,
         source: 'tenant-app',
         destination: 'core',
+        // Phase 2: hardcoded geo; replace with config/property-based resolution in later phase.
         country: 'QA',
         city: 'Doha',
-        propertyIds: [],
+        propertyIds: dto.propertyIds ?? [],
         status: UnifiedRequestStatus.SUBMITTED,
         vendorId: dto.vendorId,
       },
@@ -207,6 +208,7 @@ export class UnifiedRequestsService {
     vendorId: string | null;
     requestType: string;
     status: UnifiedRequestStatus;
+    propertyIds: string[];
     createdAt: Date;
     updatedAt: Date;
   }) {
@@ -216,6 +218,8 @@ export class UnifiedRequestsService {
       vendorId: request.vendorId ?? undefined,
       type: request.requestType,
       status: this.toMinimalStatus(request.status),
+      propertyIds: request.propertyIds ?? [],
+      primaryPropertyId: request.propertyIds?.[0],
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,
     };

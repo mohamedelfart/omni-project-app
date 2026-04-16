@@ -11,6 +11,8 @@ type VendorRequest = {
   status: 'pending' | 'assigned' | 'in_progress' | 'completed';
   createdAt: string;
   updatedAt: string;
+  propertyIds?: string[];
+  primaryPropertyId?: string;
 };
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';

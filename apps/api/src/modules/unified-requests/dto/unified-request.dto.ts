@@ -83,6 +83,11 @@ export class CreateRealtimeRequestDto {
   @IsOptional()
   @IsString()
   vendorId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  propertyIds?: string[];
 }
 
 export class AssignVendorDto {

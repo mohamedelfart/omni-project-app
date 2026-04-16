@@ -1,0 +1,90 @@
+---
+description: Core architecture constitution and principles for OmniRent
+alwaysApply: true
+---
+
+## Request Principle
+
+- **One unified request model only**: All operational flows between tenant, vendor, and dashboard must use a single, shared request domain model.
+- **Do NOT create parallel request systems**: Do not introduce alternative or duplicate request representations for specific apps or roles.
+- **Operational backbone**: Treat the request as the operational backbone connecting tenant, vendor, and dashboard workflows.
+- **Minimal MVP statuses**: For MVP, restrict request status to the minimal set:
+  - pending
+  - assigned
+  - in_progress
+  - completed
+
+## MVP Priority
+
+The MVP core is:
+- Tenant creates request.
+- Dashboard sees request.
+- Vendor sees request.
+- Vendor updates request status.
+- All related parties receive updates in real-time.
+
+## Real-Time Principle
+
+- **Real-time visibility is essential**: The system must provide timely visibility into request state for all key roles.
+- **Tenant, Vendor, and Dashboard must stay synced**: These roles must remain logically in sync regarding request status and key events.
+- **Prefer a simple real-time architecture first**: Start with the simplest viable real-time mechanism (e.g., basic subscriptions or polling) that satisfies the core flow.
+- **No unnecessary complexity before proving the core flow**: Avoid advanced real-time patterns until the core flow is proven and needed.
+
+## Architecture Rules
+
+- **Do NOT introduce microservices now**: Keep the system as a single, modular application or a small set of well-defined modules, not separate microservices.
+- **Do NOT over-engineer**: Prefer straightforward, understandable solutions over complex patterns or abstractions.
+- **Do NOT build heavy abstractions too early**: Introduce complex abstraction layers only when concrete, repeated needs emerge.
+- **Keep the current system simple, operational, and extensible**: Prioritize ease of operation today while leaving clear extension points.
+- **Scale by layering, not rewriting**: Plan to scale by adding new layers and modules on top of the existing core rather than replacing it.
+
+## Expansion Rule
+
+Everything should be designed so future layers can be added without rebuilding:
+- Owner mode.
+- Host / mini-Airbnb mode.
+- Multi-country adapters.
+- AI optimization.
+- Orchestration improvements.
+- Advanced analytics.
+These are future layers, not current MVP requirements.
+
+## Implementation Discipline
+
+For every feature, check:
+- Does it preserve the unified core?
+- Does it avoid unnecessary rebuild risk?
+- Does it keep the MVP simple?
+- Does it support future expansion without redesign?
+
+## Default Decision Bias
+
+When uncertain, prefer:
+- Simpler.
+- Clearer.
+- More unified.
+- More extensible.
+- Less duplicated.
+- Less role fragmentation.
+
+# OmniRent Architecture Constitution (Part 1)
+
+## Core Philosophy
+
+- **Build small, design global**: Favor small, composable, and replaceable components and services, but always design their contracts and models with future global scale and multi-region support in mind.
+- **Simple core now, global expansion later**: Prioritize a minimal, coherent domain model and APIs first, with explicit extension points for future capabilities rather than premature complexity.
+- **Do not rebuild the system later; extend it**: Design modules and boundaries so that new capabilities are added via new modules, handlers, or configuration, not by rewriting existing ones.
+- **One unified operational backbone**: Shared platforms (auth, identity, property, billing, notifications, workflow) should be single sources of truth reused by all apps (admin, provider, tenant, mobile, etc.).
+
+## User Principle
+
+- **User is not role-locked**: The core `User` identity must be role-agnostic; roles are attached as attributes/capabilities, not as separate user records.
+- **Multi-role over time**: A single account can accumulate roles such as tenant, owner, vendor, admin, and future roles like host without duplication of user identity.
+- **User-centric design**: Workflows, permissions, and data models should start from the user/account and then map to roles, not from isolated role-based silos.
+
+## Property Principle
+
+- **Ownership-aware properties**: Property entities must explicitly model ownership and management relationships.
+- **Support `ownerId`, `managerId`, `listingMode`**: These fields (or clear equivalents) are required in the property domain model and should be propagated through APIs and UIs.
+- **Future-safe relationships**: Design property relationships so that adding new concepts (e.g. co-owners, agencies, sub-listings, multi-channel listing modes) is an extension, not a breaking change.
+
