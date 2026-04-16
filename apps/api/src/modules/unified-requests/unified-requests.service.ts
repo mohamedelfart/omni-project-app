@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
+import { TicketActionHistoryItem, TicketActionsService } from '../ticket-actions/ticket-actions.service';
+import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import {
   AssignVendorDto,
   CreateRealtimeRequestDto,
@@ -21,6 +23,7 @@ export class UnifiedRequestsService {
     private readonly orchestratorService: OrchestratorService,
     private readonly auditTrailService: AuditTrailService,
     private readonly unifiedRequestsGateway: UnifiedRequestsGateway,
+    private readonly ticketActionsService: TicketActionsService,
   ) {}
 
   private toJson(value: unknown): Prisma.InputJsonValue {
@@ -100,6 +103,33 @@ export class UnifiedRequestsService {
     return this.prisma.unifiedRequest.findUniqueOrThrow({ where: { id: requestId }, include: { trackingEvents: true } });
   }
 
+  async getTicketActionHistory(requestId: string, user: AuthenticatedUser): Promise<TicketActionHistoryItem[]> {
+    const ticket = await this.prisma.unifiedRequest.findUnique({
+      where: { id: requestId },
+      select: { id: true, tenantId: true, userId: true, vendorId: true },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Request not found');
+    }
+
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const isAdminLike = effectiveRoles.some((r) => r === 'admin' || r === 'command-center');
+    const isTenant = effectiveRoles.includes('tenant');
+    const isProvider = effectiveRoles.includes('provider');
+
+    if (isAdminLike) {
+      return this.ticketActionsService.listHistoryByTicketId(requestId);
+    }
+    if (isTenant && (ticket.tenantId === user.id || ticket.userId === user.id)) {
+      return this.ticketActionsService.listHistoryByTicketId(requestId);
+    }
+    if (isProvider && ticket.vendorId === user.id) {
+      return this.ticketActionsService.listHistoryByTicketId(requestId);
+    }
+
+    throw new ForbiddenException('Not allowed to read action history for this request');
+  }
+
   dispatchInstruction(requestId: string, dto: DispatchInstructionDto) {
     void this.auditTrailService.write({
       action: 'UNIFIED_REQUEST_INSTRUCTION_RECEIVED',
@@ -154,7 +184,7 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  async assignVendor(requestId: string, dto: AssignVendorDto) {
+  async assignVendor(requestId: string, dto: AssignVendorDto, actorId: string) {
     const updated = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
@@ -175,15 +205,41 @@ export class UnifiedRequestsService {
       ],
       { request: minimal, vendorId: dto.vendorId },
     );
+    this.logTicketActionNoThrow({
+      ticketId: requestId,
+      actionType: 'ASSIGN_VENDOR',
+      actorType: 'admin',
+      actorId,
+      payload: {
+        vendorId: dto.vendorId,
+      },
+    });
     return minimal;
   }
 
   async updateRealtimeStatus(requestId: string, vendorId: string, dto: UpdateRealtimeRequestStatusDto) {
+    const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: requestId },
+      select: { id: true, vendorId: true, status: true },
+    });
+
+    if (!existing.vendorId || existing.vendorId !== vendorId) {
+      throw new ForbiddenException('Request is not assigned to this vendor');
+    }
+
+    const current = this.toMinimalStatus(existing.status);
+    const isValidTransition = (
+      (current === 'assigned' && dto.status === 'in_progress')
+      || (current === 'in_progress' && dto.status === 'completed')
+    );
+    if (!isValidTransition) {
+      throw new BadRequestException(`Invalid status transition: ${current} -> ${dto.status}`);
+    }
+
     const updated = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
         status: this.fromMinimalStatus(dto.status),
-        vendorId,
       },
     });
 
@@ -199,7 +255,30 @@ export class UnifiedRequestsService {
       ],
       { request: minimal, changedFields: ['status'] },
     );
+    this.logTicketActionNoThrow({
+      ticketId: requestId,
+      actionType: 'CHANGE_STATUS',
+      actorType: 'provider',
+      actorId: vendorId,
+      payload: {
+        fromStatus: current,
+        toStatus: dto.status,
+      },
+    });
     return minimal;
+  }
+
+  private logTicketActionNoThrow(input: {
+    ticketId: string;
+    actionType: string;
+    actorType: string;
+    actorId: string;
+    payload?: Prisma.InputJsonValue;
+  }) {
+    void this.ticketActionsService.createAction(input).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown logging error';
+      console.warn(`TicketAction logging failed: ${message}`);
+    });
   }
 
   private toMinimalRequest(request: {

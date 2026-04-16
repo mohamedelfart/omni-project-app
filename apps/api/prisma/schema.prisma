@@ -431,8 +431,23 @@ model UnifiedRequest {
   airportTransfer       AirportTransferRequest?
   offer                 Offer?
   notifications         Notification[]
+  ticketActions         TicketAction[]
 
   @@index([status, serviceType, country, city])
+}
+
+model TicketAction {
+  id         String         @id @default(cuid())
+  ticketId   String
+  actionType String
+  actorType  String
+  actorId    String
+  payload    Json?
+  createdAt  DateTime       @default(now())
+  ticket     UnifiedRequest @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@index([actionType, createdAt])
 }
 
 model UnifiedRequestTrackingEvent {

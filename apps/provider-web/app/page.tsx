@@ -127,7 +127,7 @@ export default function VendorTicketsPage() {
                     Start
                   </button>
                 ) : null}
-                {request.status !== 'completed' ? (
+                {request.status === 'in_progress' ? (
                   <button
                     onClick={() => void sendStatus(request.id, 'completed')}
                     disabled={updatingRequestId === request.id}

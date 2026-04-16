@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -63,8 +63,8 @@ export class UnifiedRequestsController {
 
   @Post('realtime/:id/assign')
   @Roles('admin', 'command-center')
-  assignVendor(@Param('id') id: string, @Body() dto: AssignVendorDto) {
-    return this.unifiedRequestsService.assignVendor(id, dto);
+  assignVendor(@CurrentUser() user: { id: string }, @Param('id') id: string, @Body() dto: AssignVendorDto) {
+    return this.unifiedRequestsService.assignVendor(id, dto, user.id);
   }
 
   @Post('realtime/:id/status')
@@ -75,6 +75,12 @@ export class UnifiedRequestsController {
     @Body() dto: UpdateRealtimeRequestStatusDto,
   ) {
     return this.unifiedRequestsService.updateRealtimeStatus(id, user.id, dto);
+  }
+
+  @Get(':id/history')
+  @Roles('admin', 'command-center', 'tenant', 'provider')
+  getRequestHistory(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.unifiedRequestsService.getTicketActionHistory(id, user);
   }
 
   @Get(':id')
