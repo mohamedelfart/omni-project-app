@@ -3,13 +3,15 @@ import { Prisma, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
-import { TicketActionHistoryItem, TicketActionsService } from '../ticket-actions/ticket-actions.service';
+import type { TicketAction } from '@quickrent/shared-types';
+import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import {
   AssignVendorDto,
   CreateRealtimeRequestDto,
   CreateUnifiedRequestDto,
   DispatchInstructionDto,
+  EscalateRequestDto,
   RequestStatus,
   UpdateRealtimeRequestStatusDto,
 } from './dto/unified-request.dto';
@@ -103,7 +105,7 @@ export class UnifiedRequestsService {
     return this.prisma.unifiedRequest.findUniqueOrThrow({ where: { id: requestId }, include: { trackingEvents: true } });
   }
 
-  async getTicketActionHistory(requestId: string, user: AuthenticatedUser): Promise<TicketActionHistoryItem[]> {
+  async getTicketActionHistory(requestId: string, user: AuthenticatedUser): Promise<TicketAction[]> {
     const ticket = await this.prisma.unifiedRequest.findUnique({
       where: { id: requestId },
       select: { id: true, tenantId: true, userId: true, vendorId: true },
@@ -128,6 +130,48 @@ export class UnifiedRequestsService {
     }
 
     throw new ForbiddenException('Not allowed to read action history for this request');
+  }
+
+  /**
+   * Append-only: records `ESCALATE` on the ticket. Does not mutate `UnifiedRequest` state.
+   */
+  async appendEscalationAction(
+    ticketId: string,
+    user: AuthenticatedUser,
+    dto: EscalateRequestDto,
+  ): Promise<TicketAction> {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const canEscalate = effectiveRoles.some((r) => r === 'admin' || r === 'command-center');
+    if (!canEscalate) {
+      throw new ForbiddenException('Only admin or command-center can escalate');
+    }
+
+    const ticket = await this.prisma.unifiedRequest.findUnique({
+      where: { id: ticketId },
+      select: { id: true },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Request not found');
+    }
+
+    const payload: Record<string, unknown> = { reason: dto.reason };
+    if (dto.level !== undefined && dto.level !== '') payload.level = dto.level;
+    if (dto.target !== undefined && dto.target !== '') payload.target = dto.target;
+    if (dto.references && dto.references.length > 0) payload.references = dto.references;
+
+    const actorType = effectiveRoles.includes('admin')
+      ? 'admin'
+      : effectiveRoles.includes('command-center')
+        ? 'command-center'
+        : user.role;
+
+    return this.ticketActionsService.createAction({
+      ticketId,
+      actionType: 'ESCALATE',
+      actorType,
+      actorId: user.id,
+      payload: this.toJson(payload),
+    });
   }
 
   dispatchInstruction(requestId: string, dto: DispatchInstructionDto) {

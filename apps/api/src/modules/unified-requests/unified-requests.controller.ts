@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { TicketAction } from '@quickrent/shared-types';
 import { CurrentUser, type AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -9,6 +10,7 @@ import {
   CreateRealtimeRequestDto,
   CreateUnifiedRequestDto,
   DispatchInstructionDto,
+  EscalateRequestDto,
   UpdateRealtimeRequestStatusDto,
 } from './dto/unified-request.dto';
 import { UnifiedRequestsService } from './unified-requests.service';
@@ -79,8 +81,18 @@ export class UnifiedRequestsController {
 
   @Get(':id/history')
   @Roles('admin', 'command-center', 'tenant', 'provider')
-  getRequestHistory(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+  getRequestHistory(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string): Promise<TicketAction[]> {
     return this.unifiedRequestsService.getTicketActionHistory(id, user);
+  }
+
+  @Post(':id/escalate')
+  @Roles('admin', 'command-center')
+  escalate(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: EscalateRequestDto,
+  ): Promise<TicketAction> {
+    return this.unifiedRequestsService.appendEscalationAction(id, user, dto);
   }
 
   @Get(':id')

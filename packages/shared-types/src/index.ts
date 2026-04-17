@@ -5,3 +5,10 @@ export type AuthTokens = {
   refreshToken: string;
 };
 
+export type {
+  TicketAction,
+  TicketActionCreatedBy,
+  TicketActionType,
+  TicketId,
+} from './ticket-action';
+

@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, TicketAction } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import type { TicketAction } from '@quickrent/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
+import { mapPersistedTicketActionToDomain } from './ticket-actions.mapper';
 
 type CreateTicketActionInput = {
   ticketId: string;
@@ -10,23 +12,17 @@ type CreateTicketActionInput = {
   payload?: Prisma.InputJsonValue;
 };
 
-export type TicketActionHistoryItem = {
-  actionType: string;
-  actorType: string;
-  actorId: string;
-  payload: Prisma.JsonValue | null;
-  createdAt: Date;
-};
-
 @Injectable()
 export class TicketActionsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  listHistoryByTicketId(ticketId: string): Promise<TicketActionHistoryItem[]> {
-    return this.prisma.ticketAction.findMany({
+  async listHistoryByTicketId(ticketId: string): Promise<TicketAction[]> {
+    const rows = await this.prisma.ticketAction.findMany({
       where: { ticketId },
       orderBy: { createdAt: 'asc' },
       select: {
+        id: true,
+        ticketId: true,
         actionType: true,
         actorType: true,
         actorId: true,
@@ -34,10 +30,11 @@ export class TicketActionsService {
         createdAt: true,
       },
     });
+    return rows.map(mapPersistedTicketActionToDomain);
   }
 
-  createAction(input: CreateTicketActionInput): Promise<TicketAction> {
-    return this.prisma.ticketAction.create({
+  async createAction(input: CreateTicketActionInput): Promise<TicketAction> {
+    const created = await this.prisma.ticketAction.create({
       data: {
         ticketId: input.ticketId,
         actionType: input.actionType,
@@ -46,5 +43,6 @@ export class TicketActionsService {
         payload: input.payload,
       },
     });
+    return mapPersistedTicketActionToDomain(created);
   }
 }

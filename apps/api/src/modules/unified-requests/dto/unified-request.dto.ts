@@ -1,4 +1,4 @@
-import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export const REQUEST_TYPES = ['cleaning', 'moving', 'maintenance'] as const;
 export const REQUEST_STATUSES = ['pending', 'assigned', 'in_progress', 'completed'] as const;
@@ -98,4 +98,23 @@ export class AssignVendorDto {
 export class UpdateRealtimeRequestStatusDto {
   @IsIn(['assigned', 'in_progress', 'completed'])
   status!: Exclude<RequestStatus, 'pending'>;
+}
+
+export class EscalateRequestDto {
+  @IsString()
+  @IsNotEmpty()
+  reason!: string;
+
+  @IsOptional()
+  @IsString()
+  level?: string;
+
+  @IsOptional()
+  @IsString()
+  target?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  references?: string[];
 }

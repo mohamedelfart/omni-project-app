@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
+import { getAccessToken } from '../lib/auth';
 
 type DashboardRequest = {
   id: string;
@@ -15,6 +16,14 @@ type DashboardRequest = {
   primaryPropertyId?: string;
 };
 
+/** Read model for `GET /api/v1/unified-requests/:id/history` (shared TicketAction shape). */
+type TimelineAction = {
+  type: string;
+  createdBy: { type: string; id: string };
+  createdAt: string;
+  payload: Record<string, unknown>;
+};
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
 const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
 
@@ -22,45 +31,119 @@ function formatDate(value: string) {
   return new Date(value).toLocaleString();
 }
 
+function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
+  if (Array.isArray(raw)) return raw as DashboardRequest[];
+  if (raw && typeof raw === 'object' && 'data' in raw) {
+    const inner = (raw as { data: unknown }).data;
+    if (Array.isArray(inner)) return inner as DashboardRequest[];
+  }
+  return [];
+}
+
+function asPayloadRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function normalizeHistoryEnvelope(raw: unknown): TimelineAction[] {
+  let list: unknown = raw;
+  if (raw && typeof raw === 'object' && 'data' in raw) {
+    list = (raw as { data: unknown }).data;
+  }
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+    .map((row) => ({
+      type: typeof row.type === 'string' ? row.type : '',
+      createdBy:
+        row.createdBy && typeof row.createdBy === 'object' && row.createdBy !== null
+          ? {
+              type: typeof (row.createdBy as { type?: unknown }).type === 'string' ? (row.createdBy as { type: string }).type : '',
+              id: typeof (row.createdBy as { id?: unknown }).id === 'string' ? (row.createdBy as { id: string }).id : '',
+            }
+          : { type: '', id: '' },
+      createdAt: typeof row.createdAt === 'string' ? row.createdAt : '',
+      payload: asPayloadRecord(row.payload),
+    }));
+}
+
+function timelinePayloadSummary(action: TimelineAction): string | null {
+  const { type, payload } = action;
+  if (type === 'ASSIGN_VENDOR') {
+    const vendorId = payload.vendorId;
+    if (typeof vendorId === 'string' && vendorId.trim()) return `vendor ${vendorId}`;
+    return null;
+  }
+  if (type === 'STATUS_UPDATE' || type === 'CHANGE_STATUS') {
+    const from =
+      (typeof payload.fromStatus === 'string' && payload.fromStatus)
+      || (typeof payload.from === 'string' && payload.from)
+      || null;
+    const to =
+      (typeof payload.toStatus === 'string' && payload.toStatus)
+      || (typeof payload.to === 'string' && payload.to)
+      || null;
+    if (from && to) return `${from} → ${to}`;
+    if (to) return `→ ${to}`;
+    if (from) return `${from} →`;
+  }
+  return null;
+}
+
+function getLoadErrorMessage(payload: unknown): string {
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    if (typeof record.error === 'string') return record.error;
+    if (typeof record.message === 'string') return record.message;
+    if (record.message && typeof record.message === 'object' && record.message !== null && 'message' in record.message) {
+      const nested = (record.message as { message?: unknown }).message;
+      if (typeof nested === 'string') return nested;
+    }
+  }
+  return 'Failed to load requests';
+}
+
 export default function AdminOverviewPage() {
   const [requests, setRequests] = useState<DashboardRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [vendorId, setVendorId] = useState('');
+  const [timelineForId, setTimelineForId] = useState<string | null>(null);
+  const [timelineActions, setTimelineActions] = useState<TimelineAction[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const accessToken = getAccessToken();
+    let socket: ReturnType<typeof io> | null = null;
 
     const load = async () => {
       try {
-        if (!accessToken) {
-          console.error('Missing admin token');
-          if (!cancelled) {
-            setLoading(false);
-          }
-          return;
-        }
-
-        console.log('loading requests...');
+        const requestHeaders = buildAuthHeaders(accessToken);
         const response = await fetch('/api/requests', {
           cache: 'no-store',
-          headers: buildAuthHeaders(accessToken),
+          headers: requestHeaders,
         });
-        console.log('requests response status:', response.status);
-        const payload = await response.json();
+        const payload = await response.json().catch(() => null);
 
         if (!response.ok) {
-          console.error('Dashboard load requests failed', { status: response.status, payload });
-          throw new Error(payload?.error ?? 'Failed to load requests');
+          if (process.env.NODE_ENV === 'development') {
+            console.error('Dashboard load requests failed', { status: response.status, payload });
+          }
+          throw new Error(getLoadErrorMessage(payload));
         }
 
         if (!cancelled) {
-          setRequests(Array.isArray(payload) ? payload : []);
+          setRequests(normalizeRequestsResponseBody(payload));
           setError(null);
         }
       } catch (loadError) {
-        console.error('Dashboard load requests error:', loadError);
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Dashboard load requests error:', loadError);
+        }
         if (!cancelled) {
           setError(loadError instanceof Error ? loadError.message : 'Failed to load requests');
         }
@@ -70,19 +153,52 @@ export default function AdminOverviewPage() {
     };
 
     void load();
-    const socket = io(`${socketBase}/requests`, {
-      transports: ['websocket'],
-      auth: { token: accessToken },
-    });
-    socket.on('request.created', () => void load());
-    socket.on('request.assigned', () => void load());
-    socket.on('request.updated', () => void load());
+    if (!accessToken) {
+      const socketError = 'Missing auth token for socket connection';
+      if (process.env.NODE_ENV === 'development') {
+        console.error(`[socket] ${socketError}`);
+      }
+      if (!cancelled) {
+        setError(socketError);
+      }
+    } else {
+      socket = io(`${socketBase}/requests`, {
+        transports: ['websocket'],
+        auth: { token: accessToken },
+      });
+      socket.on('request.created', () => void load());
+      socket.on('request.assigned', () => void load());
+      socket.on('request.updated', () => void load());
+    }
 
     return () => {
       cancelled = true;
-      socket.disconnect();
+      socket?.disconnect();
     };
   }, []);
+
+  const loadTimeline = async (requestId: string) => {
+    const accessToken = getAccessToken();
+    setTimelineForId(requestId);
+    setTimelineLoading(true);
+    setTimelineError(null);
+    setTimelineActions([]);
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/history`, {
+        cache: 'no-store',
+        headers: buildAuthHeaders(accessToken),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getLoadErrorMessage(payload));
+      }
+      setTimelineActions(normalizeHistoryEnvelope(payload));
+    } catch (e) {
+      setTimelineError(e instanceof Error ? e.message : 'Failed to load timeline');
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
 
   const assignVendor = async (requestId: string) => {
     const accessToken = getAccessToken();
@@ -142,28 +258,64 @@ export default function AdminOverviewPage() {
               <div style={{ color: '#64748B', fontSize: 14 }}>
                 <span>{formatDate(request.createdAt)}</span>
               </div>
-              {request.status === 'pending' ? (
-                <button onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
-                  Assign Vendor
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" onClick={() => void loadTimeline(request.id)} style={{ padding: '6px 10px' }}>
+                  Timeline
                 </button>
-              ) : null}
+                {request.status === 'pending' ? (
+                  <button type="button" onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
+                    Assign Vendor
+                  </button>
+                ) : null}
+              </div>
             </div>
           ))}
         </div>
       </article>
+
+      {timelineForId ? (
+        <article style={{ background: '#FFF', border: '1px solid #ddd', borderRadius: 8, padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <h2 style={{ margin: 0 }}>Timeline — {timelineForId}</h2>
+            <button type="button" onClick={() => { setTimelineForId(null); setTimelineActions([]); setTimelineError(null); }} style={{ padding: '6px 10px' }}>
+              Close
+            </button>
+          </div>
+          {timelineLoading ? <p style={{ color: '#64748B', marginTop: 8 }}>Loading…</p> : null}
+          {timelineError ? (
+            <p style={{ color: '#991B1B', marginTop: 8 }}>{timelineError}</p>
+          ) : null}
+          {!timelineLoading && !timelineError ? (
+            <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: '#334155', fontSize: 14 }}>
+              {timelineActions.length === 0 ? (
+                <li style={{ listStyle: 'none', marginLeft: -18, color: '#64748B' }}>No actions</li>
+              ) : (
+                timelineActions.map((action, index) => {
+                  const summary = timelinePayloadSummary(action);
+                  return (
+                    <li key={`${action.type}-${action.createdAt}-${index}`} style={{ marginBottom: 8 }}>
+                      <div>
+                        <strong>{action.type}</strong> · by {action.createdBy.type} · {action.createdAt ? formatDate(action.createdAt) : ''}
+                      </div>
+                      {summary ? (
+                        <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{summary}</div>
+                      ) : null}
+                    </li>
+                  );
+                })
+              )}
+            </ul>
+          ) : null}
+        </article>
+      ) : null}
     </section>
   );
 }
 
-function getAccessToken() {
-  if (typeof window === 'undefined') return '';
-  return localStorage.getItem('quickrent_access_token')
-    ?? localStorage.getItem('accessToken')
-    ?? localStorage.getItem('token')
-    ?? '';
-}
-
-function buildAuthHeaders(token: string) {
+function buildAuthHeaders(token: string | null) {
+  if (!token && process.env.NODE_ENV === 'development') {
+    console.warn('[auth] Missing access token; sending request without Authorization header.');
+  }
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
