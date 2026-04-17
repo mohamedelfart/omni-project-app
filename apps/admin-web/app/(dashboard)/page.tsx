@@ -71,7 +71,7 @@ function normalizeHistoryEnvelope(raw: unknown): TimelineAction[] {
 
 function timelinePayloadSummary(action: TimelineAction): string | null {
   const { type, payload } = action;
-  if (type === 'ASSIGN_VENDOR') {
+  if (type === 'ASSIGN' || type === 'ASSIGN_VENDOR') {
     const vendorId = payload.vendorId;
     if (typeof vendorId === 'string' && vendorId.trim()) return `vendor ${vendorId}`;
     return null;

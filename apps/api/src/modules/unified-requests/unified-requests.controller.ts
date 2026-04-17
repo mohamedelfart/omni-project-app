@@ -65,8 +65,8 @@ export class UnifiedRequestsController {
 
   @Post('realtime/:id/assign')
   @Roles('admin', 'command-center')
-  assignVendor(@CurrentUser() user: { id: string }, @Param('id') id: string, @Body() dto: AssignVendorDto) {
-    return this.unifiedRequestsService.assignVendor(id, dto, user.id);
+  assignVendor(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: AssignVendorDto) {
+    return this.unifiedRequestsService.assignVendor(id, dto, user);
   }
 
   @Post('realtime/:id/status')

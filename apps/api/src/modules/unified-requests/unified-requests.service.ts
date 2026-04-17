@@ -174,6 +174,35 @@ export class UnifiedRequestsService {
     });
   }
 
+  /**
+   * Append-only: records `ASSIGN` (vendor chosen). Caller keeps existing `UnifiedRequest` update + gateway emit.
+   */
+  async appendAssignTicketAction(
+    ticketId: string,
+    user: AuthenticatedUser,
+    dto: AssignVendorDto,
+  ): Promise<TicketAction> {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const canAssign = effectiveRoles.some((r) => r === 'admin' || r === 'command-center');
+    if (!canAssign) {
+      throw new ForbiddenException('Only admin or command-center can assign');
+    }
+
+    const actorType = effectiveRoles.includes('admin')
+      ? 'admin'
+      : effectiveRoles.includes('command-center')
+        ? 'command-center'
+        : user.role;
+
+    return this.ticketActionsService.createAction({
+      ticketId,
+      actionType: 'ASSIGN',
+      actorType,
+      actorId: user.id,
+      payload: this.toJson({ vendorId: dto.vendorId }),
+    });
+  }
+
   dispatchInstruction(requestId: string, dto: DispatchInstructionDto) {
     void this.auditTrailService.write({
       action: 'UNIFIED_REQUEST_INSTRUCTION_RECEIVED',
@@ -228,7 +257,7 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  async assignVendor(requestId: string, dto: AssignVendorDto, actorId: string) {
+  async assignVendor(requestId: string, dto: AssignVendorDto, user: AuthenticatedUser) {
     const updated = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
@@ -249,14 +278,9 @@ export class UnifiedRequestsService {
       ],
       { request: minimal, vendorId: dto.vendorId },
     );
-    this.logTicketActionNoThrow({
-      ticketId: requestId,
-      actionType: 'ASSIGN_VENDOR',
-      actorType: 'admin',
-      actorId,
-      payload: {
-        vendorId: dto.vendorId,
-      },
+    void this.appendAssignTicketAction(requestId, user, dto).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown logging error';
+      console.warn(`TicketAction ASSIGN failed: ${message}`);
     });
     return minimal;
   }
