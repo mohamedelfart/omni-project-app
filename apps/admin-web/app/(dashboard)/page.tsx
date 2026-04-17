@@ -36,6 +36,47 @@ function formatDate(value: string) {
   return new Date(value).toLocaleString();
 }
 
+/** Open requests older than this (hours since `createdAt`) are flagged as aging. */
+const SLA_AGING_HOURS = 24;
+/** Open requests older than this are flagged as overdue / high stale risk. */
+const SLA_OVERDUE_HOURS = 48;
+
+function hoursSinceCreated(createdAt: string): number {
+  const ms = new Date(createdAt).getTime();
+  const start = Number.isFinite(ms) ? ms : Date.now();
+  return (Date.now() - start) / (1000 * 60 * 60);
+}
+
+function isOpenForSla(status: DashboardRequest['status']): boolean {
+  return status !== 'completed';
+}
+
+type AgingTier = 'none' | 'aging' | 'overdue';
+
+function getAgingTier(createdAt: string, status: DashboardRequest['status']): AgingTier {
+  if (!isOpenForSla(status)) return 'none';
+  const h = hoursSinceCreated(createdAt);
+  if (h >= SLA_OVERDUE_HOURS) return 'overdue';
+  if (h >= SLA_AGING_HOURS) return 'aging';
+  return 'none';
+}
+
+type PrioritySlaTier = 'none' | 'elevated' | 'critical';
+
+function getPrioritySlaTier(priority: string | undefined): PrioritySlaTier {
+  if (priority === 'URGENT' || priority === 'CRITICAL') return 'critical';
+  if (priority === 'HIGH') return 'elevated';
+  return 'none';
+}
+
+function requestSlaAccentColor(aging: AgingTier, priorityTier: PrioritySlaTier): string | null {
+  if (aging === 'overdue') return '#DC2626';
+  if (aging === 'aging') return '#EA580C';
+  if (priorityTier === 'critical') return '#BE123C';
+  if (priorityTier === 'elevated') return '#CA8A04';
+  return null;
+}
+
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
   let list: unknown = raw;
   if (raw && typeof raw === 'object' && 'data' in raw) {
@@ -422,11 +463,87 @@ export default function AdminOverviewPage() {
               No requests match the current filters
             </div>
           ) : null}
-          {displayedRequests.map((request) => (
-            <div key={request.id} style={{ border: '1px solid #E5EDF5', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
+          {displayedRequests.map((request) => {
+            const agingTier = getAgingTier(request.createdAt, request.status);
+            const priorityTier = getPrioritySlaTier(request.priority);
+            const accent = requestSlaAccentColor(agingTier, priorityTier);
+            const slaBadges =
+              agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
+            return (
+            <div
+              key={request.id}
+              style={{
+                border: '1px solid #E5EDF5',
+                borderRadius: 8,
+                padding: 12,
+                display: 'grid',
+                gap: 8,
+                ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
+              }}
+            >
               <div>
                 <strong>{request.id}</strong> - {request.type} - {request.status}
               </div>
+              {slaBadges ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                  {priorityTier === 'critical' ? (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: '#FEE2E2',
+                        color: '#991B1B',
+                      }}
+                    >
+                      Urgent priority
+                    </span>
+                  ) : null}
+                  {priorityTier === 'elevated' ? (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: '#FEF9C3',
+                        color: '#854D0E',
+                      }}
+                    >
+                      High priority
+                    </span>
+                  ) : null}
+                  {agingTier === 'overdue' ? (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: '#FEE2E2',
+                        color: '#991B1B',
+                      }}
+                    >
+                      Overdue / stale
+                    </span>
+                  ) : null}
+                  {agingTier === 'aging' ? (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        background: '#FFEDD5',
+                        color: '#9A3412',
+                      }}
+                    >
+                      Aging
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               <div style={{ color: '#64748B', fontSize: 14 }}>
                 tenant: {request.tenantId} | vendor: {request.vendorId ?? 'unassigned'}
               </div>
@@ -487,7 +604,8 @@ export default function AdminOverviewPage() {
                 </div>
               ) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
       </article>
 
