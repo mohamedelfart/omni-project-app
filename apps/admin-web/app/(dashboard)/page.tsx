@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { getAccessToken } from '../lib/auth';
 
@@ -118,6 +118,30 @@ function getLoadErrorMessage(payload: unknown): string {
   return 'Failed to load requests';
 }
 
+function extractRequestIdFromSocketPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as { request?: unknown };
+  const request = record.request;
+  if (request && typeof request === 'object' && request !== null && 'id' in request) {
+    const id = (request as { id: unknown }).id;
+    if (typeof id === 'string' && id.length > 0) return id;
+  }
+  return null;
+}
+
+async function fetchTimelineHistory(requestId: string): Promise<TimelineAction[]> {
+  const accessToken = getAccessToken();
+  const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/history`, {
+    cache: 'no-store',
+    headers: buildAuthHeaders(accessToken),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(getLoadErrorMessage(payload));
+  }
+  return normalizeHistoryEnvelope(payload);
+}
+
 export default function AdminOverviewPage() {
   const [requests, setRequests] = useState<DashboardRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -133,6 +157,8 @@ export default function AdminOverviewPage() {
   const [escalateTarget, setEscalateTarget] = useState('');
   const [escalateSubmitting, setEscalateSubmitting] = useState(false);
   const [escalateError, setEscalateError] = useState<string | null>(null);
+  const timelineForIdRef = useRef<string | null>(null);
+  timelineForIdRef.current = timelineForId;
 
   useEffect(() => {
     let cancelled = false;
@@ -187,7 +213,24 @@ export default function AdminOverviewPage() {
       });
       socket.on('request.created', () => void load());
       socket.on('request.assigned', () => void load());
-      socket.on('request.updated', () => void load());
+      socket.on('request.updated', (payload: unknown) => {
+        void load();
+        const updatedId = extractRequestIdFromSocketPayload(payload);
+        if (!updatedId || timelineForIdRef.current !== updatedId) return;
+        void (async () => {
+          try {
+            const actions = await fetchTimelineHistory(updatedId);
+            if (!cancelled && timelineForIdRef.current === updatedId) {
+              setTimelineActions(actions);
+              setTimelineError(null);
+            }
+          } catch (refreshError) {
+            if (!cancelled && timelineForIdRef.current === updatedId) {
+              setTimelineError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh timeline');
+            }
+          }
+        })();
+      });
     }
 
     return () => {
@@ -197,21 +240,12 @@ export default function AdminOverviewPage() {
   }, []);
 
   const loadTimeline = async (requestId: string) => {
-    const accessToken = getAccessToken();
     setTimelineForId(requestId);
     setTimelineLoading(true);
     setTimelineError(null);
     setTimelineActions([]);
     try {
-      const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/history`, {
-        cache: 'no-store',
-        headers: buildAuthHeaders(accessToken),
-      });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(getLoadErrorMessage(payload));
-      }
-      setTimelineActions(normalizeHistoryEnvelope(payload));
+      setTimelineActions(await fetchTimelineHistory(requestId));
     } catch (e) {
       setTimelineError(e instanceof Error ? e.message : 'Failed to load timeline');
     } finally {
