@@ -1,4 +1,5 @@
-import { IsArray, IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsDateString, IsEnum, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
+import { RequestPriority } from '@prisma/client';
 
 export const REQUEST_TYPES = ['cleaning', 'moving', 'maintenance'] as const;
 export const REQUEST_STATUSES = ['pending', 'assigned', 'in_progress', 'completed'] as const;
@@ -98,6 +99,11 @@ export class AssignVendorDto {
 export class UpdateRealtimeRequestStatusDto {
   @IsIn(['assigned', 'in_progress', 'completed'])
   status!: Exclude<RequestStatus, 'pending'>;
+}
+
+export class ChangeUnifiedRequestPriorityDto {
+  @IsEnum(RequestPriority)
+  to!: RequestPriority;
 }
 
 export class EscalateRequestDto {

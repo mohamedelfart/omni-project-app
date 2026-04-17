@@ -76,6 +76,13 @@ function timelinePayloadSummary(action: TimelineAction): string | null {
     if (typeof vendorId === 'string' && vendorId.trim()) return `vendor ${vendorId}`;
     return null;
   }
+  if (type === 'PRIORITY_CHANGE') {
+    const from = typeof payload.from === 'string' ? payload.from : '';
+    const to = typeof payload.to === 'string' ? payload.to : '';
+    if (from && to) return `priority ${from} → ${to}`;
+    if (to) return `priority → ${to}`;
+    if (from) return `priority ${from} →`;
+  }
   if (type === 'STATUS_UPDATE' || type === 'CHANGE_STATUS') {
     const from =
       (typeof payload.fromStatus === 'string' && payload.fromStatus)

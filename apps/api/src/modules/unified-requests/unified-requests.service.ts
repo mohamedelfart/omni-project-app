@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, UnifiedRequestStatus } from '@prisma/client';
+import { Prisma, RequestPriority, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
@@ -8,6 +8,7 @@ import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import {
   AssignVendorDto,
+  ChangeUnifiedRequestPriorityDto,
   CreateRealtimeRequestDto,
   CreateUnifiedRequestDto,
   DispatchInstructionDto,
@@ -200,6 +201,88 @@ export class UnifiedRequestsService {
       actorType,
       actorId: user.id,
       payload: this.toJson({ vendorId: dto.vendorId }),
+    });
+  }
+
+  async changeUnifiedRequestPriority(
+    requestId: string,
+    user: AuthenticatedUser,
+    dto: ChangeUnifiedRequestPriorityDto,
+  ) {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const canChange = effectiveRoles.some((r) => r === 'admin' || r === 'command-center');
+    if (!canChange) {
+      throw new ForbiddenException('Only admin or command-center can change priority');
+    }
+
+    const existing = await this.prisma.unifiedRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        priority: true,
+        tenantId: true,
+        vendorId: true,
+        requestType: true,
+        status: true,
+        propertyIds: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!existing) {
+      throw new NotFoundException('Request not found');
+    }
+
+    const fromPriority = existing.priority;
+    if (fromPriority === dto.to) {
+      throw new BadRequestException('Priority is already set to this value');
+    }
+
+    const updated = await this.prisma.unifiedRequest.update({
+      where: { id: requestId },
+      data: { priority: dto.to as RequestPriority },
+    });
+
+    const minimal = this.toMinimalRequest(updated);
+    this.unifiedRequestsGateway.emitToRooms(
+      REQUEST_SOCKET_EVENTS.updated,
+      [
+        `user:${minimal.tenantId}`,
+        ...(minimal.vendorId ? [`user:${minimal.vendorId}`] : []),
+        'role:provider',
+        'role:admin',
+        'role:command-center',
+      ],
+      { request: minimal, changedFields: ['priority'] },
+    );
+
+    void this.appendPriorityChangeTicketAction(requestId, user, fromPriority, dto.to).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown logging error';
+      console.warn(`TicketAction PRIORITY_CHANGE failed: ${message}`);
+    });
+
+    return minimal;
+  }
+
+  private async appendPriorityChangeTicketAction(
+    ticketId: string,
+    user: AuthenticatedUser,
+    from: RequestPriority,
+    to: RequestPriority,
+  ): Promise<TicketAction> {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const actorType = effectiveRoles.includes('admin')
+      ? 'admin'
+      : effectiveRoles.includes('command-center')
+        ? 'command-center'
+        : user.role;
+
+    return this.ticketActionsService.createAction({
+      ticketId,
+      actionType: 'PRIORITY_CHANGE',
+      actorType,
+      actorId: user.id,
+      payload: this.toJson({ from, to }),
     });
   }
 

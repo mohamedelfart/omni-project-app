@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   AssignVendorDto,
+  ChangeUnifiedRequestPriorityDto,
   CreateRealtimeRequestDto,
   CreateUnifiedRequestDto,
   DispatchInstructionDto,
@@ -93,6 +94,16 @@ export class UnifiedRequestsController {
     @Body() dto: EscalateRequestDto,
   ): Promise<TicketAction> {
     return this.unifiedRequestsService.appendEscalationAction(id, user, dto);
+  }
+
+  @Post(':id/priority')
+  @Roles('admin', 'command-center')
+  changePriority(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ChangeUnifiedRequestPriorityDto,
+  ) {
+    return this.unifiedRequestsService.changeUnifiedRequestPriority(id, user, dto);
   }
 
   @Get(':id')
