@@ -77,6 +77,16 @@ function requestSlaAccentColor(aging: AgingTier, priorityTier: PrioritySlaTier):
   return null;
 }
 
+type RequestSectionGroup = 'attention' | 'in_progress' | 'completed';
+
+/** Uses `status`, `priority`, and SLA helpers on `createdAt` (same rules as row badges). */
+function getRequestSectionGroup(request: DashboardRequest): RequestSectionGroup {
+  if (request.status === 'completed') return 'completed';
+  const aging = getAgingTier(request.createdAt, request.status);
+  if (aging === 'overdue' || getPrioritySlaTier(request.priority) === 'critical') return 'attention';
+  return 'in_progress';
+}
+
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
   let list: unknown = raw;
   if (raw && typeof raw === 'object' && 'data' in raw) {
@@ -211,6 +221,7 @@ export default function AdminOverviewPage() {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [priorityFilter, setPriorityFilter] = useState<string>('');
   const [sortCreatedAt, setSortCreatedAt] = useState<'desc' | 'asc'>('desc');
+  const [statusActionRequestId, setStatusActionRequestId] = useState<string | null>(null);
   const timelineForIdRef = useRef<string | null>(null);
   timelineForIdRef.current = timelineForId;
 
@@ -225,6 +236,19 @@ export default function AdminOverviewPage() {
     };
     return [...list].sort((a, b) => (t(a.createdAt) - t(b.createdAt)) * dir);
   }, [requests, statusFilter, priorityFilter, sortCreatedAt]);
+
+  const sectionedRequests = useMemo(() => {
+    const attention: DashboardRequest[] = [];
+    const inProgress: DashboardRequest[] = [];
+    const completed: DashboardRequest[] = [];
+    for (const row of displayedRequests) {
+      const g = getRequestSectionGroup(row);
+      if (g === 'attention') attention.push(row);
+      else if (g === 'in_progress') inProgress.push(row);
+      else completed.push(row);
+    }
+    return { attention, inProgress, completed };
+  }, [displayedRequests]);
 
   useEffect(() => {
     let cancelled = false;
@@ -388,6 +412,212 @@ export default function AdminOverviewPage() {
     setError(null);
   };
 
+  const refreshRequestList = async () => {
+    const accessToken = getAccessToken();
+    const response = await fetch('/api/requests', {
+      cache: 'no-store',
+      headers: buildAuthHeaders(accessToken),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(getLoadErrorMessage(payload));
+    }
+    setRequests(normalizeRequestsResponseBody(payload));
+    setError(null);
+  };
+
+  const postCommandCenterStatus = async (requestId: string, nextStatus: 'in_progress' | 'completed') => {
+    const accessToken = getAccessToken();
+    setStatusActionRequestId(requestId);
+    try {
+      const response = await fetch(
+        `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/status`,
+        {
+          method: 'POST',
+          cache: 'no-store',
+          headers: buildAuthHeaders(accessToken),
+          body: JSON.stringify({ status: nextStatus }),
+        },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getLoadErrorMessage(payload));
+      }
+      await refreshRequestList();
+      if (timelineForId === requestId) {
+        await loadTimeline(requestId);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update status');
+    } finally {
+      setStatusActionRequestId(null);
+    }
+  };
+
+  function renderRequestRow(request: DashboardRequest) {
+    const agingTier = getAgingTier(request.createdAt, request.status);
+    const priorityTier = getPrioritySlaTier(request.priority);
+    const accent = requestSlaAccentColor(agingTier, priorityTier);
+    const slaBadges =
+      agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
+    return (
+      <div
+        key={request.id}
+        style={{
+          border: '1px solid #E5EDF5',
+          borderRadius: 8,
+          padding: 12,
+          display: 'grid',
+          gap: 8,
+          ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
+        }}
+      >
+        <div>
+          <strong>{request.id}</strong> - {request.type} - {request.status}
+        </div>
+        {slaBadges ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            {priorityTier === 'critical' ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  background: '#FEE2E2',
+                  color: '#991B1B',
+                }}
+              >
+                Urgent priority
+              </span>
+            ) : null}
+            {priorityTier === 'elevated' ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  background: '#FEF9C3',
+                  color: '#854D0E',
+                }}
+              >
+                High priority
+              </span>
+            ) : null}
+            {agingTier === 'overdue' ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  background: '#FEE2E2',
+                  color: '#991B1B',
+                }}
+              >
+                Overdue / stale
+              </span>
+            ) : null}
+            {agingTier === 'aging' ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  background: '#FFEDD5',
+                  color: '#9A3412',
+                }}
+              >
+                Aging
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <div style={{ color: '#64748B', fontSize: 14 }}>
+          tenant: {request.tenantId} | vendor: {request.vendorId ?? 'unassigned'}
+        </div>
+        <div style={{ color: '#64748B', fontSize: 14 }}>
+          <span>{formatDate(request.createdAt)}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button type="button" onClick={() => void loadTimeline(request.id)} style={{ padding: '6px 10px' }}>
+            Timeline
+          </button>
+          <button type="button" onClick={() => openEscalateForm(request.id)} style={{ padding: '6px 10px' }}>
+            {escalateForId === request.id ? 'Cancel escalate' : 'Escalate'}
+          </button>
+          {request.status === 'pending' ? (
+            <button type="button" onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
+              Assign Vendor
+            </button>
+          ) : null}
+          {request.status === 'assigned' ? (
+            <button
+              type="button"
+              disabled={statusActionRequestId === request.id}
+              onClick={() => void postCommandCenterStatus(request.id, 'in_progress')}
+              style={{ padding: '4px 8px', fontSize: 12 }}
+            >
+              Start
+            </button>
+          ) : null}
+          {request.status === 'in_progress' ? (
+            <button
+              type="button"
+              disabled={statusActionRequestId === request.id}
+              onClick={() => void postCommandCenterStatus(request.id, 'completed')}
+              style={{ padding: '4px 8px', fontSize: 12 }}
+            >
+              Complete
+            </button>
+          ) : null}
+        </div>
+        {escalateForId === request.id ? (
+          <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              <span>Reason (required)</span>
+              <input
+                value={escalateReason}
+                onChange={(e) => setEscalateReason(e.target.value)}
+                placeholder="Why escalate?"
+                style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <label style={{ display: 'grid', gap: 4, fontSize: 12, flex: '1 1 120px' }}>
+                Level (optional)
+                <input
+                  value={escalateLevel}
+                  onChange={(e) => setEscalateLevel(e.target.value)}
+                  style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 4, fontSize: 12, flex: '1 1 120px' }}>
+                Target (optional)
+                <input
+                  value={escalateTarget}
+                  onChange={(e) => setEscalateTarget(e.target.value)}
+                  style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
+                />
+              </label>
+            </div>
+            {escalateError ? <span style={{ color: '#991B1B', fontSize: 13 }}>{escalateError}</span> : null}
+            <button
+              type="button"
+              disabled={escalateSubmitting}
+              onClick={() => void submitEscalate(request.id)}
+              style={{ padding: '6px 12px', width: 'fit-content' }}
+            >
+              {escalateSubmitting ? 'Submitting…' : 'Submit escalation'}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <section style={{ display: 'grid', gap: 18 }}>
       <h1 style={{ margin: 0 }}>Dashboard Requests</h1>
@@ -463,149 +693,43 @@ export default function AdminOverviewPage() {
               No requests match the current filters
             </div>
           ) : null}
-          {displayedRequests.map((request) => {
-            const agingTier = getAgingTier(request.createdAt, request.status);
-            const priorityTier = getPrioritySlaTier(request.priority);
-            const accent = requestSlaAccentColor(agingTier, priorityTier);
-            const slaBadges =
-              agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
-            return (
-            <div
-              key={request.id}
-              style={{
-                border: '1px solid #E5EDF5',
-                borderRadius: 8,
-                padding: 12,
-                display: 'grid',
-                gap: 8,
-                ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
-              }}
-            >
+          {displayedRequests.length > 0 ? (
+            <div style={{ display: 'grid', gap: 18 }}>
               <div>
-                <strong>{request.id}</strong> - {request.type} - {request.status}
+                <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
+                  🚨 Needs Attention{' '}
+                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>({sectionedRequests.attention.length})</span>
+                </h3>
+                {sectionedRequests.attention.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>None</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: 12 }}>{sectionedRequests.attention.map(renderRequestRow)}</div>
+                )}
               </div>
-              {slaBadges ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                  {priorityTier === 'critical' ? (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        background: '#FEE2E2',
-                        color: '#991B1B',
-                      }}
-                    >
-                      Urgent priority
-                    </span>
-                  ) : null}
-                  {priorityTier === 'elevated' ? (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        background: '#FEF9C3',
-                        color: '#854D0E',
-                      }}
-                    >
-                      High priority
-                    </span>
-                  ) : null}
-                  {agingTier === 'overdue' ? (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        background: '#FEE2E2',
-                        color: '#991B1B',
-                      }}
-                    >
-                      Overdue / stale
-                    </span>
-                  ) : null}
-                  {agingTier === 'aging' ? (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        background: '#FFEDD5',
-                        color: '#9A3412',
-                      }}
-                    >
-                      Aging
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-              <div style={{ color: '#64748B', fontSize: 14 }}>
-                tenant: {request.tenantId} | vendor: {request.vendorId ?? 'unassigned'}
+              <div>
+                <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
+                  ⚠️ In Progress{' '}
+                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>({sectionedRequests.inProgress.length})</span>
+                </h3>
+                {sectionedRequests.inProgress.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>None</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: 12 }}>{sectionedRequests.inProgress.map(renderRequestRow)}</div>
+                )}
               </div>
-              <div style={{ color: '#64748B', fontSize: 14 }}>
-                <span>{formatDate(request.createdAt)}</span>
+              <div>
+                <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
+                  📦 Completed{' '}
+                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>({sectionedRequests.completed.length})</span>
+                </h3>
+                {sectionedRequests.completed.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>None</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: 12 }}>{sectionedRequests.completed.map(renderRequestRow)}</div>
+                )}
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <button type="button" onClick={() => void loadTimeline(request.id)} style={{ padding: '6px 10px' }}>
-                  Timeline
-                </button>
-                <button type="button" onClick={() => openEscalateForm(request.id)} style={{ padding: '6px 10px' }}>
-                  {escalateForId === request.id ? 'Cancel escalate' : 'Escalate'}
-                </button>
-                {request.status === 'pending' ? (
-                  <button type="button" onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
-                    Assign Vendor
-                  </button>
-                ) : null}
-              </div>
-              {escalateForId === request.id ? (
-                <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
-                  <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-                    <span>Reason (required)</span>
-                    <input
-                      value={escalateReason}
-                      onChange={(e) => setEscalateReason(e.target.value)}
-                      placeholder="Why escalate?"
-                      style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
-                    />
-                  </label>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <label style={{ display: 'grid', gap: 4, fontSize: 12, flex: '1 1 120px' }}>
-                      Level (optional)
-                      <input
-                        value={escalateLevel}
-                        onChange={(e) => setEscalateLevel(e.target.value)}
-                        style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
-                      />
-                    </label>
-                    <label style={{ display: 'grid', gap: 4, fontSize: 12, flex: '1 1 120px' }}>
-                      Target (optional)
-                      <input
-                        value={escalateTarget}
-                        onChange={(e) => setEscalateTarget(e.target.value)}
-                        style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
-                      />
-                    </label>
-                  </div>
-                  {escalateError ? <span style={{ color: '#991B1B', fontSize: 13 }}>{escalateError}</span> : null}
-                  <button
-                    type="button"
-                    disabled={escalateSubmitting}
-                    onClick={() => void submitEscalate(request.id)}
-                    style={{ padding: '6px 12px', width: 'fit-content' }}
-                  >
-                    {escalateSubmitting ? 'Submitting…' : 'Submit escalation'}
-                  </button>
-                </div>
-              ) : null}
             </div>
-            );
-          })}
+          ) : null}
         </div>
       </article>
 
