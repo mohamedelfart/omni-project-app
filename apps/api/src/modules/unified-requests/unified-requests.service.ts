@@ -368,6 +368,89 @@ export class UnifiedRequestsService {
     return minimal;
   }
 
+  async updateUnifiedRequestStatusCommandCenter(
+    requestId: string,
+    user: AuthenticatedUser,
+    dto: UpdateRealtimeRequestStatusDto,
+  ) {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const allowed = effectiveRoles.some((r) => r === 'admin' || r === 'command-center');
+    if (!allowed) {
+      throw new ForbiddenException('Only admin or command-center can update status here');
+    }
+
+    const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: requestId },
+      select: {
+        id: true,
+        vendorId: true,
+        status: true,
+        tenantId: true,
+        requestType: true,
+        propertyIds: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    const current = this.toMinimalStatus(existing.status);
+    const isValidTransition = (
+      (current === 'assigned' && dto.status === 'in_progress')
+      || (current === 'in_progress' && dto.status === 'completed')
+    );
+    if (!isValidTransition) {
+      throw new BadRequestException(`Invalid status transition: ${current} -> ${dto.status}`);
+    }
+
+    const updated = await this.prisma.unifiedRequest.update({
+      where: { id: requestId },
+      data: {
+        status: this.fromMinimalStatus(dto.status),
+      },
+    });
+
+    const minimal = this.toMinimalRequest(updated);
+    this.unifiedRequestsGateway.emitToRooms(
+      REQUEST_SOCKET_EVENTS.updated,
+      [
+        `user:${minimal.tenantId}`,
+        ...(minimal.vendorId ? [`user:${minimal.vendorId}`] : []),
+        'role:provider',
+        'role:admin',
+        'role:command-center',
+      ],
+      { request: minimal, changedFields: ['status'] },
+    );
+
+    void this.appendStatusUpdateTicketAction(requestId, user, current, dto.status).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown logging error';
+      console.warn(`TicketAction STATUS_UPDATE failed: ${message}`);
+    });
+    return minimal;
+  }
+
+  private async appendStatusUpdateTicketAction(
+    ticketId: string,
+    user: AuthenticatedUser,
+    from: string,
+    to: string,
+  ): Promise<TicketAction> {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    const actorType = effectiveRoles.includes('admin')
+      ? 'admin'
+      : effectiveRoles.includes('command-center')
+        ? 'command-center'
+        : user.role;
+
+    return this.ticketActionsService.createAction({
+      ticketId,
+      actionType: 'STATUS_UPDATE',
+      actorType,
+      actorId: user.id,
+      payload: this.toJson({ from, to }),
+    });
+  }
+
   async updateRealtimeStatus(requestId: string, vendorId: string, dto: UpdateRealtimeRequestStatusDto) {
     const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
       where: { id: requestId },

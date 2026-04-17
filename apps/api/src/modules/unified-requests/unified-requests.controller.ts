@@ -106,6 +106,16 @@ export class UnifiedRequestsController {
     return this.unifiedRequestsService.changeUnifiedRequestPriority(id, user, dto);
   }
 
+  @Post(':id/status')
+  @Roles('admin', 'command-center')
+  updateStatusCommandCenter(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateRealtimeRequestStatusDto,
+  ) {
+    return this.unifiedRequestsService.updateUnifiedRequestStatusCommandCenter(id, user, dto);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string) {
     return this.unifiedRequestsService.getById(id);
