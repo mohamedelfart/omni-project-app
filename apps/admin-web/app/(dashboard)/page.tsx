@@ -89,6 +89,12 @@ function timelinePayloadSummary(action: TimelineAction): string | null {
     if (to) return `→ ${to}`;
     if (from) return `${from} →`;
   }
+  if (type === 'ESCALATE') {
+    const reason = payload.reason;
+    if (typeof reason === 'string' && reason.trim()) {
+      return reason.length > 96 ? `${reason.slice(0, 96)}…` : reason;
+    }
+  }
   return null;
 }
 
@@ -114,6 +120,12 @@ export default function AdminOverviewPage() {
   const [timelineActions, setTimelineActions] = useState<TimelineAction[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState<string | null>(null);
+  const [escalateForId, setEscalateForId] = useState<string | null>(null);
+  const [escalateReason, setEscalateReason] = useState('');
+  const [escalateLevel, setEscalateLevel] = useState('');
+  const [escalateTarget, setEscalateTarget] = useState('');
+  const [escalateSubmitting, setEscalateSubmitting] = useState(false);
+  const [escalateError, setEscalateError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -200,6 +212,55 @@ export default function AdminOverviewPage() {
     }
   };
 
+  const openEscalateForm = (requestId: string) => {
+    if (escalateForId === requestId) {
+      setEscalateForId(null);
+      setEscalateError(null);
+      return;
+    }
+    setEscalateForId(requestId);
+    setEscalateReason('');
+    setEscalateLevel('');
+    setEscalateTarget('');
+    setEscalateError(null);
+  };
+
+  const submitEscalate = async (requestId: string) => {
+    if (!escalateReason.trim()) {
+      setEscalateError('Reason is required');
+      return;
+    }
+    const accessToken = getAccessToken();
+    setEscalateSubmitting(true);
+    setEscalateError(null);
+    const body: Record<string, unknown> = { reason: escalateReason.trim() };
+    if (escalateLevel.trim()) body.level = escalateLevel.trim();
+    if (escalateTarget.trim()) body.target = escalateTarget.trim();
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: buildAuthHeaders(accessToken),
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getLoadErrorMessage(payload));
+      }
+      setEscalateForId(null);
+      setEscalateReason('');
+      setEscalateLevel('');
+      setEscalateTarget('');
+      if (timelineForId === requestId) {
+        await loadTimeline(requestId);
+      }
+    } catch (e) {
+      setEscalateError(e instanceof Error ? e.message : 'Escalation failed');
+    } finally {
+      setEscalateSubmitting(false);
+    }
+  };
+
   const assignVendor = async (requestId: string) => {
     const accessToken = getAccessToken();
     if (!vendorId.trim()) {
@@ -258,9 +319,12 @@ export default function AdminOverviewPage() {
               <div style={{ color: '#64748B', fontSize: 14 }}>
                 <span>{formatDate(request.createdAt)}</span>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <button type="button" onClick={() => void loadTimeline(request.id)} style={{ padding: '6px 10px' }}>
                   Timeline
+                </button>
+                <button type="button" onClick={() => openEscalateForm(request.id)} style={{ padding: '6px 10px' }}>
+                  {escalateForId === request.id ? 'Cancel escalate' : 'Escalate'}
                 </button>
                 {request.status === 'pending' ? (
                   <button type="button" onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
@@ -268,6 +332,46 @@ export default function AdminOverviewPage() {
                   </button>
                 ) : null}
               </div>
+              {escalateForId === request.id ? (
+                <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                    <span>Reason (required)</span>
+                    <input
+                      value={escalateReason}
+                      onChange={(e) => setEscalateReason(e.target.value)}
+                      placeholder="Why escalate?"
+                      style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
+                    />
+                  </label>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12, flex: '1 1 120px' }}>
+                      Level (optional)
+                      <input
+                        value={escalateLevel}
+                        onChange={(e) => setEscalateLevel(e.target.value)}
+                        style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12, flex: '1 1 120px' }}>
+                      Target (optional)
+                      <input
+                        value={escalateTarget}
+                        onChange={(e) => setEscalateTarget(e.target.value)}
+                        style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
+                      />
+                    </label>
+                  </div>
+                  {escalateError ? <span style={{ color: '#991B1B', fontSize: 13 }}>{escalateError}</span> : null}
+                  <button
+                    type="button"
+                    disabled={escalateSubmitting}
+                    onClick={() => void submitEscalate(request.id)}
+                    style={{ padding: '6px 12px', width: 'fit-content' }}
+                  >
+                    {escalateSubmitting ? 'Submitting…' : 'Submit escalation'}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
