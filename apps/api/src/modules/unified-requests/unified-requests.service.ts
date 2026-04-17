@@ -521,6 +521,7 @@ export class UnifiedRequestsService {
     vendorId: string | null;
     requestType: string;
     status: UnifiedRequestStatus;
+    priority: RequestPriority;
     propertyIds: string[];
     createdAt: Date;
     updatedAt: Date;
@@ -531,6 +532,7 @@ export class UnifiedRequestsService {
       vendorId: request.vendorId ?? undefined,
       type: request.requestType,
       status: this.toMinimalStatus(request.status),
+      priority: request.priority,
       propertyIds: request.propertyIds ?? [],
       primaryPropertyId: request.propertyIds?.[0],
       createdAt: request.createdAt,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { getAccessToken } from '../lib/auth';
 
@@ -14,7 +14,12 @@ type DashboardRequest = {
   updatedAt: string;
   propertyIds?: string[];
   primaryPropertyId?: string;
+  /** Present when upstream list payload includes `priority` (Prisma `RequestPriority`). */
+  priority?: string;
 };
+
+const DASHBOARD_STATUSES: DashboardRequest['status'][] = ['pending', 'assigned', 'in_progress', 'completed'];
+const DASHBOARD_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT', 'CRITICAL'] as const;
 
 /** Read model for `GET /api/v1/unified-requests/:id/history` (shared TicketAction shape). */
 type TimelineAction = {
@@ -32,12 +37,17 @@ function formatDate(value: string) {
 }
 
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
-  if (Array.isArray(raw)) return raw as DashboardRequest[];
+  let list: unknown = raw;
   if (raw && typeof raw === 'object' && 'data' in raw) {
-    const inner = (raw as { data: unknown }).data;
-    if (Array.isArray(inner)) return inner as DashboardRequest[];
+    list = (raw as { data: unknown }).data;
   }
-  return [];
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+    .map((row) => ({
+      ...(row as unknown as DashboardRequest),
+      priority: typeof row.priority === 'string' ? row.priority : undefined,
+    }));
 }
 
 function asPayloadRecord(value: unknown): Record<string, unknown> {
@@ -157,8 +167,23 @@ export default function AdminOverviewPage() {
   const [escalateTarget, setEscalateTarget] = useState('');
   const [escalateSubmitting, setEscalateSubmitting] = useState(false);
   const [escalateError, setEscalateError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [priorityFilter, setPriorityFilter] = useState<string>('');
+  const [sortCreatedAt, setSortCreatedAt] = useState<'desc' | 'asc'>('desc');
   const timelineForIdRef = useRef<string | null>(null);
   timelineForIdRef.current = timelineForId;
+
+  const displayedRequests = useMemo(() => {
+    let list = requests;
+    if (statusFilter) list = list.filter((r) => r.status === statusFilter);
+    if (priorityFilter) list = list.filter((r) => r.priority === priorityFilter);
+    const dir = sortCreatedAt === 'asc' ? 1 : -1;
+    const t = (value: string) => {
+      const ms = new Date(value).getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    };
+    return [...list].sort((a, b) => (t(a.createdAt) - t(b.createdAt)) * dir);
+  }, [requests, statusFilter, priorityFilter, sortCreatedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -343,13 +368,61 @@ export default function AdminOverviewPage() {
 
       <article style={{ background: '#FFF', border: '1px solid #ddd', borderRadius: 8, padding: 12 }}>
         <h2 style={{ marginTop: 0 }}>All Requests</h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
+            <span style={{ color: '#64748B' }}>Status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={{ padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+            >
+              <option value="">All</option>
+              {DASHBOARD_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
+            <span style={{ color: '#64748B' }}>Priority</span>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              style={{ padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+            >
+              <option value="">All</option>
+              {DASHBOARD_PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
+            <span style={{ color: '#64748B' }}>Sort by created</span>
+            <select
+              value={sortCreatedAt}
+              onChange={(e) => setSortCreatedAt(e.target.value === 'asc' ? 'asc' : 'desc')}
+              style={{ padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+            >
+              <option value="desc">Newest first</option>
+              <option value="asc">Oldest first</option>
+            </select>
+          </label>
+        </div>
         <div style={{ display: 'grid', gap: 12 }}>
           {!loading && requests.length === 0 ? (
             <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 12, color: '#64748B' }}>
               No requests
             </div>
           ) : null}
-          {requests.map((request) => (
+          {!loading && requests.length > 0 && displayedRequests.length === 0 ? (
+            <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 12, color: '#64748B' }}>
+              No requests match the current filters
+            </div>
+          ) : null}
+          {displayedRequests.map((request) => (
             <div key={request.id} style={{ border: '1px solid #E5EDF5', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
               <div>
                 <strong>{request.id}</strong> - {request.type} - {request.status}
