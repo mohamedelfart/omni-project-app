@@ -6,6 +6,7 @@ const navGroups = [
     label: 'Command Center',
     items: [
       { title: 'Overview', href: '/', icon: '⬡' },
+      { title: 'Tenant view', href: '/tenant-view', icon: '🧾' },
       { title: 'Escalations', href: '/escalations', icon: '🚨' },
       { title: 'Audit Log', href: '/audit', icon: '📋' },
     ],
