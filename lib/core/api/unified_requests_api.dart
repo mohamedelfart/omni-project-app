@@ -203,4 +203,52 @@ class UnifiedRequestsApi {
         .map((Object? e) => UnifiedRequestListItem.fromJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  static UnifiedRequestListItem _parseEnvelopeObject(String body) {
+    final Object? decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Unexpected unified-requests response shape');
+    }
+    final Object? rawData = decoded['data'];
+    if (rawData is! Map<String, dynamic>) {
+      throw const FormatException('Expected envelope data object');
+    }
+    return UnifiedRequestListItem.fromJson(rawData);
+  }
+
+  /// `GET /api/v1/unified-requests/:id` when possible; otherwise falls back to list + match.
+  static Future<UnifiedRequestListItem> refreshItemForTenant(String id) async {
+    if (id.isEmpty) {
+      throw ArgumentError('id required');
+    }
+    if (_bearerToken.isEmpty) {
+      throw Exception(
+        'Missing JWT: set OMNIRENT_API_TOKEN via --dart-define=OMNIRENT_API_TOKEN=...',
+      );
+    }
+
+    final Uri uri = Uri.parse('${_normalizeBase()}/unified-requests/${Uri.encodeComponent(id)}');
+    try {
+      final http.Response response = await http.get(
+        uri,
+        headers: <String, String>{
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $_bearerToken',
+        },
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return _parseEnvelopeObject(response.body);
+      }
+    } catch (_) {
+      // fall through to list
+    }
+
+    final List<UnifiedRequestListItem> list = await listMineForTenant();
+    for (final UnifiedRequestListItem row in list) {
+      if (row.id == id) {
+        return row;
+      }
+    }
+    throw Exception('Request not found in your list');
+  }
 }

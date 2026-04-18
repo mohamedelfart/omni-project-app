@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -17,32 +19,71 @@ class _MyRequestsScreenState extends State<MyRequestsScreen> {
   List<UnifiedRequestListItem>? _items;
   Object? _error;
   bool _loading = true;
+  Timer? _pollTimer;
+
+  static String _fingerprint(List<UnifiedRequestListItem> rows) {
+    return rows
+        .map(
+          (UnifiedRequestListItem r) =>
+              '${r.id}|${r.status}|${r.requestType}|${r.createdAt.toIso8601String()}',
+        )
+        .join('~');
+  }
 
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_load(showBlockingLoader: true));
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!mounted || _loading) return;
+      unawaited(_load(showBlockingLoader: false));
+    });
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({required bool showBlockingLoader}) async {
+    if (showBlockingLoader) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    } else {
+      setState(() => _error = null);
+    }
     try {
       final List<UnifiedRequestListItem> rows = await UnifiedRequestsApi.listMineForTenant();
       if (!mounted) return;
+      final String? prevFp = _items == null ? null : _fingerprint(_items!);
+      final String nextFp = _fingerprint(rows);
+      final bool changed = prevFp != null && prevFp != nextFp;
       setState(() {
         _items = rows;
         _loading = false;
+        _error = null;
       });
+      if (!showBlockingLoader && changed && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Updated', style: TextStyle(fontSize: 13)),
+            duration: Duration(milliseconds: 1400),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _error = e;
-        _loading = false;
-        _items = null;
-      });
+      if (showBlockingLoader) {
+        setState(() {
+          _error = e;
+          _loading = false;
+          _items = null;
+        });
+      }
     }
   }
 
@@ -73,7 +114,7 @@ class _MyRequestsScreenState extends State<MyRequestsScreen> {
                           ),
                           const SizedBox(height: 16),
                           TextButton(
-                            onPressed: _load,
+                            onPressed: () => _load(showBlockingLoader: true),
                             child: const Text('Retry'),
                           ),
                         ],
@@ -81,7 +122,7 @@ class _MyRequestsScreenState extends State<MyRequestsScreen> {
                     ),
                   )
                 : RefreshIndicator(
-                    onRefresh: _load,
+                    onRefresh: () => _load(showBlockingLoader: false),
                     child: (_items == null || _items!.isEmpty)
                         ? ListView(
                             physics: const AlwaysScrollableScrollPhysics(),
