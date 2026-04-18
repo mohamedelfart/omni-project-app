@@ -16,6 +16,42 @@ const handlersRef: { current: AdminRequestsRealtimeHandlers } = { current: noopH
 
 const getAccessTokenRef: { current: () => string | null } = { current: () => null };
 
+const REQUEST_CREATED_DEDUP_MS = 2000;
+const recentRequestCreatedAt = new Map<string, number>();
+
+function extractRequestIdFromCreatedPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const nested =
+    record.data && typeof record.data === 'object' && record.data !== null && !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : record;
+  const request = nested.request;
+  if (request && typeof request === 'object' && request !== null && 'id' in request) {
+    const id = (request as { id: unknown }).id;
+    if (typeof id === 'string' && id.length > 0) return id;
+    if (typeof id === 'number' && Number.isFinite(id)) return String(id);
+  }
+  return null;
+}
+
+function shouldSuppressDuplicateRequestCreated(id: string | null): boolean {
+  if (!id) return false;
+  const now = Date.now();
+  const last = recentRequestCreatedAt.get(id);
+  if (last !== undefined && now - last < REQUEST_CREATED_DEDUP_MS) {
+    return true;
+  }
+  recentRequestCreatedAt.set(id, now);
+  if (recentRequestCreatedAt.size > 500) {
+    const cutoff = now - REQUEST_CREATED_DEDUP_MS;
+    for (const [key, at] of recentRequestCreatedAt) {
+      if (at < cutoff) recentRequestCreatedAt.delete(key);
+    }
+  }
+  return false;
+}
+
 let socket: Socket | null = null;
 let listenersWired = false;
 let lastSocketBase: string | null = null;
@@ -67,6 +103,8 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
   if (!listenersWired) {
     listenersWired = true;
     socket.on('request.created', (payload: unknown) => {
+      const id = extractRequestIdFromCreatedPayload(payload);
+      if (shouldSuppressDuplicateRequestCreated(id)) return;
       handlersRef.current.onRequestCreated(payload);
     });
     socket.on('request.assigned', () => {

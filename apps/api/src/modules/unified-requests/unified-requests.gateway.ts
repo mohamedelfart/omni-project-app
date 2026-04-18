@@ -49,8 +49,22 @@ export class UnifiedRequestsGateway implements OnGatewayConnection, OnGatewayDis
 
   emitToRooms(eventName: string, roomNames: string[], payload: unknown): void {
     const uniqueRooms = [...new Set(roomNames.filter(Boolean))];
+    if (uniqueRooms.length === 0) {
+      return;
+    }
+    // Deduplicate by socket id: a client may be in several target rooms (e.g. `role:admin` and
+    // `role:command-center`); emit once per socket instead of once per room.
+    const adapter = this.server.sockets.adapter;
+    const recipients = new Set<string>();
     for (const roomName of uniqueRooms) {
-      this.server.to(roomName).emit(eventName, payload);
+      const ids = adapter.rooms.get(roomName);
+      if (!ids) continue;
+      for (const socketId of ids) {
+        recipients.add(socketId);
+      }
+    }
+    for (const socketId of recipients) {
+      this.server.to(socketId).emit(eventName, payload);
     }
   }
 

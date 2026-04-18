@@ -210,35 +210,68 @@ function getLoadErrorMessage(payload: unknown): string {
 
 function extractRequestIdFromSocketPayload(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
-  const record = payload as { request?: unknown };
-  const request = record.request;
+  const record = payload as Record<string, unknown>;
+  const nested =
+    record.data && typeof record.data === 'object' && record.data !== null && !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : record;
+  const request = nested.request;
   if (request && typeof request === 'object' && request !== null && 'id' in request) {
     const id = (request as { id: unknown }).id;
     if (typeof id === 'string' && id.length > 0) return id;
+    if (typeof id === 'number' && Number.isFinite(id)) return String(id);
   }
   return null;
+}
+
+let sharedChimeAudioContext: AudioContext | null = null;
+
+function getChimeAudioContext(): AudioContext | null {
+  const ACtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!ACtx) return null;
+  if (!sharedChimeAudioContext || sharedChimeAudioContext.state === 'closed') {
+    sharedChimeAudioContext = new ACtx();
+  }
+  return sharedChimeAudioContext;
+}
+
+/** Prime AudioContext after a user gesture (autoplay policy); safe to call repeatedly. */
+function unlockChimeAudioContext(): void {
+  try {
+    const ctx = getChimeAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      void ctx.resume();
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Very short, low-volume tone — only for `request.created` (new rows), not status churn. */
 function playNewRequestChime() {
   try {
-    const ACtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!ACtx) return;
-    const ctx = new ACtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(784, ctx.currentTime);
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.035, ctx.currentTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.13);
-    osc.onended = () => {
-      void ctx.close();
+    const ctx = getChimeAudioContext();
+    if (!ctx) return;
+    const play = () => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(784, ctx.currentTime);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.035, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.13);
     };
+    if (ctx.state === 'suspended') {
+      void ctx.resume().then(play).catch(() => {
+        /* still suspended until user gesture */
+      });
+    } else {
+      play();
+    }
   } catch {
     /* ignore — autoplay / AudioContext policy */
   }
@@ -361,6 +394,14 @@ export default function AdminOverviewPage() {
   );
 
   useEffect(() => {
+    const onPointerDown = () => {
+      unlockChimeAudioContext();
+    };
+    window.addEventListener('pointerdown', onPointerDown, { passive: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const accessToken = getAccessToken();
     let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
@@ -446,10 +487,19 @@ export default function AdminOverviewPage() {
       setAdminRequestsRealtimeHandlers({
         onRequestCreated: (payload: unknown) => {
           if (cancelled) return;
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[admin-realtime] request.created received', payload);
+          }
           const newId = extractRequestIdFromSocketPayload(payload);
           if (newId) {
-            playNewRequestChime();
+            if (process.env.NODE_ENV === 'development') {
+              console.log('[admin-realtime] flash applied to id', newId);
+            }
             markArrivalFlash(newId);
+            if (process.env.NODE_ENV === 'development') {
+              console.log('[admin-realtime] chime triggered');
+            }
+            playNewRequestChime();
           }
           void load();
         },
@@ -775,7 +825,10 @@ export default function AdminOverviewPage() {
       const arrivalGlow = '0 0 0 2px rgba(52, 211, 153, 0.55), 0 0 22px rgba(16, 185, 129, 0.22)';
       const existingShadow = typeof rowCardStyle.boxShadow === 'string' ? rowCardStyle.boxShadow : '';
       rowCardStyle.boxShadow = existingShadow ? `${existingShadow}, ${arrivalGlow}` : arrivalGlow;
-      if (!isTopSlaRow) {
+      if (isTopSlaRow) {
+        // Top SLA row uses blue fill by default; blend so arrival is still visible without dropping SLA emphasis.
+        rowCardStyle.background = isRowSelected ? '#E6F4F0' : '#E8F4F2';
+      } else {
         rowCardStyle.background = isRowSelected ? '#EDFAF4' : '#F0FDF9';
       }
     }
