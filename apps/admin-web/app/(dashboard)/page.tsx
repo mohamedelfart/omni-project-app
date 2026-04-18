@@ -619,6 +619,9 @@ export default function AdminOverviewPage() {
     const accent = requestSlaAccentColor(agingTier, priorityTier);
     const slaBadges =
       agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
+    const isTopSlaRow = displayedRequests.length > 0 && request.id === displayedRequests[0].id;
+    const rowActionBusy =
+      statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;
     return (
       <div
         key={request.id}
@@ -628,6 +631,13 @@ export default function AdminOverviewPage() {
           padding: 12,
           display: 'grid',
           gap: 8,
+          ...(isTopSlaRow
+            ? {
+                background: '#EFF6FF',
+                border: '1px solid #60A5FA',
+                boxShadow: '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2)',
+              }
+            : {}),
           ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
         }}
       >
@@ -771,6 +781,9 @@ export default function AdminOverviewPage() {
             >
               Complete
             </button>
+          ) : null}
+          {rowActionBusy ? (
+            <span style={{ fontSize: 11, color: '#64748B', fontStyle: 'italic' }}>Processing...</span>
           ) : null}
         </div>
         {escalateForId === request.id ? (
@@ -971,12 +984,12 @@ export default function AdminOverviewPage() {
         <div style={{ display: 'grid', gap: 12 }}>
           {!loading && requests.length === 0 ? (
             <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 12, color: '#64748B' }}>
-              No requests
+              No active requests. System is clear.
             </div>
           ) : null}
           {!loading && requests.length > 0 && displayedRequests.length === 0 ? (
             <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 12, color: '#64748B' }}>
-              No requests match the current filters
+              No requests match current filters
             </div>
           ) : null}
           {displayedRequests.length > 0 ? (
