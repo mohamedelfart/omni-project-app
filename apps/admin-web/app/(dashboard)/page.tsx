@@ -620,6 +620,7 @@ export default function AdminOverviewPage() {
     const slaBadges =
       agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
     const isTopSlaRow = displayedRequests.length > 0 && request.id === displayedRequests[0].id;
+    const isRowSelected = selectedRequestIds.includes(request.id);
     const rowActionBusy =
       statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;
     return (
@@ -635,9 +636,16 @@ export default function AdminOverviewPage() {
             ? {
                 background: '#EFF6FF',
                 border: '1px solid #60A5FA',
-                boxShadow: '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2)',
+                boxShadow: isRowSelected
+                  ? '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2), inset 0 0 0 2px rgba(71, 85, 105, 0.32)'
+                  : '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2)',
               }
-            : {}),
+            : isRowSelected
+              ? {
+                  background: '#F8FAFC',
+                  boxShadow: 'inset 0 0 0 1px #CBD5E1',
+                }
+              : {}),
           ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
         }}
       >
