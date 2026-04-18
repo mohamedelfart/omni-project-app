@@ -69,6 +69,17 @@ function getPrioritySlaTier(priority: string | undefined): PrioritySlaTier {
   return 'none';
 }
 
+/** Lower rank sorts first: overdue → aging → critical → high → rest (uses only createdAt, status, priority). */
+function getDashboardSlaSortBucket(request: DashboardRequest): number {
+  const aging = getAgingTier(request.createdAt, request.status);
+  if (aging === 'overdue') return 0;
+  if (aging === 'aging') return 1;
+  const priorityTier = getPrioritySlaTier(request.priority);
+  if (priorityTier === 'critical') return 2;
+  if (priorityTier === 'elevated') return 3;
+  return 4;
+}
+
 function requestSlaAccentColor(aging: AgingTier, priorityTier: PrioritySlaTier): string | null {
   if (aging === 'overdue') return '#DC2626';
   if (aging === 'aging') return '#EA580C';
@@ -234,7 +245,12 @@ export default function AdminOverviewPage() {
       const ms = new Date(value).getTime();
       return Number.isFinite(ms) ? ms : 0;
     };
-    return [...list].sort((a, b) => (t(a.createdAt) - t(b.createdAt)) * dir);
+    return [...list].sort((a, b) => {
+      const bucketA = getDashboardSlaSortBucket(a);
+      const bucketB = getDashboardSlaSortBucket(b);
+      if (bucketA !== bucketB) return bucketA - bucketB;
+      return (t(a.createdAt) - t(b.createdAt)) * dir;
+    });
   }, [requests, statusFilter, priorityFilter, sortCreatedAt]);
 
   const sectionedRequests = useMemo(() => {
