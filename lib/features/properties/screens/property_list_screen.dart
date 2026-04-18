@@ -13,6 +13,7 @@ import 'omnirent_flow_state.dart';
 import 'profile_screen.dart';
 import 'property_details_screen.dart';
 import 'property_flow_ui.dart';
+import '../../requests/screens/my_requests_screen.dart';
 
 // --- Under Viewing Badge Widget ---
 class _UnderViewingBadge extends StatelessWidget {
@@ -347,7 +348,21 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
                       ),
                     ),
                     const OmniLanguageSwitcher(),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: OmniRentI18n.t(context, 'My Requests', 'طلباتي'),
+                      icon: const Icon(Icons.list_alt_rounded),
+                      color: const Color(0xFF0F172A),
+                      onPressed: () {
+                        Navigator.push<void>(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => const MyRequestsScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 4),
                     IconButton(
                       tooltip:
                           OmniRentI18n.t(context, 'Profile', 'الملف الشخصي'),

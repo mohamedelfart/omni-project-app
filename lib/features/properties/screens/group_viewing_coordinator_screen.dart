@@ -1,7 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 
+import '../../../core/api/unified_requests_api.dart';
 import '../../../core/models/models.dart';
-import '../../../core/services/service_manager.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
 import 'property_flow_ui.dart';
 
@@ -26,7 +26,6 @@ class GroupViewingCoordinatorScreen extends StatefulWidget {
 
 class _GroupViewingCoordinatorScreenState
     extends State<GroupViewingCoordinatorScreen> {
-  final ServiceManager _serviceManager = ServiceManager();
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
 
@@ -502,12 +501,10 @@ class _GroupViewingCoordinatorScreenState
                           selectedTime.minute,
                         );
                         try {
-                          final ViewingRequest request =
-                              await _serviceManager.createViewingRequest(
-                            propertyId: widget.properties.first.id,
-                            viewingDateTime: viewingDateTime,
-                            tenantId: 'tenant-demo-001',
-                            tenantName: 'Tenant User',
+                          final String requestId =
+                              await UnifiedRequestsApi.createViewingUnifiedRequest(
+                            properties: widget.properties,
+                            preferredDateTime: viewingDateTime,
                           );
                           if (!mounted) return;
                           setState(() {
@@ -518,12 +515,15 @@ class _GroupViewingCoordinatorScreenState
                           if (widget.onViewingConfirmed != null) {
                             widget.onViewingConfirmed!(widget.properties.first.id);
                           }
+                          if (!context.mounted) return;
                           // Show success and return to HomeScreen
                           showDialog(
                             context: context,
                             builder: (_) => AlertDialog(
                               title: const Text('Success'),
-                              content: const Text('Viewing request submitted!'),
+                              content: Text(
+                                'Viewing request submitted.\nRequest ID: $requestId',
+                              ),
                               actions: [
                                 TextButton(
                                   onPressed: () {
