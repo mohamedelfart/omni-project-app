@@ -2,7 +2,7 @@ import { Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { OnGatewayConnection, OnGatewayDisconnect, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
+import { Namespace, Server, Socket } from 'socket.io';
 
 type SocketUser = {
   sub: string;
@@ -54,7 +54,7 @@ export class UnifiedRequestsGateway implements OnGatewayConnection, OnGatewayDis
     }
     // Deduplicate by socket id: a client may be in several target rooms (e.g. `role:admin` and
     // `role:command-center`); emit once per socket instead of once per room.
-    const adapter = this.server.sockets.adapter;
+    const adapter = (this.server as unknown as Namespace).adapter;
     const recipients = new Set<string>();
     for (const roomName of uniqueRooms) {
       const ids = adapter.rooms.get(roomName);

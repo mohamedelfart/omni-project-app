@@ -7,6 +7,7 @@ import {
   setAdminRequestsRealtimeHandlers,
 } from '../lib/admin-requests-socket';
 import { getAccessToken } from '../lib/auth';
+import { extractSocketRequestId } from '../lib/extract-socket-request-id';
 
 type DashboardRequest = {
   id: string;
@@ -208,22 +209,6 @@ function getLoadErrorMessage(payload: unknown): string {
   return 'Failed to load requests';
 }
 
-function extractRequestIdFromSocketPayload(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const record = payload as Record<string, unknown>;
-  const nested =
-    record.data && typeof record.data === 'object' && record.data !== null && !Array.isArray(record.data)
-      ? (record.data as Record<string, unknown>)
-      : record;
-  const request = nested.request;
-  if (request && typeof request === 'object' && request !== null && 'id' in request) {
-    const id = (request as { id: unknown }).id;
-    if (typeof id === 'string' && id.length > 0) return id;
-    if (typeof id === 'number' && Number.isFinite(id)) return String(id);
-  }
-  return null;
-}
-
 let sharedChimeAudioContext: AudioContext | null = null;
 
 function getChimeAudioContext(): AudioContext | null {
@@ -249,10 +234,18 @@ function unlockChimeAudioContext(): void {
 
 /** Very short, low-volume tone — only for `request.created` (new rows), not status churn. */
 function playNewRequestChime() {
-  try {
-    const ctx = getChimeAudioContext();
-    if (!ctx) return;
-    const play = () => {
+  void (async () => {
+    try {
+      unlockChimeAudioContext();
+      const ctx = getChimeAudioContext();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        await ctx.resume().catch(() => {});
+      }
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[admin-realtime] audio context state', ctx.state);
+      }
+      if (ctx.state !== 'running') return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -264,17 +257,10 @@ function playNewRequestChime() {
       gain.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + 0.13);
-    };
-    if (ctx.state === 'suspended') {
-      void ctx.resume().then(play).catch(() => {
-        /* still suspended until user gesture */
-      });
-    } else {
-      play();
+    } catch {
+      /* ignore — autoplay / AudioContext policy */
     }
-  } catch {
-    /* ignore — autoplay / AudioContext policy */
-  }
+  })();
 }
 
 async function fetchTimelineHistory(requestId: string): Promise<TimelineAction[]> {
@@ -490,7 +476,7 @@ export default function AdminOverviewPage() {
           if (process.env.NODE_ENV === 'development') {
             console.log('[admin-realtime] request.created received', payload);
           }
-          const newId = extractRequestIdFromSocketPayload(payload);
+          const newId = extractSocketRequestId(payload);
           if (newId) {
             if (process.env.NODE_ENV === 'development') {
               console.log('[admin-realtime] flash applied to id', newId);
@@ -499,7 +485,10 @@ export default function AdminOverviewPage() {
             if (process.env.NODE_ENV === 'development') {
               console.log('[admin-realtime] chime triggered');
             }
+            unlockChimeAudioContext();
             playNewRequestChime();
+          } else if (process.env.NODE_ENV === 'development') {
+            console.log('[admin-realtime] request.created missing resolvable request.id', payload);
           }
           void load();
         },
@@ -510,7 +499,7 @@ export default function AdminOverviewPage() {
         onRequestUpdated: (payload: unknown) => {
           if (cancelled) return;
           void load();
-          const updatedId = extractRequestIdFromSocketPayload(payload);
+          const updatedId = extractSocketRequestId(payload);
           if (!updatedId || timelineForIdRef.current !== updatedId) return;
           void (async () => {
             try {
