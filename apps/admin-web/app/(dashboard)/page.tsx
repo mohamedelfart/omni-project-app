@@ -266,6 +266,21 @@ export default function AdminOverviewPage() {
     });
   }, [requests, statusFilter, priorityFilter, sortCreatedAt]);
 
+  const slaSummaryCounts = useMemo(() => {
+    let overdue = 0;
+    let aging = 0;
+    let critical = 0;
+    let openTotal = 0;
+    for (const r of displayedRequests) {
+      if (r.status !== 'completed') openTotal += 1;
+      const agingTier = getAgingTier(r.createdAt, r.status);
+      if (agingTier === 'overdue') overdue += 1;
+      else if (agingTier === 'aging') aging += 1;
+      if (getPrioritySlaTier(r.priority) === 'critical') critical += 1;
+    }
+    return { overdue, aging, critical, openTotal };
+  }, [displayedRequests]);
+
   const sectionedRequests = useMemo(() => {
     const attention: DashboardRequest[] = [];
     const inProgress: DashboardRequest[] = [];
@@ -726,6 +741,36 @@ export default function AdminOverviewPage() {
             </select>
           </label>
         </div>
+        {!loading && requests.length > 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 14,
+              alignItems: 'baseline',
+              marginBottom: 12,
+              padding: '8px 10px',
+              background: '#F8FAFC',
+              borderRadius: 6,
+              border: '1px solid #E2E8F0',
+              fontSize: 12,
+              color: '#64748B',
+            }}
+          >
+            <span>
+              <strong style={{ color: '#991B1B' }}>{slaSummaryCounts.overdue}</strong> Overdue
+            </span>
+            <span>
+              <strong style={{ color: '#9A3412' }}>{slaSummaryCounts.aging}</strong> Aging
+            </span>
+            <span>
+              <strong style={{ color: '#BE123C' }}>{slaSummaryCounts.critical}</strong> Critical
+            </span>
+            <span>
+              <strong style={{ color: '#0F172A' }}>{slaSummaryCounts.openTotal}</strong> Open
+            </span>
+          </div>
+        ) : null}
         <div style={{ display: 'grid', gap: 12 }}>
           {!loading && requests.length === 0 ? (
             <div style={{ border: '1px dashed #CBD5E1', borderRadius: 8, padding: 12, color: '#64748B' }}>
