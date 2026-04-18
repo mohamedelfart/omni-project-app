@@ -90,8 +90,12 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
     listenersWired = true;
     socket.on('request.created', (payload: unknown) => {
       const id = extractSocketRequestId(payload);
-      if (shouldSuppressDuplicateRequestCreated(id)) return;
-      handlersRef.current.onRequestCreated(payload);
+      const suppress = shouldSuppressDuplicateRequestCreated(id);
+      console.log('[admin-debug] socket request.created', { id, suppress });
+      if (suppress) return;
+      const run = handlersRef.current.onRequestCreated;
+      console.log('[admin-debug] socket invoking onRequestCreated', { typeof: typeof run });
+      run(payload);
     });
     socket.on('request.assigned', () => {
       handlersRef.current.onRequestAssigned();

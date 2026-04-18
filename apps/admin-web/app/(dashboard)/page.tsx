@@ -234,6 +234,7 @@ function unlockChimeAudioContext(): void {
 
 /** Very short, low-volume tone — only for `request.created` (new rows), not status churn. */
 function playNewRequestChime() {
+  console.log('[admin-debug] playNewRequestChime called');
   void (async () => {
     try {
       unlockChimeAudioContext();
@@ -242,9 +243,7 @@ function playNewRequestChime() {
       if (ctx.state === 'suspended') {
         await ctx.resume().catch(() => {});
       }
-      if (process.env.NODE_ENV === 'development') {
-        console.log('[admin-realtime] audio context state', ctx.state);
-      }
+      console.log('[admin-debug] audio context state', ctx.state);
       if (ctx.state !== 'running') return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -451,9 +450,11 @@ export default function AdminOverviewPage() {
 
       const markArrivalFlash = (id: string) => {
         if (!id.trim()) return;
+        console.log('[admin-debug] markArrivalFlash called', id);
         setArrivalFlashIds((prev) => {
           const next = new Set(prev);
           next.add(id);
+          console.log('[admin-debug] arrivalFlashIds after add', Array.from(next));
           return next;
         });
         const prevTimer = flashTimers.get(id);
@@ -469,26 +470,22 @@ export default function AdminOverviewPage() {
         flashTimers.set(id, t);
       };
 
-      setAdminRequestsRealtimeGetAccessToken(() => getAccessToken());
       setAdminRequestsRealtimeHandlers({
         onRequestCreated: (payload: unknown) => {
-          if (cancelled) return;
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[admin-realtime] request.created received', payload);
+          if (cancelled) {
+            console.log('[admin-debug] request.created skipped: effect cancelled');
+            return;
           }
+          console.log('[admin-debug] request.created received', payload);
           const newId = extractSocketRequestId(payload);
+          console.log('[admin-debug] extracted request id', newId);
           if (newId) {
-            if (process.env.NODE_ENV === 'development') {
-              console.log('[admin-realtime] flash applied to id', newId);
-            }
             markArrivalFlash(newId);
-            if (process.env.NODE_ENV === 'development') {
-              console.log('[admin-realtime] chime triggered');
-            }
+            console.log('[admin-debug] calling playNewRequestChime');
             unlockChimeAudioContext();
             playNewRequestChime();
-          } else if (process.env.NODE_ENV === 'development') {
-            console.log('[admin-realtime] request.created missing resolvable request.id', payload);
+          } else {
+            console.log('[admin-debug] no newId — skip flash/chime', payload);
           }
           void load();
         },
@@ -516,16 +513,15 @@ export default function AdminOverviewPage() {
           })();
         },
       });
+      setAdminRequestsRealtimeGetAccessToken(() => getAccessToken());
       ensureAdminRequestsRealtimeSocket(socketBase);
     }
 
     return () => {
       cancelled = true;
-      setAdminRequestsRealtimeHandlers({
-        onRequestCreated: () => {},
-        onRequestAssigned: () => {},
-        onRequestUpdated: () => {},
-      });
+      // Do not replace module handlers with no-ops: the realtime socket singleton can still
+      // deliver events between this cleanup and the next mount (e.g. React Strict Mode).
+      // Registered handlers already guard with `cancelled` so no state updates run after unmount.
       loadAbortController?.abort();
       if (arrivalFlashTimers) {
         for (const t of arrivalFlashTimers.values()) {
@@ -782,6 +778,7 @@ export default function AdminOverviewPage() {
     const isTopSlaRow = firstDisplayed !== undefined && request.id === firstDisplayed.id;
     const isRowSelected = selectedRequestIds.includes(request.id);
     const isArrivalFlash = arrivalFlashIds.has(request.id);
+    console.log('[admin-debug] renderRequestRow', { requestId: request.id, isArrivalFlash });
     const rowActionBusy =
       statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;
 
