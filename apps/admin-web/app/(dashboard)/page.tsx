@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { io } from 'socket.io-client';
+import {
+  ensureAdminRequestsRealtimeSocket,
+  setAdminRequestsRealtimeGetAccessToken,
+  setAdminRequestsRealtimeHandlers,
+} from '../lib/admin-requests-socket';
 import { getAccessToken } from '../lib/auth';
 
 type DashboardRequest = {
@@ -359,15 +363,21 @@ export default function AdminOverviewPage() {
   useEffect(() => {
     let cancelled = false;
     const accessToken = getAccessToken();
-    let socket: ReturnType<typeof io> | null = null;
     let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
+    let loadAbortController: AbortController | null = null;
 
     const load = async () => {
+      loadAbortController?.abort();
+      const ac = new AbortController();
+      loadAbortController = ac;
+      const { signal } = ac;
+
       try {
         const requestHeaders = buildAuthHeaders(accessToken);
         const response = await fetch('/api/requests', {
           cache: 'no-store',
           headers: requestHeaders,
+          signal,
         });
         const payload = await response.json().catch(() => null);
 
@@ -378,11 +388,14 @@ export default function AdminOverviewPage() {
           throw new Error(getLoadErrorMessage(payload));
         }
 
-        if (!cancelled) {
+        if (!cancelled && !signal.aborted) {
           setRequests(normalizeRequestsResponseBody(payload));
           setError(null);
         }
       } catch (loadError) {
+        if (signal.aborted) {
+          return;
+        }
         if (process.env.NODE_ENV === 'development') {
           console.error('Dashboard load requests error:', loadError);
         }
@@ -390,7 +403,9 @@ export default function AdminOverviewPage() {
           setError(loadError instanceof Error ? loadError.message : 'Failed to load requests');
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !signal.aborted) {
+          setLoading(false);
+        }
       }
     };
 
@@ -427,48 +442,58 @@ export default function AdminOverviewPage() {
         flashTimers.set(id, t);
       };
 
-      socket = io(`${socketBase}/requests`, {
-        transports: ['websocket'],
-        auth: { token: accessToken },
-      });
-      socket.on('request.created', (payload: unknown) => {
-        const newId = extractRequestIdFromSocketPayload(payload);
-        if (newId) {
-          playNewRequestChime();
-          markArrivalFlash(newId);
-        }
-        void load();
-      });
-      socket.on('request.assigned', () => void load());
-      socket.on('request.updated', (payload: unknown) => {
-        void load();
-        const updatedId = extractRequestIdFromSocketPayload(payload);
-        if (!updatedId || timelineForIdRef.current !== updatedId) return;
-        void (async () => {
-          try {
-            const actions = await fetchTimelineHistory(updatedId);
-            if (!cancelled && timelineForIdRef.current === updatedId) {
-              setTimelineActions(actions);
-              setTimelineError(null);
-            }
-          } catch (refreshError) {
-            if (!cancelled && timelineForIdRef.current === updatedId) {
-              setTimelineError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh timeline');
-            }
+      setAdminRequestsRealtimeGetAccessToken(() => getAccessToken());
+      setAdminRequestsRealtimeHandlers({
+        onRequestCreated: (payload: unknown) => {
+          if (cancelled) return;
+          const newId = extractRequestIdFromSocketPayload(payload);
+          if (newId) {
+            playNewRequestChime();
+            markArrivalFlash(newId);
           }
-        })();
+          void load();
+        },
+        onRequestAssigned: () => {
+          if (cancelled) return;
+          void load();
+        },
+        onRequestUpdated: (payload: unknown) => {
+          if (cancelled) return;
+          void load();
+          const updatedId = extractRequestIdFromSocketPayload(payload);
+          if (!updatedId || timelineForIdRef.current !== updatedId) return;
+          void (async () => {
+            try {
+              const actions = await fetchTimelineHistory(updatedId);
+              if (!cancelled && timelineForIdRef.current === updatedId) {
+                setTimelineActions(actions);
+                setTimelineError(null);
+              }
+            } catch (refreshError) {
+              if (!cancelled && timelineForIdRef.current === updatedId) {
+                setTimelineError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh timeline');
+              }
+            }
+          })();
+        },
       });
+      ensureAdminRequestsRealtimeSocket(socketBase);
     }
 
     return () => {
       cancelled = true;
+      setAdminRequestsRealtimeHandlers({
+        onRequestCreated: () => {},
+        onRequestAssigned: () => {},
+        onRequestUpdated: () => {},
+      });
+      loadAbortController?.abort();
       if (arrivalFlashTimers) {
         for (const t of arrivalFlashTimers.values()) {
           clearTimeout(t);
         }
         arrivalFlashTimers.clear();
       }
-      socket?.disconnect();
     };
   }, []);
 

@@ -34,34 +34,36 @@ export class UnifiedRequestsService {
   }
 
   async create(userId: string, dto: CreateUnifiedRequestDto) {
-    const unifiedRequest = await this.prisma.unifiedRequest.create({
-      data: {
-        userId,
-        tenantId: userId,
-        requestType: dto.requestType,
-        serviceType: dto.serviceType,
-        source: 'tenant-app',
-        destination: 'core',
-        country: dto.country,
-        city: dto.city,
-        propertyIds: dto.propertyIds ?? [],
-        preferredTime: dto.preferredTime ? new Date(dto.preferredTime) : undefined,
-        locationLabel: dto.locationLabel,
-        currentLat: dto.currentLat,
-        currentLng: dto.currentLng,
-        targetLat: dto.targetLat,
-        targetLng: dto.targetLng,
-        pickupLat: dto.pickupLat,
-        pickupLng: dto.pickupLng,
-        dropoffLat: dto.dropoffLat,
-        dropoffLng: dto.dropoffLng,
-        metadata: this.toJson(dto.metadata),
-        trackingEvents: {
-          create: [{ actorType: 'tenant', title: 'Request submitted', status: 'SUBMITTED' }],
+    const unifiedRequest = await this.prisma.$transaction((tx) =>
+      tx.unifiedRequest.create({
+        data: {
+          userId,
+          tenantId: userId,
+          requestType: dto.requestType,
+          serviceType: dto.serviceType,
+          source: 'tenant-app',
+          destination: 'core',
+          country: dto.country,
+          city: dto.city,
+          propertyIds: dto.propertyIds ?? [],
+          preferredTime: dto.preferredTime ? new Date(dto.preferredTime) : undefined,
+          locationLabel: dto.locationLabel,
+          currentLat: dto.currentLat,
+          currentLng: dto.currentLng,
+          targetLat: dto.targetLat,
+          targetLng: dto.targetLng,
+          pickupLat: dto.pickupLat,
+          pickupLng: dto.pickupLng,
+          dropoffLat: dto.dropoffLat,
+          dropoffLng: dto.dropoffLng,
+          metadata: this.toJson(dto.metadata),
+          trackingEvents: {
+            create: [{ actorType: 'tenant', title: 'Request submitted', status: 'SUBMITTED' }],
+          },
         },
-      },
-      include: { trackingEvents: true },
-    });
+        include: { trackingEvents: true },
+      }),
+    );
 
     const routing = await this.orchestratorService.routeRequest(unifiedRequest.id);
 
@@ -306,22 +308,24 @@ export class UnifiedRequestsService {
   }
 
   async createRealtimeRequest(userId: string, dto: CreateRealtimeRequestDto) {
-    const created = await this.prisma.unifiedRequest.create({
-      data: {
-        userId,
-        tenantId: userId,
-        requestType: dto.type,
-        serviceType: dto.type,
-        source: 'tenant-app',
-        destination: 'core',
-        // Phase 2: hardcoded geo; replace with config/property-based resolution in later phase.
-        country: 'QA',
-        city: 'Doha',
-        propertyIds: dto.propertyIds ?? [],
-        status: UnifiedRequestStatus.SUBMITTED,
-        vendorId: dto.vendorId,
-      },
-    });
+    const created = await this.prisma.$transaction((tx) =>
+      tx.unifiedRequest.create({
+        data: {
+          userId,
+          tenantId: userId,
+          requestType: dto.type,
+          serviceType: dto.type,
+          source: 'tenant-app',
+          destination: 'core',
+          // Phase 2: hardcoded geo; replace with config/property-based resolution in later phase.
+          country: 'QA',
+          city: 'Doha',
+          propertyIds: dto.propertyIds ?? [],
+          status: UnifiedRequestStatus.SUBMITTED,
+          vendorId: dto.vendorId,
+        },
+      }),
+    );
 
     const minimal = this.toMinimalRequest(created);
     this.unifiedRequestsGateway.emitToRooms(
