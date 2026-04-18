@@ -247,7 +247,10 @@ export default function AdminOverviewPage() {
   const [priorityFilter, setPriorityFilter] = useState<string>('');
   const [sortCreatedAt, setSortCreatedAt] = useState<'desc' | 'asc'>('desc');
   const [statusActionRequestId, setStatusActionRequestId] = useState<string | null>(null);
+  const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
+  const [bulkEscalating, setBulkEscalating] = useState(false);
   const timelineForIdRef = useRef<string | null>(null);
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   timelineForIdRef.current = timelineForId;
 
   const displayedRequests = useMemo(() => {
@@ -295,6 +298,24 @@ export default function AdminOverviewPage() {
     }
     return { attention, inProgress, completed };
   }, [displayedRequests]);
+
+  const displayedRequestIds = useMemo(() => displayedRequests.map((r) => r.id), [displayedRequests]);
+  const allDisplayedSelected = useMemo(
+    () => displayedRequestIds.length > 0 && displayedRequestIds.every((id) => selectedRequestIds.includes(id)),
+    [displayedRequestIds, selectedRequestIds],
+  );
+
+  useEffect(() => {
+    const valid = new Set(requests.map((r) => r.id));
+    setSelectedRequestIds((prev) => prev.filter((id) => valid.has(id)));
+  }, [requests]);
+
+  useEffect(() => {
+    const el = selectAllCheckboxRef.current;
+    if (!el || displayedRequestIds.length === 0) return;
+    const selectedInView = displayedRequestIds.filter((id) => selectedRequestIds.includes(id)).length;
+    el.indeterminate = selectedInView > 0 && selectedInView < displayedRequestIds.length;
+  }, [displayedRequestIds, selectedRequestIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -470,6 +491,49 @@ export default function AdminOverviewPage() {
     }
   };
 
+  const bulkEscalateSelected = async () => {
+    if (selectedRequestIds.length === 0) return;
+    const accessToken = getAccessToken();
+    setBulkEscalating(true);
+    setError(null);
+    const ids = [...selectedRequestIds];
+    let failures = 0;
+    try {
+      for (const requestId of ids) {
+        try {
+          const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+            method: 'POST',
+            cache: 'no-store',
+            headers: buildAuthHeaders(accessToken),
+            body: JSON.stringify({ reason: SLA_QUICK_ESCALATE_REASON }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(getLoadErrorMessage(payload));
+          }
+        } catch {
+          failures += 1;
+        }
+      }
+      if (failures === 0) {
+        setSelectedRequestIds((prev) => prev.filter((id) => !ids.includes(id)));
+        setEscalateForId(null);
+        setEscalateReason('');
+        setEscalateLevel('');
+        setEscalateTarget('');
+        if (timelineForId && ids.includes(timelineForId)) {
+          await loadTimeline(timelineForId);
+        }
+      } else {
+        setError(`${failures} of ${ids.length} bulk escalation(s) failed`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bulk escalation failed');
+    } finally {
+      setBulkEscalating(false);
+    }
+  };
+
   const assignVendor = async (requestId: string) => {
     const accessToken = getAccessToken();
     if (!vendorId.trim()) {
@@ -532,6 +596,19 @@ export default function AdminOverviewPage() {
     }
   };
 
+  const toggleRequestSelected = (id: string) => {
+    setSelectedRequestIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAllDisplayed = () => {
+    setSelectedRequestIds((prev) => {
+      if (displayedRequestIds.length === 0) return prev;
+      const allOn = displayedRequestIds.every((id) => prev.includes(id));
+      if (allOn) return prev.filter((id) => !displayedRequestIds.includes(id));
+      return [...new Set([...prev, ...displayedRequestIds])];
+    });
+  };
+
   function renderRequestRow(request: DashboardRequest) {
     const agingTier = getAgingTier(request.createdAt, request.status);
     const priorityTier = getPrioritySlaTier(request.priority);
@@ -554,6 +631,15 @@ export default function AdminOverviewPage() {
           ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
         }}
       >
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <input
+            type="checkbox"
+            checked={selectedRequestIds.includes(request.id)}
+            onChange={() => toggleRequestSelected(request.id)}
+            style={{ marginTop: 3, flexShrink: 0 }}
+            aria-label={`Select request ${request.id}`}
+          />
+          <div style={{ display: 'grid', gap: 8, flex: 1, minWidth: 0 }}>
         <div>
           <strong>{request.id}</strong> - {request.type} - {request.status}
         </div>
@@ -727,6 +813,8 @@ export default function AdminOverviewPage() {
             </button>
           </div>
         ) : null}
+          </div>
+        </div>
       </div>
     );
   }
@@ -796,6 +884,60 @@ export default function AdminOverviewPage() {
             </select>
           </label>
         </div>
+        {!loading && displayedRequests.length > 0 ? (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: 12,
+              marginBottom: 12,
+              fontSize: 13,
+            }}
+          >
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: '#64748B' }}>
+              <input
+                ref={selectAllCheckboxRef}
+                type="checkbox"
+                checked={allDisplayedSelected}
+                onChange={toggleSelectAllDisplayed}
+              />
+              <span>Select all in view</span>
+            </label>
+            {selectedRequestIds.length > 0 ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  alignItems: 'center',
+                  paddingLeft: 10,
+                  borderLeft: '1px solid #E2E8F0',
+                }}
+              >
+                <span style={{ fontSize: 12, color: '#475569' }}>{selectedRequestIds.length} selected</span>
+                <button type="button" disabled title="Coming soon" style={{ padding: '4px 8px', fontSize: 12, opacity: 0.5 }}>
+                  Bulk Assign
+                </button>
+                <button type="button" disabled title="Coming soon" style={{ padding: '4px 8px', fontSize: 12, opacity: 0.5 }}>
+                  Bulk Start
+                </button>
+                <button type="button" disabled title="Coming soon" style={{ padding: '4px 8px', fontSize: 12, opacity: 0.5 }}>
+                  Bulk Complete
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkEscalating || escalateSubmitting}
+                  title={SLA_QUICK_ESCALATE_REASON}
+                  onClick={() => void bulkEscalateSelected()}
+                  style={{ padding: '4px 8px', fontSize: 12 }}
+                >
+                  {bulkEscalating ? 'Escalating…' : 'Bulk Escalate'}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {!loading && requests.length > 0 ? (
           <div
             style={{
