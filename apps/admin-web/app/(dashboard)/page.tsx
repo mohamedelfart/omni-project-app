@@ -21,6 +21,18 @@ type DashboardRequest = {
 const DASHBOARD_STATUSES: DashboardRequest['status'][] = ['pending', 'assigned', 'in_progress', 'completed'];
 const DASHBOARD_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT', 'CRITICAL'] as const;
 
+/** Default operator view: all statuses except `completed` (sentinel; not a real request status). */
+const STATUS_FILTER_NON_COMPLETED = '__non_completed__';
+
+/** Primary row CTA (pending → Assign, assigned → Start, in_progress → Complete); logic unchanged. */
+const DASHBOARD_PRIMARY_ACTION_BTN: Record<string, string | number> = {
+  fontWeight: 700,
+  background: '#2563EB',
+  color: '#FFFFFF',
+  border: '1px solid #1D4ED8',
+  borderRadius: 6,
+};
+
 /** Read model for `GET /api/v1/unified-requests/:id/history` (shared TicketAction shape). */
 type TimelineAction = {
   type: string;
@@ -229,7 +241,7 @@ export default function AdminOverviewPage() {
   const [escalateTarget, setEscalateTarget] = useState('');
   const [escalateSubmitting, setEscalateSubmitting] = useState(false);
   const [escalateError, setEscalateError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>(STATUS_FILTER_NON_COMPLETED);
   const [priorityFilter, setPriorityFilter] = useState<string>('');
   const [sortCreatedAt, setSortCreatedAt] = useState<'desc' | 'asc'>('desc');
   const [statusActionRequestId, setStatusActionRequestId] = useState<string | null>(null);
@@ -238,7 +250,8 @@ export default function AdminOverviewPage() {
 
   const displayedRequests = useMemo(() => {
     let list = requests;
-    if (statusFilter) list = list.filter((r) => r.status === statusFilter);
+    if (statusFilter === STATUS_FILTER_NON_COMPLETED) list = list.filter((r) => r.status !== 'completed');
+    else if (statusFilter) list = list.filter((r) => r.status === statusFilter);
     if (priorityFilter) list = list.filter((r) => r.priority === priorityFilter);
     const dir = sortCreatedAt === 'asc' ? 1 : -1;
     const t = (value: string) => {
@@ -565,7 +578,11 @@ export default function AdminOverviewPage() {
             {escalateForId === request.id ? 'Cancel escalate' : 'Escalate'}
           </button>
           {request.status === 'pending' ? (
-            <button type="button" onClick={() => void assignVendor(request.id)} style={{ width: 140, padding: 8 }}>
+            <button
+              type="button"
+              onClick={() => void assignVendor(request.id)}
+              style={{ width: 140, padding: 8, ...DASHBOARD_PRIMARY_ACTION_BTN }}
+            >
               Assign Vendor
             </button>
           ) : null}
@@ -574,7 +591,12 @@ export default function AdminOverviewPage() {
               type="button"
               disabled={statusActionRequestId === request.id}
               onClick={() => void postCommandCenterStatus(request.id, 'in_progress')}
-              style={{ padding: '4px 8px', fontSize: 12 }}
+              style={{
+                padding: '4px 8px',
+                fontSize: 12,
+                ...DASHBOARD_PRIMARY_ACTION_BTN,
+                ...(statusActionRequestId === request.id ? { opacity: 0.55 } : {}),
+              }}
             >
               Start
             </button>
@@ -584,7 +606,12 @@ export default function AdminOverviewPage() {
               type="button"
               disabled={statusActionRequestId === request.id}
               onClick={() => void postCommandCenterStatus(request.id, 'completed')}
-              style={{ padding: '4px 8px', fontSize: 12 }}
+              style={{
+                padding: '4px 8px',
+                fontSize: 12,
+                ...DASHBOARD_PRIMARY_ACTION_BTN,
+                ...(statusActionRequestId === request.id ? { opacity: 0.55 } : {}),
+              }}
             >
               Complete
             </button>
@@ -663,6 +690,7 @@ export default function AdminOverviewPage() {
               onChange={(e) => setStatusFilter(e.target.value)}
               style={{ padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
             >
+              <option value={STATUS_FILTER_NON_COMPLETED}>Open (not completed)</option>
               <option value="">All</option>
               {DASHBOARD_STATUSES.map((s) => (
                 <option key={s} value={s}>
