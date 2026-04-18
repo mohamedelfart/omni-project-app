@@ -249,8 +249,10 @@ export default function AdminOverviewPage() {
   const [statusActionRequestId, setStatusActionRequestId] = useState<string | null>(null);
   const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
   const [bulkEscalating, setBulkEscalating] = useState(false);
+  const [bulkFeedback, setBulkFeedback] = useState<{ text: string; kind: 'success' | 'error' } | null>(null);
   const timelineForIdRef = useRef<string | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+  const bulkFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   timelineForIdRef.current = timelineForId;
 
   const displayedRequests = useMemo(() => {
@@ -316,6 +318,16 @@ export default function AdminOverviewPage() {
     const selectedInView = displayedRequestIds.filter((id) => selectedRequestIds.includes(id)).length;
     el.indeterminate = selectedInView > 0 && selectedInView < displayedRequestIds.length;
   }, [displayedRequestIds, selectedRequestIds]);
+
+  useEffect(
+    () => () => {
+      if (bulkFeedbackTimerRef.current) {
+        clearTimeout(bulkFeedbackTimerRef.current);
+        bulkFeedbackTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -491,6 +503,18 @@ export default function AdminOverviewPage() {
     }
   };
 
+  const showBulkFeedback = (payload: { text: string; kind: 'success' | 'error' }) => {
+    if (bulkFeedbackTimerRef.current) {
+      clearTimeout(bulkFeedbackTimerRef.current);
+      bulkFeedbackTimerRef.current = null;
+    }
+    setBulkFeedback(payload);
+    bulkFeedbackTimerRef.current = setTimeout(() => {
+      setBulkFeedback(null);
+      bulkFeedbackTimerRef.current = null;
+    }, 5000);
+  };
+
   const bulkEscalateSelected = async () => {
     if (selectedRequestIds.length === 0) return;
     const accessToken = getAccessToken();
@@ -524,11 +548,18 @@ export default function AdminOverviewPage() {
         if (timelineForId && ids.includes(timelineForId)) {
           await loadTimeline(timelineForId);
         }
+        showBulkFeedback({ text: 'All selected requests escalated successfully', kind: 'success' });
       } else {
-        setError(`${failures} of ${ids.length} bulk escalation(s) failed`);
+        showBulkFeedback({
+          text: `${failures} of ${ids.length} requests failed to escalate`,
+          kind: 'error',
+        });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Bulk escalation failed');
+      showBulkFeedback({
+        text: e instanceof Error ? e.message : 'Bulk escalation failed',
+        kind: 'error',
+      });
     } finally {
       setBulkEscalating(false);
     }
@@ -957,6 +988,21 @@ export default function AdminOverviewPage() {
                 </button>
               </div>
             ) : null}
+          </div>
+        ) : null}
+        {bulkFeedback ? (
+          <div
+            style={{
+              marginBottom: 12,
+              padding: '8px 10px',
+              borderRadius: 6,
+              fontSize: 13,
+              border: bulkFeedback.kind === 'success' ? '1px solid #A7F3D0' : '1px solid #FECACA',
+              background: bulkFeedback.kind === 'success' ? '#ECFDF5' : '#FEF2F2',
+              color: bulkFeedback.kind === 'success' ? '#065F46' : '#991B1B',
+            }}
+          >
+            {bulkFeedback.text}
           </div>
         ) : null}
         {!loading && requests.length > 0 ? (
