@@ -99,6 +99,23 @@ async function main(): Promise<void> {
     },
   });
 
+  /** Matches `sub` in admin-web `DEV_ACCESS_TOKEN_FALLBACK` so local JWT maps to a real User row. */
+  const seedAdminJwtUser = await prisma.user.upsert({
+    where: { id: 'seed-admin' },
+    update: { isVerified: true, isProfileCompleted: true },
+    create: {
+      id: 'seed-admin',
+      email: 'seed-admin@quickrent.local',
+      phoneNumber: '+97459999001',
+      fullName: 'Seed Admin (local JWT)',
+      locale: 'en',
+      countryCode: 'QA',
+      status: UserStatus.ACTIVE,
+      isVerified: true,
+      isProfileCompleted: true,
+    },
+  });
+
   const roleByCode = Object.fromEntries(roles.map((role) => [role.code, role.id]));
   const getRoleId = (code: RoleCode): string => {
     const roleId = roleByCode[code];
@@ -115,6 +132,8 @@ async function main(): Promise<void> {
       { userId: commandCenterUser.id, roleId: getRoleId(RoleCode.ADMIN) },
       { userId: commandCenterUser.id, roleId: getRoleId(RoleCode.COMMAND_CENTER) },
       { userId: providerUser.id, roleId: getRoleId(RoleCode.PROVIDER) },
+      { userId: seedAdminJwtUser.id, roleId: getRoleId(RoleCode.ADMIN) },
+      { userId: seedAdminJwtUser.id, roleId: getRoleId(RoleCode.COMMAND_CENTER) },
     ],
     skipDuplicates: true,
   });

@@ -125,10 +125,22 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
   if (!Array.isArray(list)) return [];
   return list
     .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
-    .map((row) => ({
-      ...(row as unknown as DashboardRequest),
-      priority: typeof row.priority === 'string' ? row.priority : undefined,
-    }));
+    .map((row) => {
+      const rec = row as Record<string, unknown>;
+      const rawId = rec.id;
+      const id =
+        typeof rawId === 'string'
+          ? rawId.trim()
+          : typeof rawId === 'number' && Number.isFinite(rawId)
+            ? String(rawId)
+            : '';
+      return {
+        ...(row as unknown as DashboardRequest),
+        id,
+        priority: typeof row.priority === 'string' ? row.priority : undefined,
+      };
+    })
+    .filter((row) => row.id.length > 0);
 }
 
 function asPayloadRecord(value: unknown): Record<string, unknown> {
@@ -299,10 +311,20 @@ export default function AdminOverviewPage() {
   const [bulkFeedback, setBulkFeedback] = useState<{ text: string; kind: 'success' | 'error' } | null>(null);
   /** Request ids to pulse-highlight after `request.created` (cleared ~4.5s each). */
   const [arrivalFlashIds, setArrivalFlashIds] = useState<Set<string>>(() => new Set());
+  const requestsRef = useRef<DashboardRequest[]>([]);
+  const arrivalFlashIdsRef = useRef<Set<string>>(new Set());
   const timelineForIdRef = useRef<string | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const bulkFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   timelineForIdRef.current = timelineForId;
+
+  useEffect(() => {
+    requestsRef.current = requests;
+  }, [requests]);
+
+  useEffect(() => {
+    arrivalFlashIdsRef.current = arrivalFlashIds;
+  }, [arrivalFlashIds]);
 
   const displayedRequests = useMemo(() => {
     let list = requests;
@@ -449,45 +471,58 @@ export default function AdminOverviewPage() {
       arrivalFlashTimers = flashTimers;
 
       const markArrivalFlash = (id: string) => {
-        if (!id.trim()) return;
-        console.log('[admin-debug] markArrivalFlash called', id);
+        const key = String(id).trim();
+        if (!key) return;
+        console.log('[admin-debug] markArrivalFlash called', key);
         setArrivalFlashIds((prev) => {
           const next = new Set(prev);
-          next.add(id);
+          next.add(key);
           console.log('[admin-debug] arrivalFlashIds after add', Array.from(next));
           return next;
         });
-        const prevTimer = flashTimers.get(id);
+        const prevTimer = flashTimers.get(key);
         if (prevTimer) clearTimeout(prevTimer);
         const t = setTimeout(() => {
           setArrivalFlashIds((prev) => {
             const next = new Set(prev);
-            next.delete(id);
+            next.delete(key);
             return next;
           });
-          flashTimers.delete(id);
+          flashTimers.delete(key);
         }, 4500);
-        flashTimers.set(id, t);
+        flashTimers.set(key, t);
       };
 
       setAdminRequestsRealtimeHandlers({
         onRequestCreated: (payload: unknown) => {
+          console.log('[page] onRequestCreated called', payload);
           if (cancelled) {
             console.log('[admin-debug] request.created skipped: effect cancelled');
             return;
           }
           console.log('[admin-debug] request.created received', payload);
-          const newId = extractSocketRequestId(payload);
-          console.log('[admin-debug] extracted request id', newId);
-          if (newId) {
-            markArrivalFlash(newId);
-            console.log('[admin-debug] calling playNewRequestChime');
-            unlockChimeAudioContext();
-            playNewRequestChime();
-          } else {
-            console.log('[admin-debug] no newId — skip flash/chime', payload);
-          }
-          void load();
+          const newIdRaw = extractSocketRequestId(payload);
+          const requestId = newIdRaw ? String(newIdRaw).trim() : '';
+          console.log('[admin-debug] extracted request id', requestId);
+          const run = async () => {
+            if (cancelled) return;
+            if (requestId) {
+              markArrivalFlash(requestId);
+              console.log('[admin-debug] calling playNewRequestChime');
+              unlockChimeAudioContext();
+              playNewRequestChime();
+            } else {
+              console.log('[admin-debug] no newId — skip flash/chime', payload);
+            }
+            await load();
+            if (cancelled) return;
+            setTimeout(() => {
+              const ids = requestsRef.current.map((r) => String(r.id).trim());
+              console.log('[debug] list ids after load', ids);
+              console.log('[debug] arrivalFlashIds', Array.from(arrivalFlashIdsRef.current));
+            }, 100);
+          };
+          void run();
         },
         onRequestAssigned: () => {
           if (cancelled) return;
@@ -777,7 +812,7 @@ export default function AdminOverviewPage() {
     const firstDisplayed = displayedRequests[0];
     const isTopSlaRow = firstDisplayed !== undefined && request.id === firstDisplayed.id;
     const isRowSelected = selectedRequestIds.includes(request.id);
-    const isArrivalFlash = arrivalFlashIds.has(request.id);
+    const isArrivalFlash = arrivalFlashIds.has(String(request.id).trim());
     console.log('[admin-debug] renderRequestRow', { requestId: request.id, isArrivalFlash });
     const rowActionBusy =
       statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;

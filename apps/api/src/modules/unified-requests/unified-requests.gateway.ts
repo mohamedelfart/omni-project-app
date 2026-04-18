@@ -37,6 +37,7 @@ export class UnifiedRequestsGateway implements OnGatewayConnection, OnGatewayDis
       for (const role of effectiveRoles) {
         await client.join(`role:${role}`);
       }
+      console.log('[server] socket joined rooms', client.id, [...client.rooms]);
     } catch (error) {
       this.logger.warn(`Socket connection rejected: ${error instanceof Error ? error.message : 'auth error'}`);
       client.disconnect(true);
@@ -62,6 +63,16 @@ export class UnifiedRequestsGateway implements OnGatewayConnection, OnGatewayDis
       for (const socketId of ids) {
         recipients.add(socketId);
       }
+    }
+    if (eventName === 'request.created') {
+      let requestId: string | undefined;
+      if (payload && typeof payload === 'object' && 'request' in payload) {
+        const req = (payload as { request?: { id?: unknown } }).request;
+        if (req && typeof req === 'object' && typeof req.id === 'string') {
+          requestId = req.id;
+        }
+      }
+      console.log('[server] emitting request.created', { rooms: uniqueRooms, requestId });
     }
     for (const socketId of recipients) {
       this.server.to(socketId).emit(eventName, payload);

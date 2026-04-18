@@ -88,11 +88,16 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
 
   if (!listenersWired) {
     listenersWired = true;
+    socket.onAny((event, ...args) => {
+      console.log('[socket] onAny event:', event, args);
+    });
     socket.on('request.created', (payload: unknown) => {
+      console.log('[socket] request.created received', payload);
       const id = extractSocketRequestId(payload);
       const suppress = shouldSuppressDuplicateRequestCreated(id);
       console.log('[admin-debug] socket request.created', { id, suppress });
       if (suppress) return;
+      console.log('[socket] invoking handler', payload);
       const run = handlersRef.current.onRequestCreated;
       console.log('[admin-debug] socket invoking onRequestCreated', { typeof: typeof run });
       run(payload);
@@ -105,6 +110,7 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
     });
 
     const onConnectOrReconnect = () => {
+      console.log('[socket] connected', socket.id, socket.nsp);
       applyLatestAuth();
     };
     socket.on('connect', onConnectOrReconnect);
