@@ -33,6 +33,8 @@ const DASHBOARD_PRIMARY_ACTION_BTN: Record<string, string | number> = {
   borderRadius: 6,
 };
 
+const SLA_QUICK_ESCALATE_REASON = 'Auto escalation due to SLA breach';
+
 /** Read model for `GET /api/v1/unified-requests/:id/history` (shared TicketAction shape). */
 type TimelineAction = {
   type: string;
@@ -436,6 +438,38 @@ export default function AdminOverviewPage() {
     }
   };
 
+  const quickEscalateFromSla = async (requestId: string) => {
+    const accessToken = getAccessToken();
+    setEscalateSubmitting(true);
+    setEscalateError(null);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: buildAuthHeaders(accessToken),
+        body: JSON.stringify({ reason: SLA_QUICK_ESCALATE_REASON }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getLoadErrorMessage(payload));
+      }
+      setEscalateForId(null);
+      setEscalateReason('');
+      setEscalateLevel('');
+      setEscalateTarget('');
+      if (timelineForId === requestId) {
+        await loadTimeline(requestId);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Escalation failed';
+      setEscalateError(msg);
+      setError(msg);
+    } finally {
+      setEscalateSubmitting(false);
+    }
+  };
+
   const assignVendor = async (requestId: string) => {
     const accessToken = getAccessToken();
     if (!vendorId.trim()) {
@@ -602,6 +636,17 @@ export default function AdminOverviewPage() {
           <button type="button" onClick={() => openEscalateForm(request.id)} style={{ padding: '6px 10px' }}>
             {escalateForId === request.id ? 'Cancel escalate' : 'Escalate'}
           </button>
+          {agingTier === 'overdue' || priorityTier === 'critical' ? (
+            <button
+              type="button"
+              disabled={escalateSubmitting}
+              title={SLA_QUICK_ESCALATE_REASON}
+              onClick={() => void quickEscalateFromSla(request.id)}
+              style={{ padding: '4px 8px', fontSize: 11 }}
+            >
+              Quick Escalate
+            </button>
+          ) : null}
           {request.status === 'pending' ? (
             <button
               type="button"
