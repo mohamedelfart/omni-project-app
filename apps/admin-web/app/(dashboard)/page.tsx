@@ -501,6 +501,10 @@ export default function AdminOverviewPage() {
   function renderRequestRow(request: DashboardRequest) {
     const agingTier = getAgingTier(request.createdAt, request.status);
     const priorityTier = getPrioritySlaTier(request.priority);
+    const hoursOpen = hoursSinceCreated(request.createdAt);
+    const hoursOpenHint = `${Math.floor(hoursOpen)}h+ open`;
+    const criticalPriorityLabel =
+      request.priority === 'CRITICAL' || request.priority === 'URGENT' ? request.priority : 'URGENT';
     const accent = requestSlaAccentColor(agingTier, priorityTier);
     const slaBadges =
       agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
@@ -523,6 +527,7 @@ export default function AdminOverviewPage() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {priorityTier === 'critical' ? (
               <span
+                title={`Priority: ${criticalPriorityLabel}`}
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
@@ -533,6 +538,7 @@ export default function AdminOverviewPage() {
                 }}
               >
                 Urgent priority
+                <span style={{ fontWeight: 500, opacity: 0.9 }}> · {criticalPriorityLabel}</span>
               </span>
             ) : null}
             {priorityTier === 'elevated' ? (
@@ -551,6 +557,7 @@ export default function AdminOverviewPage() {
             ) : null}
             {agingTier === 'overdue' ? (
               <span
+                title={hoursOpenHint}
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
@@ -561,10 +568,12 @@ export default function AdminOverviewPage() {
                 }}
               >
                 Overdue / stale
+                <span style={{ fontWeight: 500, opacity: 0.88 }}> · {hoursOpenHint}</span>
               </span>
             ) : null}
             {agingTier === 'aging' ? (
               <span
+                title={hoursOpenHint}
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
@@ -575,6 +584,7 @@ export default function AdminOverviewPage() {
                 }}
               >
                 Aging
+                <span style={{ fontWeight: 500, opacity: 0.88 }}> · {hoursOpenHint}</span>
               </span>
             ) : null}
           </div>
