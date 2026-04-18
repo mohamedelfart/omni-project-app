@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { io } from 'socket.io-client';
 import { getAccessToken } from '../lib/auth';
 
@@ -215,6 +215,31 @@ function extractRequestIdFromSocketPayload(payload: unknown): string | null {
   return null;
 }
 
+/** Very short, low-volume tone — only for `request.created` (new rows), not status churn. */
+function playNewRequestChime() {
+  try {
+    const ACtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!ACtx) return;
+    const ctx = new ACtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(784, ctx.currentTime);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.035, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.13);
+    osc.onended = () => {
+      void ctx.close();
+    };
+  } catch {
+    /* ignore — autoplay / AudioContext policy */
+  }
+}
+
 async function fetchTimelineHistory(requestId: string): Promise<TimelineAction[]> {
   const accessToken = getAccessToken();
   const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/history`, {
@@ -250,6 +275,8 @@ export default function AdminOverviewPage() {
   const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
   const [bulkEscalating, setBulkEscalating] = useState(false);
   const [bulkFeedback, setBulkFeedback] = useState<{ text: string; kind: 'success' | 'error' } | null>(null);
+  /** Request ids to pulse-highlight after `request.created` (cleared ~4.5s each). */
+  const [arrivalFlashIds, setArrivalFlashIds] = useState<Set<string>>(() => new Set());
   const timelineForIdRef = useRef<string | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const bulkFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -333,6 +360,7 @@ export default function AdminOverviewPage() {
     let cancelled = false;
     const accessToken = getAccessToken();
     let socket: ReturnType<typeof io> | null = null;
+    let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
 
     const load = async () => {
       try {
@@ -376,11 +404,41 @@ export default function AdminOverviewPage() {
         setError(socketError);
       }
     } else {
+      const flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
+      arrivalFlashTimers = flashTimers;
+
+      const markArrivalFlash = (id: string) => {
+        if (!id.trim()) return;
+        setArrivalFlashIds((prev) => {
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        });
+        const prevTimer = flashTimers.get(id);
+        if (prevTimer) clearTimeout(prevTimer);
+        const t = setTimeout(() => {
+          setArrivalFlashIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+          flashTimers.delete(id);
+        }, 4500);
+        flashTimers.set(id, t);
+      };
+
       socket = io(`${socketBase}/requests`, {
         transports: ['websocket'],
         auth: { token: accessToken },
       });
-      socket.on('request.created', () => void load());
+      socket.on('request.created', (payload: unknown) => {
+        const newId = extractRequestIdFromSocketPayload(payload);
+        if (newId) {
+          playNewRequestChime();
+          markArrivalFlash(newId);
+        }
+        void load();
+      });
       socket.on('request.assigned', () => void load());
       socket.on('request.updated', (payload: unknown) => {
         void load();
@@ -404,6 +462,12 @@ export default function AdminOverviewPage() {
 
     return () => {
       cancelled = true;
+      if (arrivalFlashTimers) {
+        for (const t of arrivalFlashTimers.values()) {
+          clearTimeout(t);
+        }
+        arrivalFlashTimers.clear();
+      }
       socket?.disconnect();
     };
   }, []);
@@ -650,35 +714,51 @@ export default function AdminOverviewPage() {
     const accent = requestSlaAccentColor(agingTier, priorityTier);
     const slaBadges =
       agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
-    const isTopSlaRow = displayedRequests.length > 0 && request.id === displayedRequests[0].id;
+    const firstDisplayed = displayedRequests[0];
+    const isTopSlaRow = firstDisplayed !== undefined && request.id === firstDisplayed.id;
     const isRowSelected = selectedRequestIds.includes(request.id);
+    const isArrivalFlash = arrivalFlashIds.has(request.id);
     const rowActionBusy =
       statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;
-    return (
-      <div
-        key={request.id}
-        style={{
-          border: '1px solid #E5EDF5',
-          borderRadius: 8,
-          padding: 12,
-          display: 'grid',
-          gap: 8,
-          ...(isTopSlaRow
-            ? {
-                background: '#EFF6FF',
-                border: '1px solid #60A5FA',
-                boxShadow: isRowSelected
-                  ? '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2), inset 0 0 0 2px rgba(71, 85, 105, 0.32)'
-                  : '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2)',
-              }
-            : isRowSelected
+
+    const rowCardStyle: CSSProperties = {
+      borderRadius: 8,
+      padding: 12,
+      display: 'grid',
+      gap: 8,
+      ...(isTopSlaRow
+        ? {
+            border: '1px solid #60A5FA',
+            background: '#EFF6FF',
+            boxShadow: isRowSelected
+              ? '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2), inset 0 0 0 2px rgba(71, 85, 105, 0.32)'
+              : '0 0 0 1px rgba(37, 99, 235, 0.22), 0 2px 12px rgba(37, 99, 235, 0.2)',
+          }
+        : {
+            border: '1px solid #E5EDF5',
+            ...(isRowSelected
               ? {
                   background: '#F8FAFC',
                   boxShadow: 'inset 0 0 0 1px #CBD5E1',
                 }
               : {}),
-          ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
-        }}
+          }),
+      ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
+    };
+
+    if (isArrivalFlash) {
+      const arrivalGlow = '0 0 0 2px rgba(52, 211, 153, 0.55), 0 0 22px rgba(16, 185, 129, 0.22)';
+      const existingShadow = typeof rowCardStyle.boxShadow === 'string' ? rowCardStyle.boxShadow : '';
+      rowCardStyle.boxShadow = existingShadow ? `${existingShadow}, ${arrivalGlow}` : arrivalGlow;
+      if (!isTopSlaRow) {
+        rowCardStyle.background = isRowSelected ? '#EDFAF4' : '#F0FDF9';
+      }
+    }
+
+    return (
+      <div
+        key={request.id}
+        style={rowCardStyle}
       >
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
           <input

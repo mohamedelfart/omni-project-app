@@ -23,7 +23,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  register(@Body() dto: RegisterDto): Promise<{ userId: string; onboardingRequired: boolean }> {
+  register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
   }
 
@@ -42,10 +42,9 @@ export class AuthController {
     return this.authService.verifyPhoneOtp(dto);
   }
 
-  @ApiBearerAuth()
   @Post('refresh')
   refresh(@Body() dto: RefreshTokenDto) {
-    return this.authService.refresh(dto);
+    return this.authService.refreshTokens(dto);
   }
 
   @Post('verify-account')

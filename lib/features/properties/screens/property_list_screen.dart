@@ -3,6 +3,7 @@ import '../data/doha_areas.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/api/unified_requests_api.dart';
 import '../../../core/models/models.dart';
 import '../widgets/property_status_badge.dart';
 import '../../../core/services/service_manager.dart';
@@ -318,6 +319,28 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
     });
   }
 
+  /// Temporary: confirms `--dart-define=OMNIRENT_API_TOKEN` is compiled in (normalized).
+  Widget _buildOmnirentTokenDebugBanner() {
+    final String t = UnifiedRequestsApi.tenantJwt;
+    final int len = t.length;
+    final String first10 = t.isEmpty ? '(empty)' : (t.length >= 10 ? t.substring(0, 10) : t);
+    return Material(
+      color: const Color(0xFFFEF3C7),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Text(
+          'DEBUG OMNIRENT_API_TOKEN — length=$len, first10=$first10',
+          style: const TextStyle(
+            fontSize: 11,
+            height: 1.25,
+            color: Color(0xFF92400E),
+            fontFamily: 'monospace',
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -325,6 +348,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            _buildOmnirentTokenDebugBanner(),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
               child: Directionality(

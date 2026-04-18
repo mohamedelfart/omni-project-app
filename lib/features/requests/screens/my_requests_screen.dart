@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/api/unified_requests_api.dart';
+import '../../../core/realtime/unified_requests_socket.dart';
 import 'my_request_detail_screen.dart';
 import '../tenant_request_status_ui.dart';
 
@@ -19,7 +20,11 @@ class _MyRequestsScreenState extends State<MyRequestsScreen> {
   List<UnifiedRequestListItem>? _items;
   Object? _error;
   bool _loading = true;
-  Timer? _pollTimer;
+
+  void _onRequestsSocket(String? _) {
+    if (!mounted || _loading) return;
+    unawaited(_load(showBlockingLoader: false));
+  }
 
   static String _fingerprint(List<UnifiedRequestListItem> rows) {
     return rows
@@ -33,16 +38,13 @@ class _MyRequestsScreenState extends State<MyRequestsScreen> {
   @override
   void initState() {
     super.initState();
+    UnifiedRequestsSocketClient.instance.subscribe(_onRequestsSocket);
     unawaited(_load(showBlockingLoader: true));
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (!mounted || _loading) return;
-      unawaited(_load(showBlockingLoader: false));
-    });
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    UnifiedRequestsSocketClient.instance.unsubscribe(_onRequestsSocket);
     super.dispose();
   }
 

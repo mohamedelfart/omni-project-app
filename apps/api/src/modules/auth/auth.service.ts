@@ -39,7 +39,13 @@ export class AuthService {
     private readonly configService: ConfigService,
   ) {}
 
-  async register(payload: RegisterDto): Promise<{ userId: string; onboardingRequired: boolean; verificationToken: string }> {
+  async register(payload: RegisterDto): Promise<{
+    userId: string;
+    onboardingRequired: boolean;
+    verificationToken: string;
+    accessToken: string;
+    refreshToken: string;
+  }> {
     const existingUser = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: payload.email }, payload.phoneNumber ? { phoneNumber: payload.phoneNumber } : undefined].filter(Boolean) as never,
@@ -65,6 +71,7 @@ export class AuthService {
         userRoles: { create: [{ roleId: tenantRole.id }] },
         tenantProfile: { create: { preferredLanguage: 'en' } },
       },
+      include: { userRoles: { include: { role: true } } },
     });
 
     const verificationToken = await this.jwtService.signAsync(
@@ -75,10 +82,15 @@ export class AuthService {
       },
     );
 
+    const roles = user.userRoles.map((entry) => this.toSharedRole(entry.role.code));
+    const { accessToken, refreshToken } = await this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
+
     return {
       userId: user.id,
       onboardingRequired: true,
       verificationToken,
+      accessToken,
+      refreshToken,
     };
   }
 
@@ -172,15 +184,30 @@ export class AuthService {
     return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
   }
 
-  async refresh(payload: RefreshTokenDto): Promise<AuthTokens> {
-    const decoded = await this.jwtService.verifyAsync<{ sub: string; role: UserRole; roles?: UserRole[] }>(
-      payload.refreshToken,
-      {
-        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
-      },
-    );
+  /**
+   * Stateless refresh: verifies HS256 JWT signed with [JWT_REFRESH_SECRET], `type: 'refresh'`, and `exp`.
+   * Rejects other tokens minted with the same secret (e.g. password-reset) that are not refresh sessions.
+   */
+  async refreshTokens(payload: RefreshTokenDto): Promise<AuthTokens> {
+    type RefreshClaims = { sub: string; role?: UserRole; roles?: UserRole[]; type?: string };
 
-    return this.issueTokens(decoded.sub, decoded.role, decoded.roles ?? [decoded.role]);
+    let decoded: RefreshClaims;
+    try {
+      decoded = await this.jwtService.verifyAsync<RefreshClaims>(payload.refreshToken, {
+        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (decoded.type !== 'refresh') {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const role = decoded.role ?? 'tenant';
+    const roles = decoded.roles?.length ? decoded.roles : [role];
+
+    return this.issueTokens(decoded.sub, role, roles);
   }
 
   async verifyAccount(payload: VerifyAccountDto): Promise<{ verified: boolean }> {
@@ -251,7 +278,7 @@ export class AuthService {
     const accessSecret = this.configService.getOrThrow<string>('JWT_ACCESS_SECRET');
     const refreshSecret = this.configService.getOrThrow<string>('JWT_REFRESH_SECRET');
     const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_TTL') ?? '15m';
-    const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_TTL') ?? '30d';
+    const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_TTL') ?? '7d';
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync({ sub: userId, role, roles }, { secret: accessSecret, expiresIn: accessExpiresIn }),

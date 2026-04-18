@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/api/unified_requests_api.dart';
+import '../../../core/realtime/unified_requests_socket.dart';
 import '../tenant_request_status_ui.dart';
 
-/// Detail for one request; polls `GET …/unified-requests/:id` or falls back to list + id match.
+/// Detail for one request; REST refresh on pull; live updates via Socket.IO `/requests`.
 class MyRequestDetailScreen extends StatefulWidget {
   const MyRequestDetailScreen({super.key, required this.item});
 
@@ -18,7 +19,14 @@ class MyRequestDetailScreen extends StatefulWidget {
 
 class _MyRequestDetailScreenState extends State<MyRequestDetailScreen> {
   late UnifiedRequestListItem _item;
-  Timer? _pollTimer;
+
+  void _onRequestDetailSocket(String? requestId) {
+    if (!mounted) return;
+    if (requestId != null && requestId.isNotEmpty && requestId != _item.id) {
+      return;
+    }
+    unawaited(_refresh(silent: true));
+  }
 
   static String _fingerprint(UnifiedRequestListItem r) =>
       '${r.id}|${r.status}|${r.requestType}|${r.createdAt.toIso8601String()}';
@@ -27,15 +35,12 @@ class _MyRequestDetailScreenState extends State<MyRequestDetailScreen> {
   void initState() {
     super.initState();
     _item = widget.item;
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (!mounted) return;
-      unawaited(_refresh(silent: true));
-    });
+    UnifiedRequestsSocketClient.instance.subscribe(_onRequestDetailSocket);
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    UnifiedRequestsSocketClient.instance.unsubscribe(_onRequestDetailSocket);
     super.dispose();
   }
 

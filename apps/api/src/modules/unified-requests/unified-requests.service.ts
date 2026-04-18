@@ -80,6 +80,13 @@ export class UnifiedRequestsService {
       },
     });
 
+    const minimalForSocket = this.toMinimalRequest(unifiedRequest);
+    this.unifiedRequestsGateway.emitToRooms(
+      REQUEST_SOCKET_EVENTS.created,
+      [`user:${minimalForSocket.tenantId}`, 'role:admin', 'role:command-center'],
+      { request: minimalForSocket },
+    );
+
     return { ...unifiedRequest, routing };
   }
 
