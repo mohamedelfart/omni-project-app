@@ -2,6 +2,10 @@ import { PrismaClient, ProviderType, RoleCode, UserStatus } from '@prisma/client
 
 const prisma = new PrismaClient();
 
+/** Same format as `AuthService` (`salt:scryptHex`); local-only password `QuickRentDev1!` for seeded users. */
+const DEV_SEED_PASSWORD_HASH =
+  '646485196fdf211e8e71c5830557333b:5035a42e802ed43e3c29b3ba02f04a2f833a6b5aa10df57da2a04be0e3b37b1ad7ed5196af03545d72fa34f24f384a0232c2e78cdef242f3e8f5feb957ecd494';
+
 async function main(): Promise<void> {
   await prisma.userRole.deleteMany();
   await prisma.role.deleteMany();
@@ -41,7 +45,7 @@ async function main(): Promise<void> {
 
   const landlordUser = await prisma.user.upsert({
     where: { email: 'landlord@quickrent.com' },
-    update: { isVerified: true, isProfileCompleted: true },
+    update: { isVerified: true, isProfileCompleted: true, passwordHash: DEV_SEED_PASSWORD_HASH },
     create: {
       email: 'landlord@quickrent.com',
       phoneNumber: '+97450000010',
@@ -51,12 +55,13 @@ async function main(): Promise<void> {
       status: UserStatus.ACTIVE,
       isVerified: true,
       isProfileCompleted: true,
+      passwordHash: DEV_SEED_PASSWORD_HASH,
     },
   });
 
   const tenantUser = await prisma.user.upsert({
     where: { email: 'tenant@quickrent.com' },
-    update: { isVerified: true, isProfileCompleted: true },
+    update: { isVerified: true, isProfileCompleted: true, passwordHash: DEV_SEED_PASSWORD_HASH },
     create: {
       email: 'tenant@quickrent.com',
       phoneNumber: '+97450000020',
@@ -66,12 +71,13 @@ async function main(): Promise<void> {
       status: UserStatus.ACTIVE,
       isVerified: true,
       isProfileCompleted: true,
+      passwordHash: DEV_SEED_PASSWORD_HASH,
     },
   });
 
   const commandCenterUser = await prisma.user.upsert({
     where: { email: 'ops@quickrent.com' },
-    update: { isVerified: true, isProfileCompleted: true },
+    update: { isVerified: true, isProfileCompleted: true, passwordHash: DEV_SEED_PASSWORD_HASH },
     create: {
       email: 'ops@quickrent.com',
       phoneNumber: '+97450000030',
@@ -81,12 +87,13 @@ async function main(): Promise<void> {
       status: UserStatus.ACTIVE,
       isVerified: true,
       isProfileCompleted: true,
+      passwordHash: DEV_SEED_PASSWORD_HASH,
     },
   });
 
   const providerUser = await prisma.user.upsert({
     where: { email: 'dispatch@quickrent-move.com' },
-    update: { isVerified: true, isProfileCompleted: true },
+    update: { isVerified: true, isProfileCompleted: true, passwordHash: DEV_SEED_PASSWORD_HASH },
     create: {
       email: 'dispatch@quickrent-move.com',
       phoneNumber: '+97450000040',
@@ -96,13 +103,14 @@ async function main(): Promise<void> {
       status: UserStatus.ACTIVE,
       isVerified: true,
       isProfileCompleted: true,
+      passwordHash: DEV_SEED_PASSWORD_HASH,
     },
   });
 
   /** Matches `sub` in admin-web `DEV_ACCESS_TOKEN_FALLBACK` so local JWT maps to a real User row. */
   const seedAdminJwtUser = await prisma.user.upsert({
     where: { id: 'seed-admin' },
-    update: { isVerified: true, isProfileCompleted: true },
+    update: { isVerified: true, isProfileCompleted: true, passwordHash: DEV_SEED_PASSWORD_HASH },
     create: {
       id: 'seed-admin',
       email: 'seed-admin@quickrent.local',
@@ -113,6 +121,7 @@ async function main(): Promise<void> {
       status: UserStatus.ACTIVE,
       isVerified: true,
       isProfileCompleted: true,
+      passwordHash: DEV_SEED_PASSWORD_HASH,
     },
   });
 
@@ -303,8 +312,18 @@ async function main(): Promise<void> {
     },
   });
 
-  await prisma.insuranceSubscription.create({
-    data: {
+  await prisma.insuranceSubscription.upsert({
+    where: { policyNumber: 'QR-INS-2026-0001' },
+    update: {
+      tenantProfileId: tenantProfile.id,
+      planId: insurancePlan.id,
+      status: 'ACTIVE',
+      startDate: new Date('2026-04-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T23:59:59.000Z'),
+      premiumMinor: 15000,
+      currency: 'QAR',
+    },
+    create: {
       tenantProfileId: tenantProfile.id,
       planId: insurancePlan.id,
       status: 'ACTIVE',

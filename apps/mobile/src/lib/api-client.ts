@@ -1,4 +1,22 @@
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+import { Platform } from 'react-native';
+
+function resolveApiBaseUrl(): string {
+  const fromEnv = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (typeof fromEnv === 'string' && fromEnv.trim().length > 0) {
+    return fromEnv.trim().replace(/\/$/, '');
+  }
+  // Android emulator: host machine loopback (localhost inside the emulator is the device itself).
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:4000/api/v1';
+  }
+  return 'http://localhost:4000/api/v1';
+}
+
+const apiBaseUrl = resolveApiBaseUrl();
+
+export function getSocketBaseUrl(): string {
+  return apiBaseUrl.replace(/\/api\/v1\/?$/, '');
+}
 
 let apiAuthToken: string | undefined;
 

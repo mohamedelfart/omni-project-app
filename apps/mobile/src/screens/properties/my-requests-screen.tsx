@@ -3,7 +3,7 @@ import { useNavigation } from '@react-navigation/native';
 import { io } from 'socket.io-client';
 import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { apiRequest, getApiAuthToken } from '../../lib/api-client';
+import { apiRequest, getApiAuthToken, getSocketBaseUrl } from '../../lib/api-client';
 
 type TenantRequest = {
   id: string;
@@ -22,9 +22,7 @@ export function MyRequestsScreen() {
   const [requests, setRequests] = useState<TenantRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const socketBaseUrl = useMemo(() => (
-    (process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '')
-  ), []);
+  const socketBaseUrl = useMemo(() => getSocketBaseUrl(), []);
 
   const loadRequests = async () => {
     try {

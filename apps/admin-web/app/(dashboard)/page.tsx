@@ -246,17 +246,30 @@ function unlockChimeAudioContext(): void {
 
 /** Very short, low-volume tone — only for `request.created` (new rows), not status churn. */
 function playNewRequestChime() {
-  console.log('[admin-debug] playNewRequestChime called');
   void (async () => {
     try {
       unlockChimeAudioContext();
       const ctx = getChimeAudioContext();
-      if (!ctx) return;
+      console.log('[admin-arrival] playNewRequestChime invoked', {
+        audioContextState: ctx?.state ?? 'no-context',
+      });
+      if (!ctx) {
+        console.log('[admin-arrival] playNewRequestChime skip', { reason: 'no-context' });
+        return;
+      }
       if (ctx.state === 'suspended') {
         await ctx.resume().catch(() => {});
       }
-      console.log('[admin-debug] audio context state', ctx.state);
-      if (ctx.state !== 'running') return;
+      console.log('[admin-arrival] playNewRequestChime after resume attempt', {
+        audioContextState: ctx.state,
+      });
+      if (ctx.state !== 'running') {
+        console.log('[admin-arrival] playNewRequestChime skip', {
+          reason: 'context-not-running',
+          audioContextState: ctx.state,
+        });
+        return;
+      }
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -266,6 +279,7 @@ function playNewRequestChime() {
       gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
       osc.connect(gain);
       gain.connect(ctx.destination);
+      console.log('[admin-arrival] playNewRequestChime playing', { audioContextState: 'running' });
       osc.start();
       osc.stop(ctx.currentTime + 0.13);
     } catch {
@@ -473,11 +487,13 @@ export default function AdminOverviewPage() {
       const markArrivalFlash = (id: string) => {
         const key = String(id).trim();
         if (!key) return;
-        console.log('[admin-debug] markArrivalFlash called', key);
         setArrivalFlashIds((prev) => {
           const next = new Set(prev);
           next.add(key);
-          console.log('[admin-debug] arrivalFlashIds after add', Array.from(next));
+          console.log('[admin-arrival] markArrivalFlash id committed', {
+            id: key,
+            arrivalFlashIdCount: next.size,
+          });
           return next;
         });
         const prevTimer = flashTimers.get(key);
@@ -489,7 +505,7 @@ export default function AdminOverviewPage() {
             return next;
           });
           flashTimers.delete(key);
-        }, 4500);
+        }, 5000);
         flashTimers.set(key, t);
       };
 
@@ -504,25 +520,29 @@ export default function AdminOverviewPage() {
           const newIdRaw = extractSocketRequestId(payload);
           const requestId = newIdRaw ? String(newIdRaw).trim() : '';
           console.log('[admin-debug] extracted request id', requestId);
-          const run = async () => {
-            if (cancelled) return;
-            if (requestId) {
-              markArrivalFlash(requestId);
-              console.log('[admin-debug] calling playNewRequestChime');
-              unlockChimeAudioContext();
-              playNewRequestChime();
-            } else {
-              console.log('[admin-debug] no newId — skip flash/chime', payload);
-            }
-            await load();
-            if (cancelled) return;
-            setTimeout(() => {
-              const ids = requestsRef.current.map((r) => String(r.id).trim());
-              console.log('[debug] list ids after load', ids);
-              console.log('[debug] arrivalFlashIds', Array.from(arrivalFlashIdsRef.current));
-            }, 100);
-          };
-          void run();
+          if (cancelled) return;
+          if (requestId) {
+            markArrivalFlash(requestId);
+            unlockChimeAudioContext();
+            playNewRequestChime();
+          } else {
+            console.log('[admin-debug] no newId — skip flash/chime', payload);
+          }
+          // Defer refetch so flash/chime state can commit and paint before `setRequests` from load().
+          setTimeout(() => {
+            void (async () => {
+              if (cancelled) return;
+              await load();
+              if (cancelled) return;
+              if (requestId) {
+                const listed = requestsRef.current.some((r) => String(r.id).trim() === requestId);
+                if (!listed) {
+                  await new Promise((r) => setTimeout(r, 400));
+                  if (!cancelled) await load();
+                }
+              }
+            })();
+          }, 0);
         },
         onRequestAssigned: () => {
           if (cancelled) return;
@@ -813,7 +833,12 @@ export default function AdminOverviewPage() {
     const isTopSlaRow = firstDisplayed !== undefined && request.id === firstDisplayed.id;
     const isRowSelected = selectedRequestIds.includes(request.id);
     const isArrivalFlash = arrivalFlashIds.has(String(request.id).trim());
-    console.log('[admin-debug] renderRequestRow', { requestId: request.id, isArrivalFlash });
+    if (isArrivalFlash) {
+      console.log('[admin-arrival] renderRequestRow arrival flash visible', {
+        requestId: request.id,
+        isArrivalFlash: true,
+      });
+    }
     const rowActionBusy =
       statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;
 
