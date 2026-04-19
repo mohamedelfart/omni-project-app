@@ -3,7 +3,8 @@ import { io, type Socket } from 'socket.io-client';
 import { extractSocketRequestId } from './extract-socket-request-id';
 
 export type AdminRequestsRealtimeHandlers = {
-  onRequestCreated: (payload: unknown) => void;
+  /** Return `false` if the event was skipped (e.g. unmounted); dedupe will not record it as handled. */
+  onRequestCreated: (payload: unknown) => void | boolean;
   onRequestAssigned: () => void;
   onRequestUpdated: (payload: unknown) => void;
 };
@@ -21,21 +22,27 @@ const getAccessTokenRef: { current: () => string | null } = { current: () => nul
 const REQUEST_CREATED_DEDUP_MS = 2000;
 const recentRequestCreatedAt = new Map<string, number>();
 
+function pruneRequestCreatedDedupe(now: number) {
+  if (recentRequestCreatedAt.size <= 500) return;
+  const cutoff = now - REQUEST_CREATED_DEDUP_MS;
+  for (const [key, at] of recentRequestCreatedAt) {
+    if (at < cutoff) recentRequestCreatedAt.delete(key);
+  }
+}
+
+/** True only when this id was already handled recently (not merely seen pre-handler). */
 function shouldSuppressDuplicateRequestCreated(id: string | null): boolean {
   if (!id) return false;
   const now = Date.now();
   const last = recentRequestCreatedAt.get(id);
-  if (last !== undefined && now - last < REQUEST_CREATED_DEDUP_MS) {
-    return true;
-  }
+  return last !== undefined && now - last < REQUEST_CREATED_DEDUP_MS;
+}
+
+function markRequestCreatedHandled(id: string | null) {
+  if (!id) return;
+  const now = Date.now();
   recentRequestCreatedAt.set(id, now);
-  if (recentRequestCreatedAt.size > 500) {
-    const cutoff = now - REQUEST_CREATED_DEDUP_MS;
-    for (const [key, at] of recentRequestCreatedAt) {
-      if (at < cutoff) recentRequestCreatedAt.delete(key);
-    }
-  }
-  return false;
+  pruneRequestCreatedDedupe(now);
 }
 
 let socket: Socket | null = null;
@@ -100,7 +107,10 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
       console.log('[socket] invoking handler', payload);
       const run = handlersRef.current.onRequestCreated;
       console.log('[admin-debug] socket invoking onRequestCreated', { typeof: typeof run });
-      run(payload);
+      const handled = run(payload) !== false;
+      if (handled) {
+        markRequestCreatedHandled(id);
+      }
     });
     socket.on('request.assigned', () => {
       handlersRef.current.onRequestAssigned();

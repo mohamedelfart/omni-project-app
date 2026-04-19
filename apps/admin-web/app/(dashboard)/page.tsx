@@ -514,13 +514,13 @@ export default function AdminOverviewPage() {
           console.log('[page] onRequestCreated called', payload);
           if (cancelled) {
             console.log('[admin-debug] request.created skipped: effect cancelled');
-            return;
+            return false;
           }
           console.log('[admin-debug] request.created received', payload);
           const newIdRaw = extractSocketRequestId(payload);
           const requestId = newIdRaw ? String(newIdRaw).trim() : '';
           console.log('[admin-debug] extracted request id', requestId);
-          if (cancelled) return;
+          if (cancelled) return false;
           if (requestId) {
             markArrivalFlash(requestId);
             unlockChimeAudioContext();
@@ -543,6 +543,7 @@ export default function AdminOverviewPage() {
               }
             })();
           }, 0);
+          return true;
         },
         onRequestAssigned: () => {
           if (cancelled) return;

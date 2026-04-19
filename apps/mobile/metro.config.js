@@ -48,7 +48,9 @@ config.resolver.unstable_enableSymlinks = true;
  * Reduces resolution time and prevents scanning non-module folders
  */
 config.resolver.extraNodeModules = {
-  '@quickrent': path.resolve(workspaceRoot, 'packages'),
+  '@quickrent/design-system': path.resolve(workspaceRoot, 'packages/design-system'),
+  '@quickrent/shared-types': path.resolve(workspaceRoot, 'packages/shared-types'),
+  '@quickrent/config': path.resolve(workspaceRoot, 'packages/config'),
 };
 
 /**
