@@ -6,7 +6,7 @@ import {
   setAdminRequestsRealtimeGetAccessToken,
   setAdminRequestsRealtimeHandlers,
 } from '../../lib/admin-requests-socket';
-import { getAccessToken } from '../../lib/auth';
+import { apiFetch, getAuthSession } from '../../lib/auth';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
 const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
@@ -24,13 +24,6 @@ const STATUS_LABEL: Record<TenantRequestRow['status'], string> = {
   in_progress: 'In Progress',
   completed: 'Completed',
 };
-
-function buildAuthHeaders(token: string | null) {
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
 
 function normalizeList(raw: unknown): TenantRequestRow[] {
   let list: unknown = raw;
@@ -83,10 +76,8 @@ export default function TenantViewPage() {
       loadAbortController = new AbortController();
       const { signal } = loadAbortController;
       try {
-        const token = getAccessToken();
-        const response = await fetch('/api/requests', {
+        const response = await apiFetch('/api/requests', {
           cache: 'no-store',
-          headers: buildAuthHeaders(token),
           signal,
         });
         const payload = await response.json().catch(() => null);
@@ -113,8 +104,8 @@ export default function TenantViewPage() {
 
     void loadRequests({ isInitial: true });
 
-    const accessToken = getAccessToken();
-    if (accessToken) {
+    const authSession = getAuthSession();
+    if (authSession) {
       setAdminRequestsRealtimeHandlers({
         onRequestCreated: () => {
           if (cancelled) return false;
@@ -132,7 +123,7 @@ export default function TenantViewPage() {
           void loadRequests();
         },
       });
-      setAdminRequestsRealtimeGetAccessToken(() => getAccessToken());
+      setAdminRequestsRealtimeGetAccessToken(() => getAuthSession()?.accessToken ?? null);
       ensureAdminRequestsRealtimeSocket(socketBase);
     }
 

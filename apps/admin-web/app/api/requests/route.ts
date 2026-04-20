@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { DEV_ACCESS_TOKEN_FALLBACK } from '../../lib/auth';
-
 const apiBaseUrl = process.env.QUICKRENT_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
-const isDev = process.env.NODE_ENV === 'development';
 
 function normalizeToRequestArray(payload: unknown): unknown[] {
   if (Array.isArray(payload)) return payload;
@@ -14,11 +11,7 @@ function normalizeToRequestArray(payload: unknown): unknown[] {
   return [];
 }
 
-/** In development, always use the known-good JWT for upstream; production uses the incoming Bearer only. */
 function upstreamAuthorization(request: NextRequest): string | null {
-  if (isDev) {
-    return `Bearer ${DEV_ACCESS_TOKEN_FALLBACK}`;
-  }
   const authHeader = request.headers.get('authorization');
   return authHeader?.startsWith('Bearer ') ? authHeader : null;
 }
@@ -44,13 +37,6 @@ export async function GET(request: NextRequest) {
 
   const payload = await response.json().catch(() => ({ error: 'Upstream command center response was not valid JSON' }));
   if (!response.ok) {
-    if (isDev) {
-      console.error('Admin requests proxy GET failed', {
-        upstreamUrl: upstreamUrl.toString(),
-        status: response.status,
-        payload,
-      });
-    }
     return NextResponse.json(payload, { status: response.status });
   }
   const unwrapped = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data: unknown }).data : payload;

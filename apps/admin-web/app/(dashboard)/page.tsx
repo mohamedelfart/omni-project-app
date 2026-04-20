@@ -6,7 +6,7 @@ import {
   setAdminRequestsRealtimeGetAccessToken,
   setAdminRequestsRealtimeHandlers,
 } from '../lib/admin-requests-socket';
-import { getAccessToken } from '../lib/auth';
+import { apiFetch, getAuthSession } from '../lib/auth';
 import { extractSocketRequestId } from '../lib/extract-socket-request-id';
 
 type DashboardRequest = {
@@ -289,10 +289,8 @@ function playNewRequestChime() {
 }
 
 async function fetchTimelineHistory(requestId: string): Promise<TimelineAction[]> {
-  const accessToken = getAccessToken();
-  const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/history`, {
+  const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/history`, {
     cache: 'no-store',
-    headers: buildAuthHeaders(accessToken),
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
@@ -424,7 +422,7 @@ export default function AdminOverviewPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const accessToken = getAccessToken();
+    const authSession = getAuthSession();
     let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
     let loadAbortController: AbortController | null = null;
 
@@ -435,10 +433,8 @@ export default function AdminOverviewPage() {
       const { signal } = ac;
 
       try {
-        const requestHeaders = buildAuthHeaders(accessToken);
-        const response = await fetch('/api/requests', {
+        const response = await apiFetch('/api/requests', {
           cache: 'no-store',
-          headers: requestHeaders,
           signal,
         });
         const payload = await response.json().catch(() => null);
@@ -472,7 +468,7 @@ export default function AdminOverviewPage() {
     };
 
     void load();
-    if (!accessToken) {
+    if (!authSession) {
       const socketError = 'Missing auth token for socket connection';
       if (process.env.NODE_ENV === 'development') {
         console.error(`[socket] ${socketError}`);
@@ -569,7 +565,7 @@ export default function AdminOverviewPage() {
           })();
         },
       });
-      setAdminRequestsRealtimeGetAccessToken(() => getAccessToken());
+      setAdminRequestsRealtimeGetAccessToken(() => getAuthSession()?.accessToken ?? null);
       ensureAdminRequestsRealtimeSocket(socketBase);
     }
 
@@ -620,17 +616,15 @@ export default function AdminOverviewPage() {
       setEscalateError('Reason is required');
       return;
     }
-    const accessToken = getAccessToken();
     setEscalateSubmitting(true);
     setEscalateError(null);
     const body: Record<string, unknown> = { reason: escalateReason.trim() };
     if (escalateLevel.trim()) body.level = escalateLevel.trim();
     if (escalateTarget.trim()) body.target = escalateTarget.trim();
     try {
-      const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+      const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
         method: 'POST',
         cache: 'no-store',
-        headers: buildAuthHeaders(accessToken),
         body: JSON.stringify(body),
       });
       const payload = await response.json().catch(() => null);
@@ -652,15 +646,13 @@ export default function AdminOverviewPage() {
   };
 
   const quickEscalateFromSla = async (requestId: string) => {
-    const accessToken = getAccessToken();
     setEscalateSubmitting(true);
     setEscalateError(null);
     setError(null);
     try {
-      const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+      const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
         method: 'POST',
         cache: 'no-store',
-        headers: buildAuthHeaders(accessToken),
         body: JSON.stringify({ reason: SLA_QUICK_ESCALATE_REASON }),
       });
       const payload = await response.json().catch(() => null);
@@ -697,7 +689,6 @@ export default function AdminOverviewPage() {
 
   const bulkEscalateSelected = async () => {
     if (selectedRequestIds.length === 0) return;
-    const accessToken = getAccessToken();
     setBulkEscalating(true);
     setError(null);
     const ids = [...selectedRequestIds];
@@ -705,10 +696,9 @@ export default function AdminOverviewPage() {
     try {
       for (const requestId of ids) {
         try {
-          const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+          const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
             method: 'POST',
             cache: 'no-store',
-            headers: buildAuthHeaders(accessToken),
             body: JSON.stringify({ reason: SLA_QUICK_ESCALATE_REASON }),
           });
           const payload = await response.json().catch(() => null);
@@ -746,14 +736,12 @@ export default function AdminOverviewPage() {
   };
 
   const assignVendor = async (requestId: string) => {
-    const accessToken = getAccessToken();
     if (!vendorId.trim()) {
       setError('Provide vendor id to assign');
       return;
     }
-    const response = await fetch('/api/requests', {
+    const response = await apiFetch('/api/requests', {
       method: 'POST',
-      headers: buildAuthHeaders(accessToken),
       body: JSON.stringify({ requestId, vendorId: vendorId.trim() }),
     });
     const payload = await response.json();
@@ -766,10 +754,8 @@ export default function AdminOverviewPage() {
   };
 
   const refreshRequestList = async () => {
-    const accessToken = getAccessToken();
-    const response = await fetch('/api/requests', {
+    const response = await apiFetch('/api/requests', {
       cache: 'no-store',
-      headers: buildAuthHeaders(accessToken),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -780,15 +766,13 @@ export default function AdminOverviewPage() {
   };
 
   const postCommandCenterStatus = async (requestId: string, nextStatus: 'in_progress' | 'completed') => {
-    const accessToken = getAccessToken();
     setStatusActionRequestId(requestId);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/status`,
         {
           method: 'POST',
           cache: 'no-store',
-          headers: buildAuthHeaders(accessToken),
           body: JSON.stringify({ status: nextStatus }),
         },
       );
@@ -1328,14 +1312,4 @@ export default function AdminOverviewPage() {
       ) : null}
     </section>
   );
-}
-
-function buildAuthHeaders(token: string | null) {
-  if (!token && process.env.NODE_ENV === 'development') {
-    console.warn('[auth] Missing access token; sending request without Authorization header.');
-  }
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
 }

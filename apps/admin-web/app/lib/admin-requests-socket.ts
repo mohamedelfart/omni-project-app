@@ -130,3 +130,18 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
     });
   }
 }
+
+export function reconnectAdminRequestsRealtimeSocketWithToken(token: string): void {
+  if (!socket || !token) return;
+  socket.auth = { token };
+  socket.disconnect();
+  socket.connect();
+}
+
+export function disconnectAdminRequestsRealtimeSocket(): void {
+  if (!socket) return;
+  socket.removeAllListeners();
+  socket.disconnect();
+  socket = null;
+  listenersWired = false;
+}
