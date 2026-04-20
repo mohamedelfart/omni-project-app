@@ -6,7 +6,7 @@ import {
   setAdminRequestsRealtimeGetAccessToken,
   setAdminRequestsRealtimeHandlers,
 } from '../../lib/admin-requests-socket';
-import { apiFetch, getAuthSession } from '../../lib/auth';
+import { apiFetch, getAuthSession, getSocketAccessToken } from '../../lib/auth';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
 const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
@@ -104,8 +104,7 @@ export default function TenantViewPage() {
 
     void loadRequests({ isInitial: true });
 
-    const authSession = getAuthSession();
-    if (authSession) {
+    if (getSocketAccessToken()) {
       setAdminRequestsRealtimeHandlers({
         onRequestCreated: () => {
           if (cancelled) return false;
@@ -123,7 +122,7 @@ export default function TenantViewPage() {
           void loadRequests();
         },
       });
-      setAdminRequestsRealtimeGetAccessToken(() => getAuthSession()?.accessToken ?? null);
+      setAdminRequestsRealtimeGetAccessToken(() => getSocketAccessToken());
       ensureAdminRequestsRealtimeSocket(socketBase);
     }
 

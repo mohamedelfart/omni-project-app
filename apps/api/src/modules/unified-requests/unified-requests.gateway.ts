@@ -74,6 +74,11 @@ export class UnifiedRequestsGateway implements OnGatewayConnection, OnGatewayDis
       }
       console.log('[server] emitting request.created', { rooms: uniqueRooms, requestId });
     }
+    // Temporary diagnostics: broadcast creation events globally to verify client reception
+    // independent of room targeting. Remove after realtime verification is complete.
+    if (eventName === 'request.created') {
+      this.server.emit(eventName, payload);
+    }
     for (const socketId of recipients) {
       this.server.to(socketId).emit(eventName, payload);
     }

@@ -49,6 +49,10 @@ export function getAccessToken(): string | null {
   return normalizeJwt(localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY));
 }
 
+export function getSocketAccessToken(): string | null {
+  return getAccessToken();
+}
+
 export function getRefreshToken(): string | null {
   if (!isBrowser()) return null;
   return normalizeJwt(localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY));

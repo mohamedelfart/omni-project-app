@@ -5,6 +5,8 @@ import '../../entry/screens/app_entry_screen.dart';
 import '../../properties/screens/property_list_screen.dart';
 
 /// Root: signed-out → role entry; signed-in → main property browse (unchanged request entry point).
+const bool kDevDirectBrowseOnStartup = true;
+
 class SessionGate extends StatefulWidget {
   const SessionGate({super.key});
 
@@ -31,6 +33,9 @@ class _SessionGateState extends State<SessionGate> {
 
   @override
   Widget build(BuildContext context) {
+    if (kDevDirectBrowseOnStartup) {
+      return const PropertyListScreen();
+    }
     if (!TenantApiTokens.instance.hasAccessToken) {
       return const AppEntryScreen();
     }

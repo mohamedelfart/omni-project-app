@@ -86,6 +86,24 @@ class UnifiedRequestsApi {
     return fromProp.isNotEmpty ? fromProp : 'Doha';
   }
 
+  static Future<http.Response> _postCreateRequest(
+    Uri uri,
+    Map<String, Object?> body,
+  ) {
+    final String encoded = jsonEncode(body);
+    if (TenantApiTokens.instance.hasAccessToken) {
+      return TenantHttpClient.authorizedPost(uri, body: encoded);
+    }
+    return http.post(
+      uri,
+      headers: const <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: encoded,
+    );
+  }
+
   /// Returns created unified request `id` from the API response body.
   static Future<String> createViewingUnifiedRequest({
     required List<Property> properties,
@@ -94,13 +112,11 @@ class UnifiedRequestsApi {
     if (properties.isEmpty) {
       throw StateError('At least one property is required');
     }
-    if (!TenantApiTokens.instance.hasAccessToken) {
-      throw Exception('Not signed in. Sign in to create a viewing request.');
-    }
 
     final Property first = properties.first;
     final Uri uri = Uri.parse('${_normalizeBase()}/unified-requests');
     final List<String> propertyIds = properties.map((Property p) => p.id).toList();
+    final bool isGuestMode = !TenantApiTokens.instance.hasAccessToken;
 
     final Map<String, Object?> body = <String, Object?>{
       'requestType': 'viewing',
@@ -113,13 +129,12 @@ class UnifiedRequestsApi {
         'tenantId': staticTenantLabel,
         'source': 'flutter-tenant',
         'flow': 'group-viewing-coordinator',
+        if (isGuestMode) 'guestMode': true,
+        if (isGuestMode) 'guestId': 'guest-${DateTime.now().millisecondsSinceEpoch}',
       },
     };
 
-    final http.Response response = await TenantHttpClient.authorizedPost(
-      uri,
-      body: jsonEncode(body),
-    );
+    final http.Response response = await _postCreateRequest(uri, body);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       String message = 'HTTP ${response.statusCode}';

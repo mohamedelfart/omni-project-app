@@ -6,7 +6,7 @@ import {
   setAdminRequestsRealtimeGetAccessToken,
   setAdminRequestsRealtimeHandlers,
 } from '../lib/admin-requests-socket';
-import { apiFetch, getAuthSession } from '../lib/auth';
+import { apiFetch, getAuthSession, getSocketAccessToken } from '../lib/auth';
 import { extractSocketRequestId } from '../lib/extract-socket-request-id';
 
 type DashboardRequest = {
@@ -423,6 +423,7 @@ export default function AdminOverviewPage() {
   useEffect(() => {
     let cancelled = false;
     const authSession = getAuthSession();
+    const socketAccessToken = getSocketAccessToken();
     let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
     let loadAbortController: AbortController | null = null;
 
@@ -468,7 +469,7 @@ export default function AdminOverviewPage() {
     };
 
     void load();
-    if (!authSession) {
+    if (!socketAccessToken) {
       const socketError = 'Missing auth token for socket connection';
       if (process.env.NODE_ENV === 'development') {
         console.error(`[socket] ${socketError}`);
@@ -565,7 +566,7 @@ export default function AdminOverviewPage() {
           })();
         },
       });
-      setAdminRequestsRealtimeGetAccessToken(() => getAuthSession()?.accessToken ?? null);
+      setAdminRequestsRealtimeGetAccessToken(() => getSocketAccessToken());
       ensureAdminRequestsRealtimeSocket(socketBase);
     }
 
