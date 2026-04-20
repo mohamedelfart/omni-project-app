@@ -1,5 +1,8 @@
-import 'features/properties/screens/property_list_screen.dart';
 import 'package:flutter/material.dart';
+
+import 'core/auth/tenant_api_tokens.dart';
+import 'features/auth/widgets/session_gate.dart';
+import 'features/properties/screens/property_list_screen.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'features/auth/screens/login_screen.dart';
 // import 'features/command_center/command_center_real_os_screen.dart';
@@ -12,7 +15,11 @@ import 'features/delivery/screens/delivery_screen.dart';
 import 'features/hotel_services/screens/hotel_services_screen.dart';
 import 'features/services/screens/services_screen.dart';
 
-void main() => runApp(const OmniRentApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await TenantApiTokens.instance.restoreFromStorage();
+  runApp(const OmniRentApp());
+}
 
 // ============================================================================
 // QUICKRENT — GLOBAL LIFESTYLE PLATFORM
@@ -112,7 +119,7 @@ class OmniRentApp extends StatelessWidget {
               type: BottomNavigationBarType.fixed,
             ),
           ),
-          home: const PropertyListScreen(),
+          home: const SessionGate(),
         );
       },
     );

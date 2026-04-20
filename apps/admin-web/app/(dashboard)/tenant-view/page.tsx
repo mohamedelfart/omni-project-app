@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import {
+  ensureAdminRequestsRealtimeSocket,
+  setAdminRequestsRealtimeGetAccessToken,
+  setAdminRequestsRealtimeHandlers,
+} from '../../lib/admin-requests-socket';
 import { getAccessToken } from '../../lib/auth';
+
+const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
 
 type TenantRequestRow = {
   id: string;
@@ -63,14 +71,23 @@ export default function TenantViewPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const run = async () => {
-      setLoading(true);
-      setError(null);
+    let loadAbortController: AbortController | null = null;
+
+    const loadRequests = async (opts?: { isInitial?: boolean }) => {
+      const isInitial = opts?.isInitial ?? false;
+      if (isInitial) {
+        setLoading(true);
+        setError(null);
+      }
+      loadAbortController?.abort();
+      loadAbortController = new AbortController();
+      const { signal } = loadAbortController;
       try {
         const token = getAccessToken();
         const response = await fetch('/api/requests', {
           cache: 'no-store',
           headers: buildAuthHeaders(token),
+          signal,
         });
         const payload = await response.json().catch(() => null);
         if (!response.ok) {
@@ -80,16 +97,48 @@ export default function TenantViewPage() {
               : 'Could not load requests';
           throw new Error(msg);
         }
-        if (!cancelled) setRows(normalizeList(payload));
+        if (!cancelled) {
+          setRows(normalizeList(payload));
+          setError(null);
+        }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Could not load requests');
+        if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
+        if (!cancelled && isInitial) {
+          setError(e instanceof Error ? e.message : 'Could not load requests');
+        }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && isInitial) setLoading(false);
       }
     };
-    void run();
+
+    void loadRequests({ isInitial: true });
+
+    const accessToken = getAccessToken();
+    if (accessToken) {
+      setAdminRequestsRealtimeHandlers({
+        onRequestCreated: () => {
+          if (cancelled) return false;
+          setTimeout(() => {
+            void loadRequests();
+          }, 0);
+          return true;
+        },
+        onRequestAssigned: () => {
+          if (cancelled) return;
+          void loadRequests();
+        },
+        onRequestUpdated: () => {
+          if (cancelled) return;
+          void loadRequests();
+        },
+      });
+      setAdminRequestsRealtimeGetAccessToken(() => getAccessToken());
+      ensureAdminRequestsRealtimeSocket(socketBase);
+    }
+
     return () => {
       cancelled = true;
+      loadAbortController?.abort();
     };
   }, []);
 

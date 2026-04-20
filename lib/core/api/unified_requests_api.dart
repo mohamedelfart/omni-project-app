@@ -4,8 +4,8 @@ import 'package:http/http.dart' as http;
 
 import '../auth/tenant_api_tokens.dart';
 import '../models/models.dart';
-import '../realtime/unified_requests_socket.dart';
 import 'omnirent_api_env.dart';
+import 'tenant_http_client.dart';
 
 /// One row from `GET /api/v1/unified-requests/me`.
 class UnifiedRequestListItem {
@@ -38,20 +38,10 @@ class UnifiedRequestListItem {
 
 /// Tenant unified requests API (`POST` create, `GET` mine`).
 ///
-/// Configure at run time:
-/// - `OMNIRENT_API_BASE` (default `http://127.0.0.1:4000/api/v1`)
-/// - `OMNIRENT_API_TOKEN` — access JWT (`Authorization: Bearer …`)
-/// - `OMNIRENT_API_REFRESH_TOKEN` — refresh JWT for `POST /auth/refresh` after HTTP 401
+/// API base: `--dart-define=OMNIRENT_API_BASE` (default `http://127.0.0.1:4000/api/v1`).
+/// Auth: session from [TenantApiTokens] (login + secure storage), HTTP via [TenantHttpClient].
 class UnifiedRequestsApi {
   UnifiedRequestsApi._();
-
-  static const String _accessFromEnv = String.fromEnvironment(
-    'OMNIRENT_API_TOKEN',
-    defaultValue: '',
-  );
-
-  /// Raw compile-time access token (for debug only).
-  static String get bearerTokenFromEnvironment => _accessFromEnv;
 
   /// `true` when a non-empty access JWT is available.
   static bool get hasTenantJwt => TenantApiTokens.instance.hasAccessToken;
@@ -79,72 +69,6 @@ class UnifiedRequestsApi {
   /// HTTP origin for Socket.IO (same host as API, without trailing `/api/v1`).
   static String socketHttpOrigin() => OmnirentApiEnv.socketHttpOrigin();
 
-  static Future<bool> _tryRefreshSession() async {
-    final String rt = TenantApiTokens.instance.refreshToken;
-    if (rt.isEmpty) {
-      return false;
-    }
-    final Uri uri = Uri.parse('${_normalizeBase()}/auth/refresh');
-    try {
-      final http.Response res = await http.post(
-        uri,
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode(<String, String>{'refreshToken': rt}),
-      );
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        return false;
-      }
-      final Object? decoded = jsonDecode(res.body);
-      if (decoded is! Map<String, dynamic>) {
-        return false;
-      }
-      final Object? data = decoded['data'];
-      if (data is! Map<String, dynamic>) {
-        return false;
-      }
-      final Object? at = data['accessToken'];
-      final Object? rt2 = data['refreshToken'];
-      if (at is! String || rt2 is! String || at.isEmpty || rt2.isEmpty) {
-        return false;
-      }
-      TenantApiTokens.instance.setTokens(accessToken: at, refreshToken: rt2);
-      // ignore: avoid_print
-      print('[UnifiedRequestsApi] auth/refresh succeeded (new access + refresh stored)');
-      UnifiedRequestsSocketClient.instance.invalidateAfterTokenRefresh();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// On HTTP 401, refreshes session once then retries [send].
-  static Future<http.Response> _with401Retry(Future<http.Response> Function() send) async {
-    http.Response r = await send();
-    if (r.statusCode != 401) {
-      return r;
-    }
-    // ignore: avoid_print
-    print('[UnifiedRequestsApi] HTTP 401 — attempting POST /auth/refresh …');
-    if (!TenantApiTokens.instance.hasRefreshToken) {
-      return r;
-    }
-    final bool ok = await _tryRefreshSession();
-    if (!ok) {
-      return r;
-    }
-    // ignore: avoid_print
-    print('[UnifiedRequestsApi] retrying original request after refresh …');
-    r = await send();
-    if (r.statusCode >= 200 && r.statusCode < 300) {
-      // ignore: avoid_print
-      print('[UnifiedRequestsApi] request retry succeeded (${r.statusCode})');
-    }
-    return r;
-  }
-
   static String _countryFor(Property property) {
     final String? c = property.location.country?.trim();
     if (c != null && c.isNotEmpty) {
@@ -171,25 +95,12 @@ class UnifiedRequestsApi {
       throw StateError('At least one property is required');
     }
     if (!TenantApiTokens.instance.hasAccessToken) {
-      throw Exception(
-        'Missing JWT: set OMNIRENT_API_TOKEN via --dart-define=OMNIRENT_API_TOKEN=... '
-        'and OMNIRENT_API_REFRESH_TOKEN for automatic renewal '
-        '(raw access length=${_accessFromEnv.length}, repr=${jsonEncode(_accessFromEnv)})',
-      );
+      throw Exception('Not signed in. Sign in to create a viewing request.');
     }
 
     final Property first = properties.first;
     final Uri uri = Uri.parse('${_normalizeBase()}/unified-requests');
     final List<String> propertyIds = properties.map((Property p) => p.id).toList();
-
-    // ignore: avoid_print
-    print('JWT used: $tenantJwt');
-    // ignore: avoid_print
-    print(
-      'OMNIRENT_API_TOKEN raw length=${_accessFromEnv.length}, access runtime length=${TenantApiTokens.instance.accessToken.length}',
-    );
-    // ignore: avoid_print
-    print('Authorization header (masked): ${maskedAuthorizationHeader()}');
 
     final Map<String, Object?> body = <String, Object?>{
       'requestType': 'viewing',
@@ -205,17 +116,10 @@ class UnifiedRequestsApi {
       },
     };
 
-    final http.Response response = await _with401Retry(() {
-      final String authHeaderValue = 'Bearer ${TenantApiTokens.instance.accessToken}';
-      return http.post(
-        uri,
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'Authorization': authHeaderValue,
-        },
-        body: jsonEncode(body),
-      );
-    });
+    final http.Response response = await TenantHttpClient.authorizedPost(
+      uri,
+      body: jsonEncode(body),
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       String message = 'HTTP ${response.statusCode}';
@@ -255,22 +159,11 @@ class UnifiedRequestsApi {
   /// Tenant-safe list: `GET /api/v1/unified-requests/me` (@Roles tenant).
   static Future<List<UnifiedRequestListItem>> listMineForTenant() async {
     if (!TenantApiTokens.instance.hasAccessToken) {
-      throw Exception(
-        'Missing JWT: set OMNIRENT_API_TOKEN via --dart-define=OMNIRENT_API_TOKEN=... '
-        'and OMNIRENT_API_REFRESH_TOKEN for automatic renewal',
-      );
+      throw Exception('Not signed in. Sign in to view your requests.');
     }
 
     final Uri uri = Uri.parse('${_normalizeBase()}/unified-requests/me');
-    final http.Response response = await _with401Retry(() {
-      return http.get(
-        uri,
-        headers: <String, String>{
-          'Accept': 'application/json',
-          'Authorization': 'Bearer ${TenantApiTokens.instance.accessToken}',
-        },
-      );
-    });
+    final http.Response response = await TenantHttpClient.authorizedGet(uri);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       String message = 'HTTP ${response.statusCode}';
@@ -321,23 +214,12 @@ class UnifiedRequestsApi {
       throw ArgumentError('id required');
     }
     if (!TenantApiTokens.instance.hasAccessToken) {
-      throw Exception(
-        'Missing JWT: set OMNIRENT_API_TOKEN via --dart-define=OMNIRENT_API_TOKEN=... '
-        'and OMNIRENT_API_REFRESH_TOKEN for automatic renewal',
-      );
+      throw Exception('Not signed in. Sign in to refresh this request.');
     }
 
     final Uri uri = Uri.parse('${_normalizeBase()}/unified-requests/${Uri.encodeComponent(id)}');
     try {
-      final http.Response response = await _with401Retry(() {
-        return http.get(
-          uri,
-          headers: <String, String>{
-            'Accept': 'application/json',
-            'Authorization': 'Bearer ${TenantApiTokens.instance.accessToken}',
-          },
-        );
-      });
+      final http.Response response = await TenantHttpClient.authorizedGet(uri);
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return _parseEnvelopeObject(response.body);
       }

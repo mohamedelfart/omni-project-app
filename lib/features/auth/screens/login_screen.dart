@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+
+import '../../../core/auth/tenant_auth_repository.dart';
 import '../../entry/screens/app_entry_screen.dart';
 import '../../home/screens/tenant_home_screen.dart';
+import '../../properties/screens/property_list_screen.dart';
 import '../../vendor/screens/vendor_assignments_screen.dart';
-// import '../../command_center/screens/command_center_home_screen.dart';
 import '../../../shared/widgets/premium_visual_asset.dart';
 
 // ============================================================================
@@ -24,6 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
+  String? _errorMessage;
 
   @override
   void dispose() {
@@ -32,21 +35,35 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _login() async {
+  Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 800));
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    try {
+      await TenantAuthRepository.instance.loginWithEmailPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = e is Exception ? e.toString().replaceFirst('Exception: ', '') : '$e';
+      });
+      return;
+    }
     if (!mounted) return;
     setState(() => _isLoading = false);
     final Widget destination = switch (widget.role) {
-      UserRole.tenant => const TenantHomeScreen(),
+      UserRole.tenant => const PropertyListScreen(),
       UserRole.vendor => const VendorAssignmentsScreen(vendorId: 'VENDOR-DEMO-001'),
-      UserRole.admin  => const TenantHomeScreen(), // Disabled Command Center
+      UserRole.admin => const TenantHomeScreen(),
     };
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => destination),
+    await Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => destination),
+      (Route<dynamic> r) => false,
     );
   }
 
@@ -179,12 +196,23 @@ class _LoginScreenState extends State<LoginScreen> {
                               if (v == null || v.isEmpty) {
                                 return 'يرجى إدخال كلمة المرور';
                               }
-                              if (v.length < 6) {
-                                return 'كلمة المرور قصيرة جداً';
+                              if (v.length < 8) {
+                                return 'كلمة المرور يجب أن لا تقل عن 8 أحرف';
                               }
                               return null;
                             },
                           ),
+                          if (_errorMessage != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              _errorMessage!,
+                              style: const TextStyle(
+                                color: Color(0xFFB91C1C),
+                                fontSize: 13,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 8),
 
                           // Forgot password

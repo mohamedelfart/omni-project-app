@@ -39,6 +39,12 @@ class UnifiedRequestsSocketClient {
     }
   }
 
+  /// Logout / revoked session: drop all listeners and close the socket (no reconnect).
+  void disconnectAll() {
+    _listeners.clear();
+    _disposeSocket();
+  }
+
   void _syncSocket() {
     if (_listeners.isEmpty) {
       _disposeSocket();

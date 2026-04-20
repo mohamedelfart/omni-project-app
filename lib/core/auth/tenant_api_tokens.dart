@@ -1,22 +1,14 @@
-/// Runtime access + refresh JWTs for tenant API calls.
-///
-/// Bootstraps from `--dart-define=OMNIRENT_API_TOKEN` (access) and
-/// `--dart-define=OMNIRENT_API_REFRESH_TOKEN` (refresh); updated after `POST /auth/refresh`.
-class TenantApiTokens {
+import 'package:flutter/foundation.dart';
+
+import 'tenant_secure_token_store.dart';
+
+/// In-memory access + refresh JWTs mirrored to secure storage.
+class TenantApiTokens extends ChangeNotifier {
   TenantApiTokens._();
   static final TenantApiTokens instance = TenantApiTokens._();
 
-  static const String _accessFromEnv = String.fromEnvironment(
-    'OMNIRENT_API_TOKEN',
-    defaultValue: '',
-  );
-  static const String _refreshFromEnv = String.fromEnvironment(
-    'OMNIRENT_API_REFRESH_TOKEN',
-    defaultValue: '',
-  );
-
-  String _access = _normalizeBearerToken(_accessFromEnv);
-  String _refresh = _normalizeBearerToken(_refreshFromEnv);
+  String _access = '';
+  String _refresh = '';
 
   static String _normalizeBearerToken(String raw) {
     String t = raw.trim();
@@ -42,8 +34,26 @@ class TenantApiTokens {
 
   bool get hasRefreshToken => _refresh.isNotEmpty;
 
-  void setTokens({required String accessToken, required String refreshToken}) {
+  /// Load tokens from secure storage (call once at startup before [runApp]).
+  Future<void> restoreFromStorage() async {
+    final String? a = await TenantSecureTokenStore.instance.readAccess();
+    final String? r = await TenantSecureTokenStore.instance.readRefresh();
+    _access = _normalizeBearerToken(a ?? '');
+    _refresh = _normalizeBearerToken(r ?? '');
+    notifyListeners();
+  }
+
+  Future<void> persistSession({required String accessToken, required String refreshToken}) async {
     _access = _normalizeBearerToken(accessToken);
     _refresh = _normalizeBearerToken(refreshToken);
+    await TenantSecureTokenStore.instance.writePair(accessToken: _access, refreshToken: _refresh);
+    notifyListeners();
+  }
+
+  Future<void> clearSession() async {
+    _access = '';
+    _refresh = '';
+    await TenantSecureTokenStore.instance.clear();
+    notifyListeners();
   }
 }

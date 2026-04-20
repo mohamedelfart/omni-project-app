@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/auth/tenant_auth_repository.dart';
 import '../../../core/models/models.dart';
+import '../../auth/widgets/session_gate.dart';
 import 'property_flow_ui.dart';
 import 'omnicart_screen.dart';
 import 'omnirent_flow_state.dart';
@@ -412,7 +414,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Navigator.pop(ctx);
           OmniRentFlowState.setLoggedIn(false);
           OmniRentFlowState.clearCart();
-          Navigator.pop(context);
+          final NavigatorState nav = Navigator.of(context, rootNavigator: true);
+          TenantAuthRepository.instance.logout().then((_) {
+            nav.pushAndRemoveUntil(
+              MaterialPageRoute<void>(builder: (_) => const SessionGate()),
+              (Route<dynamic> r) => false,
+            );
+          });
         },
         onCancel: () => Navigator.pop(ctx),
       ),
