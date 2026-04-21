@@ -4,13 +4,13 @@ class OmnirentApiEnv {
 
   static const String baseUrl = String.fromEnvironment(
     'OMNIRENT_API_BASE',
-    defaultValue: 'http://127.0.0.1:4000/api/v1',
+    defaultValue: 'http://localhost:4000/api/v1',
   );
 
   static String normalizedBase() {
     final String trimmed = baseUrl.trim();
     if (trimmed.isEmpty) {
-      return 'http://127.0.0.1:4000/api/v1';
+      return 'http://localhost:4000/api/v1';
     }
     return trimmed.replaceAll(RegExp(r'/+$'), '');
   }

@@ -16,6 +16,8 @@ async function bootstrap(): Promise<void> {
 
   app.setGlobalPrefix(env.API_PREFIX);
   app.use(helmet());
+  // Reflect request Origin (required when credentials: true). Covers Flutter web on
+  // http://localhost:9001 / http://127.0.0.1:9001 and local Next/Expo dev servers.
   app.enableCors({
     origin: true,
     credentials: true,

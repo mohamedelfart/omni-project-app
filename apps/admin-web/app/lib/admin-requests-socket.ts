@@ -3,7 +3,11 @@ import { io, type Socket } from 'socket.io-client';
 import { extractSocketRequestId } from './extract-socket-request-id';
 
 export type AdminRequestsRealtimeHandlers = {
-  /** Return `false` if the event was skipped (e.g. unmounted); dedupe will not record it as handled. */
+  /**
+   * Return `false` if the event was skipped (e.g. unmounted) — dedupe will not record this id.
+   * Return `true` after successful handling — same id may be suppressed if it arrives again within the dedupe window.
+   * Other return values run the handler but do not record dedupe (first real consumer should return `true`).
+   */
   onRequestCreated: (payload: unknown) => void | boolean;
   onRequestAssigned: () => void;
   onRequestUpdated: (payload: unknown) => void;
@@ -107,8 +111,9 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
       console.log('[socket] invoking handler', payload);
       const run = handlersRef.current.onRequestCreated;
       console.log('[admin-debug] socket invoking onRequestCreated', { typeof: typeof run });
-      const handled = run(payload) !== false;
-      if (handled) {
+      const runResult = run(payload);
+      if (runResult === false) return;
+      if (runResult === true) {
         markRequestCreatedHandled(id);
       }
     });

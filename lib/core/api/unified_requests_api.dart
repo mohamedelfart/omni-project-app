@@ -38,7 +38,7 @@ class UnifiedRequestListItem {
 
 /// Tenant unified requests API (`POST` create, `GET` mine`).
 ///
-/// API base: `--dart-define=OMNIRENT_API_BASE` (default `http://127.0.0.1:4000/api/v1`).
+/// API base: `--dart-define=OMNIRENT_API_BASE` (default `http://localhost:4000/api/v1`).
 /// Auth: session from [TenantApiTokens] (login + secure storage), HTTP via [TenantHttpClient].
 class UnifiedRequestsApi {
   UnifiedRequestsApi._();
