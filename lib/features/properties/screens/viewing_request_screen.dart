@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../core/models/models.dart';
 import '../../../core/api/unified_requests_api.dart';
+import 'viewing_request_status_step_screen.dart';
 
 class ViewingRequestScreen extends StatefulWidget {
   final Property property;
@@ -24,28 +25,6 @@ class _ViewingRequestScreenState extends State<ViewingRequestScreen> {
   bool _isMvpUnauthorizedCreateError(Object error) {
     final String msg = error.toString().toLowerCase();
     return msg.contains('http 401') || msg.contains('unauthorized');
-  }
-
-  Future<void> _showSuccessDialog(String requestId) async {
-    if (!context.mounted) return;
-    final NavigatorState navigator = Navigator.of(context);
-    setState(() => _submitting = false);
-    await showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Success'),
-        content: Text('Viewing request submitted.\nRequest ID: $requestId'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              navigator.pop();
-              navigator.popUntil((route) => route.isFirst);
-            },
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
@@ -139,11 +118,26 @@ class _ViewingRequestScreenState extends State<ViewingRequestScreen> {
                             properties: <Property>[widget.property],
                             preferredDateTime: preferredDateTime,
                           );
-                          await _showSuccessDialog(requestId);
+                          if (!context.mounted) return;
+                          debugPrint('Viewing request created: $requestId');
+                          setState(() => _submitting = false);
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => ViewingRequestStatusStepScreen(
+                                property: widget.property,
+                                requestId: requestId,
+                                selectedDateTime: preferredDateTime,
+                              ),
+                            ),
+                          );
                         } catch (e) {
                           if (_isMvpUnauthorizedCreateError(e)) {
-                            final String guestRequestId = 'guest-${DateTime.now().millisecondsSinceEpoch}';
-                            await _showSuccessDialog(guestRequestId);
+                            if (!context.mounted) return;
+                            setState(() => _submitting = false);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Authentication required. Please sign in.')),
+                            );
                             return;
                           }
                           if (!context.mounted) return;

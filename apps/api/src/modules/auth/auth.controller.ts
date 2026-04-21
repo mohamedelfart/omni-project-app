@@ -32,6 +32,11 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @Post('guest-session')
+  guestSession() {
+    return this.authService.createGuestSession();
+  }
+
   @Post('phone/request-otp')
   requestPhoneOtp(@Body() dto: PhoneOtpRequestDto) {
     return this.authService.requestPhoneOtp(dto);

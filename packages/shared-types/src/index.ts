@@ -1,4 +1,4 @@
-export type UserRole = 'tenant' | 'landlord' | 'provider' | 'admin' | 'command-center';
+export type UserRole = 'tenant' | 'guest' | 'landlord' | 'provider' | 'admin' | 'command-center';
 
 export type AuthTokens = {
   accessToken: string;

@@ -418,6 +418,7 @@ class _PropertyListScreenState extends State<PropertyListScreen> {
                         onAddToCart: () => OmniRentFlowState.toggleCart(property),
                         inCart: cart.containsKey(property.id),
                         onTap: () {
+                          debugPrint('Property card clicked: ${property.id}');
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -871,45 +872,48 @@ class _CardImageGalleryState extends State<_CardImageGallery> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            ScrollConfiguration(
-              behavior: ScrollConfiguration.of(context).copyWith(
-                dragDevices: {
-                  PointerDeviceKind.touch,
-                  PointerDeviceKind.mouse,
-                },
-              ),
-              child: PageView.builder(
-                controller: _controller,
-                onPageChanged: (int v) => setState(() => _index = v),
-                itemCount: _images.length,
-                itemBuilder: (_, int i) {
-                  return Image.network(
-                    _images[i],
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.high,
-                    frameBuilder: (_, child, frame, sync) {
-                      if (sync || frame != null) return child;
-                      return Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          const ColoredBox(color: Color(0xFFEEF2FF)),
-                          AnimatedOpacity(
-                            opacity: frame == null ? 0.0 : 1.0,
-                            duration: const Duration(milliseconds: 260),
-                            child: child,
-                          ),
-                        ],
-                      );
-                    },
-                    errorBuilder: (
-                      BuildContext context,
-                      Object error,
-                      StackTrace? stackTrace,
-                    ) => const ColoredBox(
-                      color: Color(0xFFEEF2FF),
-                    ),
-                  );
-                },
+            IgnorePointer(
+              ignoring: true,
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  dragDevices: {
+                    PointerDeviceKind.touch,
+                    PointerDeviceKind.mouse,
+                  },
+                ),
+                child: PageView.builder(
+                  controller: _controller,
+                  onPageChanged: (int v) => setState(() => _index = v),
+                  itemCount: _images.length,
+                  itemBuilder: (_, int i) {
+                    return Image.network(
+                      _images[i],
+                      fit: BoxFit.cover,
+                      filterQuality: FilterQuality.high,
+                      frameBuilder: (_, child, frame, sync) {
+                        if (sync || frame != null) return child;
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            const ColoredBox(color: Color(0xFFEEF2FF)),
+                            AnimatedOpacity(
+                              opacity: frame == null ? 0.0 : 1.0,
+                              duration: const Duration(milliseconds: 260),
+                              child: child,
+                            ),
+                          ],
+                        );
+                      },
+                      errorBuilder: (
+                        BuildContext context,
+                        Object error,
+                        StackTrace? stackTrace,
+                      ) => const ColoredBox(
+                        color: Color(0xFFEEF2FF),
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
             if (_canSlide)

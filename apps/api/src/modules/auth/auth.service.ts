@@ -2,7 +2,7 @@ import { ConflictException, Injectable, NotFoundException, UnauthorizedException
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RoleCode } from '@prisma/client';
-import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 
 import { AuthTokens, UserRole } from '@quickrent/shared-types';
 
@@ -110,6 +110,20 @@ export class AuthService {
     return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
   }
 
+  async createGuestSession(): Promise<AuthTokens> {
+    const guestId = `guest_${randomUUID()}`;
+    await this.prisma.user.create({
+      data: {
+        id: guestId,
+        fullName: 'Guest Session',
+        countryCode: 'QA',
+        isVerified: false,
+        isProfileCompleted: false,
+      },
+    });
+    return this.issueTokens(guestId, 'guest', ['guest'], { sessionType: 'guest' });
+  }
+
   async requestPhoneOtp(payload: PhoneOtpRequestDto): Promise<{ challengeId: string; expiresInSeconds: number; devOtpCode?: string }> {
     this.cleanupExpiredOtpChallenges();
 
@@ -189,7 +203,7 @@ export class AuthService {
    * Rejects other tokens minted with the same secret (e.g. password-reset) that are not refresh sessions.
    */
   async refreshTokens(payload: RefreshTokenDto): Promise<AuthTokens> {
-    type RefreshClaims = { sub: string; role?: UserRole; roles?: UserRole[]; type?: string };
+    type RefreshClaims = { sub: string; role?: UserRole; roles?: UserRole[]; type?: string; sessionType?: string };
 
     let decoded: RefreshClaims;
     try {
@@ -207,7 +221,8 @@ export class AuthService {
     const role = decoded.role ?? 'tenant';
     const roles = decoded.roles?.length ? decoded.roles : [role];
 
-    return this.issueTokens(decoded.sub, role, roles);
+    const sessionType = decoded.sessionType === 'guest' ? 'guest' : undefined;
+    return this.issueTokens(decoded.sub, role, roles, { sessionType });
   }
 
   async verifyAccount(payload: VerifyAccountDto): Promise<{ verified: boolean }> {
@@ -274,16 +289,24 @@ export class AuthService {
     return { completed: true };
   }
 
-  private async issueTokens(userId: string, role: UserRole, roles: UserRole[]): Promise<AuthTokens> {
+  private async issueTokens(
+    userId: string,
+    role: UserRole,
+    roles: UserRole[],
+    options?: { sessionType?: 'guest' },
+  ): Promise<AuthTokens> {
     const accessSecret = this.configService.getOrThrow<string>('JWT_ACCESS_SECRET');
     const refreshSecret = this.configService.getOrThrow<string>('JWT_REFRESH_SECRET');
     const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_TTL') ?? '15m';
     const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_TTL') ?? '7d';
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync({ sub: userId, role, roles }, { secret: accessSecret, expiresIn: accessExpiresIn }),
       this.jwtService.signAsync(
-        { sub: userId, role, roles, type: 'refresh' },
+        { sub: userId, role, roles, ...(options?.sessionType ? { sessionType: options.sessionType } : {}) },
+        { secret: accessSecret, expiresIn: accessExpiresIn },
+      ),
+      this.jwtService.signAsync(
+        { sub: userId, role, roles, type: 'refresh', ...(options?.sessionType ? { sessionType: options.sessionType } : {}) },
         { secret: refreshSecret, expiresIn: refreshExpiresIn },
       ),
     ]);

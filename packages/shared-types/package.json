@@ -2,6 +2,9 @@
   "name": "@quickrent/shared-types",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('dist/index.js','dist/index.cjs')\""
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -10,5 +13,8 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
   }
 }

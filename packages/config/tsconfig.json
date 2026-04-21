@@ -3,10 +3,11 @@
   "compilerOptions": {
     "module": "CommonJS",
     "moduleResolution": "Node",
-    "paths": {},
     "outDir": "dist",
-    "emitDecoratorMetadata": true,
-    "experimentalDecorators": true
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false
   },
   "include": ["src/**/*.ts"]
 }

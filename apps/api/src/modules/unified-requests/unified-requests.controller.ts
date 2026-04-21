@@ -24,7 +24,7 @@ export class UnifiedRequestsController {
   constructor(private readonly unifiedRequestsService: UnifiedRequestsService) {}
 
   @Get('me')
-  @Roles('tenant')
+  @Roles('tenant', 'guest')
   listMine(@CurrentUser() user: { id: string }) {
     return this.unifiedRequestsService.listMine(user.id);
   }
@@ -41,7 +41,7 @@ export class UnifiedRequestsController {
   }
 
   @Post('realtime')
-  @Roles('tenant')
+  @Roles('tenant', 'guest')
   createRealtime(@CurrentUser() user: { id: string }, @Body() dto: CreateRealtimeRequestDto) {
     return this.unifiedRequestsService.createRealtimeRequest(user.id, dto);
   }

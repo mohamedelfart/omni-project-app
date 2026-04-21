@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/auth/tenant_api_tokens.dart';
+import 'core/auth/tenant_auth_repository.dart';
 import 'features/auth/widgets/session_gate.dart';
 import 'features/properties/screens/property_list_screen.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -18,6 +19,9 @@ import 'features/services/screens/services_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await TenantApiTokens.instance.restoreFromStorage();
+  if (!TenantApiTokens.instance.hasAccessToken) {
+    await TenantAuthRepository.instance.createGuestSession();
+  }
   runApp(const OmniRentApp());
 }
 
@@ -661,11 +665,13 @@ class _HomeScreenState extends State<HomeScreen> {
               width: double.infinity,
               child: OutlinedButton(
                 onPressed: () {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                    (route) => false,
-                  );
+                  TenantAuthRepository.instance.logout().then((_) {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SessionGate()),
+                      (route) => false,
+                    );
+                  });
                 },
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFEF4444),
