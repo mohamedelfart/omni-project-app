@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, RequestPriority, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -352,6 +352,14 @@ export class UnifiedRequestsService {
   }
 
   async assignVendor(requestId: string, dto: AssignVendorDto, user: AuthenticatedUser) {
+    const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: requestId },
+      select: { status: true },
+    });
+    if (existing.status === UnifiedRequestStatus.ASSIGNED) {
+      throw new ConflictException('Request is already assigned');
+    }
+
     const updated = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
@@ -371,6 +379,17 @@ export class UnifiedRequestsService {
         'role:command-center',
       ],
       { request: minimal, vendorId: dto.vendorId },
+    );
+    this.unifiedRequestsGateway.emitToRooms(
+      REQUEST_SOCKET_EVENTS.updated,
+      [
+        `user:${minimal.tenantId}`,
+        `user:${dto.vendorId}`,
+        'role:provider',
+        'role:admin',
+        'role:command-center',
+      ],
+      { requestId: minimal.id, status: minimal.status },
     );
     void this.appendAssignTicketAction(requestId, user, dto).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : 'Unknown logging error';
@@ -430,7 +449,7 @@ export class UnifiedRequestsService {
         'role:admin',
         'role:command-center',
       ],
-      { request: minimal, changedFields: ['status'] },
+      { requestId: minimal.id, status: minimal.status },
     );
 
     void this.appendStatusUpdateTicketAction(requestId, user, current, dto.status).catch((error: unknown) => {
@@ -498,7 +517,7 @@ export class UnifiedRequestsService {
         'role:admin',
         'role:command-center',
       ],
-      { request: minimal, changedFields: ['status'] },
+      { requestId: minimal.id, status: minimal.status },
     );
     this.logTicketActionNoThrow({
       ticketId: requestId,

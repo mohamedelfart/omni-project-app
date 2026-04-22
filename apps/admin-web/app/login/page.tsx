@@ -4,35 +4,60 @@ import { FormEvent, useMemo, useState } from 'react';
 
 const ACCESS_TOKEN_STORAGE_KEY = 'quickrent_access_token';
 const REFRESH_TOKEN_STORAGE_KEY = 'quickrent_refresh_token';
-
-function isLikelyJwt(token: string): boolean {
-  const parts = token.split('.');
-  return parts.length === 3 && parts.every((part) => part.length > 0);
-}
+const AUTH_LOGIN_URL = 'http://localhost:4000/api/v1/auth/login';
 
 export default function AdminLoginPage() {
-  const [accessToken, setAccessToken] = useState('');
-  const [refreshToken, setRefreshToken] = useState('');
+  const [email, setEmail] = useState('admin@omnireent.local');
+  const [password, setPassword] = useState('admin123');
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = useMemo(() => isLikelyJwt(accessToken.trim()), [accessToken]);
+  const canSubmit = useMemo(() => email.trim().length > 0 && password.trim().length > 0 && !submitting, [email, password, submitting]);
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const access = accessToken.trim();
-    const refresh = refreshToken.trim();
-    if (!isLikelyJwt(access)) {
-      setError('Access token must be a valid JWT.');
-      return;
-    }
+    setError(null);
+    setSubmitting(true);
+    try {
+      const response = await fetch(AUTH_LOGIN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const errorMessage =
+          (payload && typeof payload === 'object' && 'message' in payload && typeof payload.message === 'string'
+            ? payload.message
+            : null) ?? 'Login failed';
+        throw new Error(errorMessage);
+      }
 
-    localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, access);
-    if (isLikelyJwt(refresh)) {
-      localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, refresh);
-    } else {
-      localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+      const data = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+      const accessToken =
+        data && typeof data === 'object' && 'accessToken' in data && typeof data.accessToken === 'string'
+          ? data.accessToken
+          : '';
+      const refreshToken =
+        data && typeof data === 'object' && 'refreshToken' in data && typeof data.refreshToken === 'string'
+          ? data.refreshToken
+          : '';
+
+      if (!accessToken) {
+        throw new Error('Login response missing access token');
+      }
+
+      localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, accessToken);
+      localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, refreshToken ?? '');
+      window.location.href = '/';
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Login failed');
+    } finally {
+      setSubmitting(false);
     }
-    window.location.assign('/');
   };
 
   return (
@@ -43,26 +68,26 @@ export default function AdminLoginPage() {
       >
         <h1 style={{ margin: 0, fontSize: 24 }}>Admin Login Recovery</h1>
         <p style={{ margin: 0, color: '#64748B', fontSize: 14 }}>
-          Paste a valid access token to restore dashboard and socket authentication. Refresh token is optional but recommended.
+          Sign in with admin credentials to restore dashboard and socket authentication.
         </p>
         <label style={{ display: 'grid', gap: 6 }}>
-          <span>Access Token</span>
-          <textarea
-            value={accessToken}
-            onChange={(e) => setAccessToken(e.target.value)}
-            rows={5}
-            placeholder="eyJ..."
-            style={{ resize: 'vertical', padding: 10, border: '1px solid #CBD5E1', borderRadius: 8 }}
+          <span>Email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="admin@omnireent.local"
+            style={{ padding: 10, border: '1px solid #CBD5E1', borderRadius: 8 }}
           />
         </label>
         <label style={{ display: 'grid', gap: 6 }}>
-          <span>Refresh Token (optional)</span>
-          <textarea
-            value={refreshToken}
-            onChange={(e) => setRefreshToken(e.target.value)}
-            rows={4}
-            placeholder="eyJ..."
-            style={{ resize: 'vertical', padding: 10, border: '1px solid #CBD5E1', borderRadius: 8 }}
+          <span>Password</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="admin123"
+            style={{ padding: 10, border: '1px solid #CBD5E1', borderRadius: 8 }}
           />
         </label>
         {error ? <div style={{ color: '#B91C1C', fontSize: 13 }}>{error}</div> : null}
@@ -71,7 +96,7 @@ export default function AdminLoginPage() {
           disabled={!canSubmit}
           style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #1D4ED8', background: '#2563EB', color: '#FFF', cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: canSubmit ? 1 : 0.6 }}
         >
-          Save Session
+          {submitting ? 'Logging in…' : 'Login'}
         </button>
       </form>
     </main>

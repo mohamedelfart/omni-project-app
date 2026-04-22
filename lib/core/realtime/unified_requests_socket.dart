@@ -7,6 +7,7 @@ import '../auth/tenant_api_tokens.dart';
 ///
 /// Server joins the socket to `user:{jwt.sub}`; emits are tenant-scoped for that user.
 typedef UnifiedRequestRealtimeListener = void Function(String? requestId);
+typedef UnifiedRequestUpdatedListener = void Function(String? requestId, String? status);
 
 class UnifiedRequestsSocketClient {
   UnifiedRequestsSocketClient._();
@@ -20,6 +21,7 @@ class UnifiedRequestsSocketClient {
 
   io.Socket? _socket;
   final List<UnifiedRequestRealtimeListener> _listeners = <UnifiedRequestRealtimeListener>[];
+  final List<UnifiedRequestUpdatedListener> _updatedListeners = <UnifiedRequestUpdatedListener>[];
 
   void subscribe(UnifiedRequestRealtimeListener listener) {
     _listeners.add(listener);
@@ -28,6 +30,16 @@ class UnifiedRequestsSocketClient {
 
   void unsubscribe(UnifiedRequestRealtimeListener listener) {
     _listeners.remove(listener);
+    _syncSocket();
+  }
+
+  void subscribeUpdated(UnifiedRequestUpdatedListener listener) {
+    _updatedListeners.add(listener);
+    _syncSocket();
+  }
+
+  void unsubscribeUpdated(UnifiedRequestUpdatedListener listener) {
+    _updatedListeners.remove(listener);
     _syncSocket();
   }
 
@@ -42,11 +54,12 @@ class UnifiedRequestsSocketClient {
   /// Logout / revoked session: drop all listeners and close the socket (no reconnect).
   void disconnectAll() {
     _listeners.clear();
+    _updatedListeners.clear();
     _disposeSocket();
   }
 
   void _syncSocket() {
-    if (_listeners.isEmpty) {
+    if (_listeners.isEmpty && _updatedListeners.isEmpty) {
       _disposeSocket();
       return;
     }
@@ -76,8 +89,12 @@ class UnifiedRequestsSocketClient {
 
   void _onServerEvent(dynamic data) {
     final String? requestId = _requestIdFromPayload(data);
+    final String? status = _statusFromPayload(data);
     for (final UnifiedRequestRealtimeListener listener in List<UnifiedRequestRealtimeListener>.from(_listeners)) {
       listener(requestId);
+    }
+    for (final UnifiedRequestUpdatedListener listener in List<UnifiedRequestUpdatedListener>.from(_updatedListeners)) {
+      listener(requestId, status);
     }
   }
 
@@ -85,11 +102,33 @@ class UnifiedRequestsSocketClient {
     if (data is! Map) {
       return null;
     }
+    final Object? requestId = data['requestId'];
+    if (requestId is String && requestId.isNotEmpty) {
+      return requestId;
+    }
     final Object? request = data['request'];
     if (request is Map) {
       final Object? id = request['id'];
       if (id is String && id.isNotEmpty) {
         return id;
+      }
+    }
+    return null;
+  }
+
+  static String? _statusFromPayload(dynamic data) {
+    if (data is! Map) {
+      return null;
+    }
+    final Object? status = data['status'];
+    if (status is String && status.isNotEmpty) {
+      return status;
+    }
+    final Object? request = data['request'];
+    if (request is Map) {
+      final Object? nestedStatus = request['status'];
+      if (nestedStatus is String && nestedStatus.isNotEmpty) {
+        return nestedStatus;
       }
     }
     return null;

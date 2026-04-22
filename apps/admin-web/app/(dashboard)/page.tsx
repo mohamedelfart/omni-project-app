@@ -39,6 +39,11 @@ const DASHBOARD_PRIMARY_ACTION_BTN: Record<string, string | number> = {
 };
 
 const SLA_QUICK_ESCALATE_REASON = 'Auto escalation due to SLA breach';
+const SIMPLE_VENDOR_OPTIONS = [
+  { id: 'vendor-001', name: 'Vendor One' },
+  { id: 'vendor-002', name: 'Vendor Two' },
+  { id: 'vendor-003', name: 'Vendor Three' },
+] as const;
 
 /** Read model for `GET /api/v1/unified-requests/:id/history` (shared TicketAction shape). */
 type TimelineAction = {
@@ -303,7 +308,9 @@ export default function AdminOverviewPage() {
   const [requests, setRequests] = useState<DashboardRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [vendorId, setVendorId] = useState('');
+  const [assignForId, setAssignForId] = useState<string | null>(null);
+  const [assignVendorSelection, setAssignVendorSelection] = useState<string>(SIMPLE_VENDOR_OPTIONS[0]?.id ?? '');
+  const [assignSubmittingRequestId, setAssignSubmittingRequestId] = useState<string | null>(null);
   const [timelineForId, setTimelineForId] = useState<string | null>(null);
   const [timelineActions, setTimelineActions] = useState<TimelineAction[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -736,22 +743,37 @@ export default function AdminOverviewPage() {
     }
   };
 
-  const assignVendor = async (requestId: string) => {
-    if (!vendorId.trim()) {
-      setError('Provide vendor id to assign');
+  const openAssignVendor = (requestId: string) => {
+    if (assignForId === requestId) {
+      setAssignForId(null);
       return;
     }
-    const response = await apiFetch('/api/requests', {
-      method: 'POST',
-      body: JSON.stringify({ requestId, vendorId: vendorId.trim() }),
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      setError(payload?.error ?? 'Failed to assign vendor');
+    setAssignForId(requestId);
+    setAssignVendorSelection(SIMPLE_VENDOR_OPTIONS[0]?.id ?? '');
+  };
+
+  const assignVendor = async (requestId: string, selectedVendorId: string) => {
+    if (!selectedVendorId.trim()) {
+      setError('Select a vendor to assign');
       return;
     }
-    setRequests((current) => current.map((request) => (request.id === requestId ? payload : request)));
-    setError(null);
+    setAssignSubmittingRequestId(requestId);
+    try {
+      const response = await apiFetch('/api/requests', {
+        method: 'POST',
+        body: JSON.stringify({ requestId, vendorId: selectedVendorId.trim() }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setError(payload?.error ?? 'Failed to assign vendor');
+        return;
+      }
+      setRequests((current) => current.map((request) => (request.id === requestId ? payload : request)));
+      setAssignForId(null);
+      setError(null);
+    } finally {
+      setAssignSubmittingRequestId(null);
+    }
   };
 
   const refreshRequestList = async () => {
@@ -826,7 +848,7 @@ export default function AdminOverviewPage() {
       });
     }
     const rowActionBusy =
-      statusActionRequestId === request.id || escalateSubmitting || bulkEscalating;
+      statusActionRequestId === request.id || escalateSubmitting || bulkEscalating || assignSubmittingRequestId === request.id;
 
     const rowCardStyle: CSSProperties = {
       borderRadius: 8,
@@ -972,14 +994,18 @@ export default function AdminOverviewPage() {
               Quick Escalate
             </button>
           ) : null}
-          {request.status === 'pending' ? (
+          {request.status !== 'assigned' ? (
             <button
               type="button"
-              onClick={() => void assignVendor(request.id)}
+              disabled={assignSubmittingRequestId === request.id}
+              onClick={() => openAssignVendor(request.id)}
               style={{ width: 140, padding: 8, ...DASHBOARD_PRIMARY_ACTION_BTN }}
             >
-              Assign Vendor
+              {assignForId === request.id ? 'Cancel Assign' : 'Assign Vendor'}
             </button>
+          ) : null}
+          {request.status === 'assigned' ? (
+            <span style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Assigned</span>
           ) : null}
           {request.status === 'assigned' ? (
             <button
@@ -1055,6 +1081,32 @@ export default function AdminOverviewPage() {
             </button>
           </div>
         ) : null}
+        {assignForId === request.id ? (
+          <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              <span>Select vendor</span>
+              <select
+                value={assignVendorSelection}
+                onChange={(e) => setAssignVendorSelection(e.target.value)}
+                style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4, maxWidth: 280 }}
+              >
+                {SIMPLE_VENDOR_OPTIONS.map((vendor) => (
+                  <option key={vendor.id} value={vendor.id}>
+                    {vendor.name} ({vendor.id})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={assignSubmittingRequestId === request.id}
+              onClick={() => void assignVendor(request.id, assignVendorSelection)}
+              style={{ padding: '6px 12px', width: 'fit-content' }}
+            >
+              {assignSubmittingRequestId === request.id ? 'Assigning…' : 'Confirm Assign'}
+            </button>
+          </div>
+        ) : null}
           </div>
         </div>
       </div>
@@ -1064,16 +1116,6 @@ export default function AdminOverviewPage() {
   return (
     <section style={{ display: 'grid', gap: 18 }}>
       <h1 style={{ margin: 0 }}>Dashboard Requests</h1>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <input
-          value={vendorId}
-          onChange={(event) => setVendorId(event.target.value)}
-          placeholder="Vendor ID"
-          style={{ padding: 8, border: '1px solid #ddd', borderRadius: 6 }}
-        />
-        <span style={{ fontSize: 12, color: '#666', alignSelf: 'center' }}>Used for Assign action</span>
-      </div>
-
       {error ? (
         <article style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: 12, color: '#991B1B' }}>
           {error}

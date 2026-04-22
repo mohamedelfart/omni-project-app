@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../../../core/api/omnirent_api_env.dart';
 import '../../../core/api/tenant_http_client.dart';
 import '../../../core/models/models.dart';
+import '../../../core/realtime/unified_requests_socket.dart';
 import 'free_move_in_services_screen.dart';
 
 class ViewingRequestStatusStepScreen extends StatefulWidget {
@@ -31,7 +32,28 @@ class _ViewingRequestStatusStepScreenState extends State<ViewingRequestStatusSte
   @override
   void initState() {
     super.initState();
+    UnifiedRequestsSocketClient.instance.subscribeUpdated(_onRequestUpdated);
     _loadRequest();
+  }
+
+  @override
+  void dispose() {
+    UnifiedRequestsSocketClient.instance.unsubscribeUpdated(_onRequestUpdated);
+    super.dispose();
+  }
+
+  void _onRequestUpdated(String? requestId, String? status) {
+    if (!mounted || requestId != widget.requestId || status == null || status.isEmpty) {
+      return;
+    }
+    setState(() {
+      _request = <String, dynamic>{
+        ...?_request,
+        'id': widget.requestId,
+        'status': status,
+      };
+      _error = null;
+    });
   }
 
   Future<void> _loadRequest() async {
@@ -181,7 +203,6 @@ class _ViewingRequestStatusStepScreenState extends State<ViewingRequestStatusSte
             ),
           ],
         ),
-      ),
       ),
     );
   }
