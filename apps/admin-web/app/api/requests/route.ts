@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing Authorization bearer token' }, { status: 401 });
   }
 
-  const upstreamUrl = new URL(`${apiBaseUrl.replace(/\/$/, '')}/unified-requests/realtime`);
+  const upstreamUrl = new URL(`${apiBaseUrl.replace(/\/$/, '')}/command-center/requests`);
   request.nextUrl.searchParams.forEach((value, key) => {
     upstreamUrl.searchParams.set(key, value);
   });

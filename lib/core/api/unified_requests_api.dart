@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../auth/tenant_api_tokens.dart';
@@ -134,6 +135,7 @@ class UnifiedRequestsApi {
       },
     };
 
+    debugPrint('[tenant-viewing] POST ${uri.toString()} payload=${jsonEncode(body)}');
     final http.Response response = await _postCreateRequest(uri, body);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {

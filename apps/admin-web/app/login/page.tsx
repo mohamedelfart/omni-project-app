@@ -7,8 +7,8 @@ const REFRESH_TOKEN_STORAGE_KEY = 'quickrent_refresh_token';
 const AUTH_LOGIN_URL = 'http://localhost:4000/api/v1/auth/login';
 
 export default function AdminLoginPage() {
-  const [email, setEmail] = useState('admin@omnireent.local');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -76,7 +76,7 @@ export default function AdminLoginPage() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="admin@omnireent.local"
+            placeholder="Email"
             style={{ padding: 10, border: '1px solid #CBD5E1', borderRadius: 8 }}
           />
         </label>
@@ -86,7 +86,7 @@ export default function AdminLoginPage() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="admin123"
+            placeholder="Password"
             style={{ padding: 10, border: '1px solid #CBD5E1', borderRadius: 8 }}
           />
         </label>

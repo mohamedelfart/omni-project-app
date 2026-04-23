@@ -16,6 +16,45 @@ type DashboardFilters = {
   vendorId?: string;
 };
 
+function toDbUnifiedRequestStatus(status?: string): string | undefined {
+  if (!status) {
+    return undefined;
+  }
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === 'pending') {
+    return 'SUBMITTED';
+  }
+  if (normalized === 'assigned') {
+    return 'ASSIGNED';
+  }
+  if (normalized === 'in_progress') {
+    return 'IN_PROGRESS';
+  }
+  if (normalized === 'completed') {
+    return 'COMPLETED';
+  }
+  return status;
+}
+
+function normalizeCountryCandidates(countryCode?: string): string[] | undefined {
+  if (!countryCode) {
+    return undefined;
+  }
+  const raw = countryCode.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const upper = raw.toUpperCase();
+  const candidates = new Set<string>([raw, upper]);
+  if (upper === 'QA') {
+    candidates.add('Qatar');
+  }
+  return Array.from(candidates);
+}
+
 @Injectable()
 export class CommandCenterService {
   constructor(
@@ -64,10 +103,12 @@ export class CommandCenterService {
   }
 
   private buildRequestWhere(filters?: DashboardFilters) {
+    const countryCandidates = normalizeCountryCandidates(filters?.countryCode);
+    const status = toDbUnifiedRequestStatus(filters?.status);
     return {
-      country: filters?.countryCode,
+      country: countryCandidates ? { in: countryCandidates } : undefined,
       serviceType: filters?.serviceType,
-      status: filters?.status as never,
+      status: status as never,
       vendorId: filters?.vendorId,
       propertyIds: filters?.assetId ? { has: filters.assetId } : undefined,
       createdAt: this.buildDateRange(filters),

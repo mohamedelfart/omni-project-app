@@ -117,8 +117,8 @@ export class UnifiedRequestsController {
   }
 
   @Get(':id')
-  getById(@Param('id') id: string) {
-    return this.unifiedRequestsService.getById(id);
+  getById(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+    return this.unifiedRequestsService.getById(id, user);
   }
 
   @Post(':id/instructions')

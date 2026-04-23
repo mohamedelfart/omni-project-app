@@ -42,18 +42,16 @@ class _ViewingRequestStatusStepScreenState extends State<ViewingRequestStatusSte
     super.dispose();
   }
 
-  void _onRequestUpdated(String? requestId, String? status) {
-    if (!mounted || requestId != widget.requestId || status == null || status.isEmpty) {
+  void _onRequestUpdated(String? requestId, String? _) {
+    if (!mounted || requestId == null || requestId.isEmpty || requestId != widget.requestId) {
       return;
     }
-    setState(() {
-      _request = <String, dynamic>{
-        ...?_request,
-        'id': widget.requestId,
-        'status': status,
-      };
-      _error = null;
-    });
+    // Socket is signal only; refresh request state from API.
+    void refresh() async {
+      await _loadRequest();
+    }
+
+    refresh();
   }
 
   Future<void> _loadRequest() async {

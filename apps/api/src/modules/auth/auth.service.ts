@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RoleCode } from '@prisma/client';
@@ -31,6 +31,7 @@ type OtpChallengeRecord = {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private readonly otpChallenges = new Map<string, OtpChallengeRecord>();
 
   constructor(
@@ -95,19 +96,32 @@ export class AuthService {
   }
 
   async login(payload: LoginDto): Promise<AuthTokens> {
-    const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
-      include: { userRoles: { include: { role: true } } },
-    });
+    try {
+      this.logger.debug(`Login attempt email=${payload.email}`);
+      const user = await this.prisma.user.findUnique({
+        where: { email: payload.email },
+        include: { userRoles: { include: { role: true } } },
+      });
+      this.logger.debug(`Login user lookup email=${payload.email} found=${Boolean(user)}`);
 
-    if (!user?.passwordHash || !this.verifySecret(payload.password, user.passwordHash)) {
-      throw new UnauthorizedException('Invalid email or password');
+      const passwordHash = user?.passwordHash;
+      const passwordMatches = typeof passwordHash === 'string' && this.verifySecret(payload.password, passwordHash);
+      this.logger.debug(`Login password compare email=${payload.email} matched=${passwordMatches}`);
+
+      if (!user?.passwordHash || !passwordMatches) {
+        throw new UnauthorizedException('Invalid email or password');
+      }
+
+      await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+
+      const roles = user.userRoles.map((entry) => this.toSharedRole(entry.role.code));
+      return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(`Login failed email=${payload.email} error=${message}`, stack);
+      throw error;
     }
-
-    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-
-    const roles = user.userRoles.map((entry) => this.toSharedRole(entry.role.code));
-    return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
   }
 
   async createGuestSession(): Promise<AuthTokens> {
@@ -354,8 +368,15 @@ export class AuthService {
     if (!salt || !hash) {
       return false;
     }
+    if (!/^[0-9a-f]+$/i.test(salt) || !/^[0-9a-f]+$/i.test(hash) || hash.length !== 128) {
+      return false;
+    }
     const derived = scryptSync(value, salt, 64);
-    return timingSafeEqual(Buffer.from(hash, 'hex'), derived);
+    const target = Buffer.from(hash, 'hex');
+    if (target.length !== derived.length) {
+      return false;
+    }
+    return timingSafeEqual(target, derived);
   }
 
   private toSharedRole(roleCode: RoleCode): UserRole {

@@ -18,6 +18,7 @@ import {
 } from './dto/unified-request.dto';
 import { REQUEST_SOCKET_EVENTS } from './unified-requests.events';
 import { UnifiedRequestsGateway } from './unified-requests.gateway';
+import { toOperationalReadModelStatus, withOperationalStatusReadModel } from './unified-request-operational-status';
 
 @Injectable()
 export class UnifiedRequestsService {
@@ -97,11 +98,18 @@ export class UnifiedRequestsService {
   }
 
   listMine(userId: string) {
-    return this.prisma.unifiedRequest.findMany({
-      where: { userId },
-      include: { trackingEvents: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.prisma.unifiedRequest
+      .findMany({
+        where: { tenantId: userId },
+        include: { trackingEvents: true },
+        orderBy: { createdAt: 'desc' },
+      })
+      .then((items) =>
+        items.map((item) => ({
+          ...item,
+          status: toOperationalReadModelStatus(item.status),
+        })),
+      );
   }
 
   listRealtimeMine(userId: string) {
@@ -111,8 +119,15 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  getById(requestId: string) {
-    return this.prisma.unifiedRequest.findUniqueOrThrow({ where: { id: requestId }, include: { trackingEvents: true } });
+  getById(requestId: string, viewer?: AuthenticatedUser) {
+    return this.prisma.unifiedRequest
+      .findUniqueOrThrow({ where: { id: requestId }, include: { trackingEvents: true } })
+      .then((row) => {
+        if (viewer && this.isTenantLikeViewer(viewer)) {
+          return withOperationalStatusReadModel(row);
+        }
+        return row;
+      });
   }
 
   async getTicketActionHistory(requestId: string, user: AuthenticatedUser): Promise<TicketAction[]> {
@@ -344,9 +359,7 @@ export class UnifiedRequestsService {
 
   listRealtimeForVendor(vendorId: string) {
     return this.prisma.unifiedRequest.findMany({
-      where: {
-        OR: [{ vendorId }, { vendorId: null }],
-      },
+      where: { vendorId },
       orderBy: { createdAt: 'desc' },
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
@@ -356,8 +369,14 @@ export class UnifiedRequestsService {
       where: { id: requestId },
       select: { status: true },
     });
-    if (existing.status === UnifiedRequestStatus.ASSIGNED) {
-      throw new ConflictException('Request is already assigned');
+    const operational = toOperationalReadModelStatus(existing.status);
+    if (operational !== 'pending') {
+      if (operational === 'assigned') {
+        throw new ConflictException('Request is already assigned');
+      }
+      throw new ConflictException(
+        `Vendor assignment is only allowed when the request is pending (current: ${operational})`,
+      );
     }
 
     const updated = await this.prisma.unifiedRequest.update({
@@ -423,7 +442,7 @@ export class UnifiedRequestsService {
       },
     });
 
-    const current = this.toMinimalStatus(existing.status);
+    const current = toOperationalReadModelStatus(existing.status);
     const isValidTransition = (
       (current === 'assigned' && dto.status === 'in_progress')
       || (current === 'in_progress' && dto.status === 'completed')
@@ -491,7 +510,7 @@ export class UnifiedRequestsService {
       throw new ForbiddenException('Request is not assigned to this vendor');
     }
 
-    const current = this.toMinimalStatus(existing.status);
+    const current = toOperationalReadModelStatus(existing.status);
     const isValidTransition = (
       (current === 'assigned' && dto.status === 'in_progress')
       || (current === 'in_progress' && dto.status === 'completed')
@@ -561,7 +580,7 @@ export class UnifiedRequestsService {
       tenantId: request.tenantId,
       vendorId: request.vendorId ?? undefined,
       type: request.requestType,
-      status: this.toMinimalStatus(request.status),
+      status: toOperationalReadModelStatus(request.status),
       priority: request.priority,
       propertyIds: request.propertyIds ?? [],
       primaryPropertyId: request.propertyIds?.[0],
@@ -570,17 +589,9 @@ export class UnifiedRequestsService {
     };
   }
 
-  private toMinimalStatus(status: UnifiedRequestStatus): RequestStatus {
-    switch (status) {
-      case UnifiedRequestStatus.ASSIGNED:
-        return 'assigned';
-      case UnifiedRequestStatus.IN_PROGRESS:
-        return 'in_progress';
-      case UnifiedRequestStatus.COMPLETED:
-        return 'completed';
-      default:
-        return 'pending';
-    }
+  private isTenantLikeViewer(user: AuthenticatedUser): boolean {
+    const roles = (user.roles?.length ? user.roles : user.role ? [user.role] : []).map((r) => String(r).toLowerCase());
+    return roles.includes('tenant') || roles.includes('guest');
   }
 
   private fromMinimalStatus(status: Exclude<RequestStatus, 'pending'>): UnifiedRequestStatus {

@@ -122,6 +122,10 @@ function getRequestSectionGroup(request: DashboardRequest): RequestSectionGroup 
   return 'in_progress';
 }
 
+function normalizeUiStatus(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
   let list: unknown = raw;
   if (raw && typeof raw === 'object' && 'data' in raw) {
@@ -142,6 +146,7 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
       return {
         ...(row as unknown as DashboardRequest),
         id,
+        status: normalizeUiStatus(rec.status) as DashboardRequest['status'],
         priority: typeof row.priority === 'string' ? row.priority : undefined,
       };
     })
@@ -475,6 +480,20 @@ export default function AdminOverviewPage() {
       }
     };
 
+    /** Collapse back-to-back `request.assigned` + `request.updated` into one list refetch. */
+    let listReloadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleListReload = () => {
+      if (listReloadDebounceTimer !== null) {
+        clearTimeout(listReloadDebounceTimer);
+      }
+      listReloadDebounceTimer = setTimeout(() => {
+        listReloadDebounceTimer = null;
+        if (!cancelled) {
+          void load();
+        }
+      }, 80);
+    };
+
     void load();
     if (!socketAccessToken) {
       const socketError = 'Missing auth token for socket connection';
@@ -551,11 +570,11 @@ export default function AdminOverviewPage() {
         },
         onRequestAssigned: () => {
           if (cancelled) return;
-          void load();
+          scheduleListReload();
         },
         onRequestUpdated: (payload: unknown) => {
           if (cancelled) return;
-          void load();
+          scheduleListReload();
           const updatedId = extractSocketRequestId(payload);
           if (!updatedId || timelineForIdRef.current !== updatedId) return;
           void (async () => {
@@ -583,6 +602,10 @@ export default function AdminOverviewPage() {
       // deliver events between this cleanup and the next mount (e.g. React Strict Mode).
       // Registered handlers already guard with `cancelled` so no state updates run after unmount.
       loadAbortController?.abort();
+      if (listReloadDebounceTimer !== null) {
+        clearTimeout(listReloadDebounceTimer);
+        listReloadDebounceTimer = null;
+      }
       if (arrivalFlashTimers) {
         for (const t of arrivalFlashTimers.values()) {
           clearTimeout(t);
@@ -768,7 +791,7 @@ export default function AdminOverviewPage() {
         setError(payload?.error ?? 'Failed to assign vendor');
         return;
       }
-      setRequests((current) => current.map((request) => (request.id === requestId ? payload : request)));
+      await refreshRequestList();
       setAssignForId(null);
       setError(null);
     } finally {
@@ -828,6 +851,7 @@ export default function AdminOverviewPage() {
   };
 
   function renderRequestRow(request: DashboardRequest) {
+    const normalizedStatus = normalizeUiStatus(request.status);
     const agingTier = getAgingTier(request.createdAt, request.status);
     const priorityTier = getPrioritySlaTier(request.priority);
     const hoursOpen = hoursSinceCreated(request.createdAt);
@@ -994,7 +1018,7 @@ export default function AdminOverviewPage() {
               Quick Escalate
             </button>
           ) : null}
-          {request.status !== 'assigned' ? (
+          {normalizedStatus === 'submitted' ? (
             <button
               type="button"
               disabled={assignSubmittingRequestId === request.id}
@@ -1004,10 +1028,10 @@ export default function AdminOverviewPage() {
               {assignForId === request.id ? 'Cancel Assign' : 'Assign Vendor'}
             </button>
           ) : null}
-          {request.status === 'assigned' ? (
+          {normalizedStatus === 'assigned' ? (
             <span style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Assigned</span>
           ) : null}
-          {request.status === 'assigned' ? (
+          {normalizedStatus === 'assigned' ? (
             <button
               type="button"
               disabled={statusActionRequestId === request.id}
@@ -1022,7 +1046,7 @@ export default function AdminOverviewPage() {
               Start
             </button>
           ) : null}
-          {request.status === 'in_progress' ? (
+          {normalizedStatus === 'in_progress' ? (
             <button
               type="button"
               disabled={statusActionRequestId === request.id}
