@@ -15,6 +15,7 @@ type DashboardRequest = {
   vendorId?: string;
   type: 'cleaning' | 'moving' | 'maintenance';
   status: 'pending' | 'assigned' | 'in_progress' | 'completed';
+  rawStatus?: string;
   createdAt: string;
   updatedAt: string;
   propertyIds?: string[];
@@ -122,8 +123,15 @@ function getRequestSectionGroup(request: DashboardRequest): RequestSectionGroup 
   return 'in_progress';
 }
 
-function normalizeUiStatus(value: unknown): string {
-  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+function normalizeUiStatus(value: unknown): 'pending' | 'assigned' | 'in_progress' | 'completed' {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+  if (normalized === 'submitted' || normalized === 'under_review') return 'pending';
+  if (normalized === 'assigned') return 'assigned';
+  if (normalized === 'in_progress') return 'in_progress';
+  if (normalized === 'completed') return 'completed';
+
+  return 'pending';
 }
 
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
@@ -146,6 +154,7 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
       return {
         ...(row as unknown as DashboardRequest),
         id,
+        rawStatus: typeof rec.status === 'string' ? rec.status : undefined,
         status: normalizeUiStatus(rec.status) as DashboardRequest['status'],
         priority: typeof row.priority === 'string' ? row.priority : undefined,
       };
@@ -928,6 +937,9 @@ export default function AdminOverviewPage() {
         <div>
           <strong>{request.id}</strong> - {request.type} - {request.status}
         </div>
+        <div style={{ color: '#94A3B8', fontSize: 11 }}>
+          debug: id={request.id} | rawStatus={request.rawStatus ?? 'n/a'} | normalized={request.status}
+        </div>
         {slaBadges ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {priorityTier === 'critical' ? (
@@ -1018,7 +1030,7 @@ export default function AdminOverviewPage() {
               Quick Escalate
             </button>
           ) : null}
-          {normalizedStatus === 'submitted' ? (
+          {normalizedStatus === 'pending' ? (
             <button
               type="button"
               disabled={assignSubmittingRequestId === request.id}

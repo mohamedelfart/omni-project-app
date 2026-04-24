@@ -26,10 +26,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </div>
           <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
             {[
-              { label: 'My Tickets', href: '/' },
-              { label: 'History', href: '/history' },
-              { label: 'Earnings', href: '/earnings' },
-              { label: 'Profile', href: '/profile' },
+              { label: 'Home', href: '/' },
+              { label: 'My jobs', href: '/jobs' },
+              { label: 'Sign in', href: '/login' },
             ].map((item) => (
               <Link key={item.href} href={item.href} style={{ padding: '8px 14px', borderRadius: 8, color: 'rgba(255,255,255,0.75)', textDecoration: 'none', fontSize: 14, fontWeight: 500 }}>
                 {item.label}
