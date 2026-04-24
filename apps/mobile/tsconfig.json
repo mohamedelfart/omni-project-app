@@ -4,7 +4,7 @@
     "strict": true,
     "jsx": "react-native",
     "moduleResolution": "bundler",
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "skipLibCheck": true,
     "paths": {
       "@quickrent/design-system": [

@@ -58,7 +58,9 @@ export function MyRequestsScreen() {
     socket.on('request.created', () => void loadRequests());
     socket.on('request.assigned', () => void loadRequests());
     socket.on('request.updated', () => void loadRequests());
-    return () => socket.disconnect();
+    return () => {
+      socket.disconnect();
+    };
   }, [socketBaseUrl]);
 
   return (

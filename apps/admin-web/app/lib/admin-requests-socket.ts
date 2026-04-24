@@ -99,38 +99,32 @@ export function ensureAdminRequestsRealtimeSocket(socketBase: string) {
 
   if (!listenersWired) {
     listenersWired = true;
-    socket.onAny((event, ...args) => {
-      console.log('[socket] onAny event:', event, args);
-    });
-    socket.on('request.created', (payload: unknown) => {
-      console.log('[socket] request.created received', payload);
+    const s = socket;
+    if (!s) return;
+    s.on('request.created', (payload: unknown) => {
       const id = extractSocketRequestId(payload);
       const suppress = shouldSuppressDuplicateRequestCreated(id);
-      console.log('[admin-debug] socket request.created', { id, suppress });
       if (suppress) return;
-      console.log('[socket] invoking handler', payload);
       const run = handlersRef.current.onRequestCreated;
-      console.log('[admin-debug] socket invoking onRequestCreated', { typeof: typeof run });
       const runResult = run(payload);
       if (runResult === false) return;
       if (runResult === true) {
         markRequestCreatedHandled(id);
       }
     });
-    socket.on('request.assigned', () => {
+    s.on('request.assigned', () => {
       handlersRef.current.onRequestAssigned();
     });
-    socket.on('request.updated', (payload: unknown) => {
+    s.on('request.updated', (payload: unknown) => {
       handlersRef.current.onRequestUpdated(payload);
     });
 
     const onConnectOrReconnect = () => {
-      console.log('[socket] connected', socket.id, socket.nsp);
       applyLatestAuth();
     };
-    socket.on('connect', onConnectOrReconnect);
-    socket.on('reconnect', onConnectOrReconnect);
-    socket.io.on('reconnect_attempt', () => {
+    s.on('connect', onConnectOrReconnect);
+    s.on('reconnect', onConnectOrReconnect);
+    s.io.on('reconnect_attempt', () => {
       applyLatestAuth();
     });
   }
