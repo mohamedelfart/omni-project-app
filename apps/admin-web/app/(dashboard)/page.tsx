@@ -18,6 +18,8 @@ type DashboardRequest = {
   tenantId: string;
   vendorId?: string;
   type: 'cleaning' | 'moving' | 'maintenance';
+  /** Raw backend `UnifiedRequest.status` as received from API. */
+  rawStatus?: string;
   status: DashboardRequestStatus;
   createdAt: string;
   updatedAt: string;
@@ -144,6 +146,7 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
             ? String(rawId)
             : '';
       const normalizedStatus = normalizeDashboardRequestStatus(rec.status);
+      const rawStatus = typeof rec.status === 'string' ? rec.status.trim().toUpperCase() : undefined;
       if (process.env.NODE_ENV === 'development') {
         console.log('[admin-requests-ingest]', {
           requestId: id,
@@ -154,6 +157,7 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
       return {
         ...(row as unknown as DashboardRequest),
         id,
+        rawStatus,
         status: normalizedStatus,
         priority: typeof row.priority === 'string' ? row.priority : undefined,
       };
@@ -912,6 +916,7 @@ export default function AdminOverviewPage() {
 
   function renderRequestRow(request: DashboardRequest) {
     const rowStatus = request.status;
+    const rawStatus = (request.rawStatus ?? '').toUpperCase();
     const agingTier = getAgingTier(request.createdAt, request.status);
     const priorityTier = getPrioritySlaTier(request.priority);
     const hoursOpen = hoursSinceCreated(request.createdAt);
@@ -1090,7 +1095,7 @@ export default function AdminOverviewPage() {
           {rowStatus === 'assigned' ? (
             <span style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Assigned</span>
           ) : null}
-          {rowStatus === 'assigned' ? (
+          {rowStatus === 'assigned' && rawStatus === 'ASSIGNED' ? (
             <button
               type="button"
               disabled={statusActionRequestId === request.id}
@@ -1105,7 +1110,7 @@ export default function AdminOverviewPage() {
               Start
             </button>
           ) : null}
-          {rowStatus === 'in_progress' ? (
+          {rowStatus === 'in_progress' && rawStatus === 'IN_PROGRESS' ? (
             <button
               type="button"
               disabled={statusActionRequestId === request.id}
