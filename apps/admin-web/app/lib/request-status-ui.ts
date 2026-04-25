@@ -27,7 +27,10 @@ export function normalizeDashboardRequestStatus(value: unknown): DashboardReques
     return key;
   }
 
-  if (key === 'submitted' || key === 'under_review') return 'pending';
+  // UnifiedRequestStatus aliases / lifecycle expansions mapped to dashboard operational buckets.
+  if (key === 'draft' || key === 'submitted' || key === 'under_review' || key === 'queued') return 'pending';
+  if (key === 'en_route' || key === 'awaiting_payment' || key === 'escalated') return 'in_progress';
+  if (key === 'cancelled' || key === 'rejected' || key === 'failed') return 'completed';
 
   if (process.env.NODE_ENV === 'development') {
     console.warn('[admin-dashboard] normalizeDashboardRequestStatus: unrecognized status', { raw: trimmed });

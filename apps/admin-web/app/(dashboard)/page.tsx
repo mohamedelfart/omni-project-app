@@ -43,11 +43,11 @@ const DASHBOARD_PRIMARY_ACTION_BTN: Record<string, string | number> = {
 };
 
 const SLA_QUICK_ESCALATE_REASON = 'Auto escalation due to SLA breach';
-const SIMPLE_VENDOR_OPTIONS = [
-  { id: 'vendor-001', name: 'Vendor One' },
-  { id: 'vendor-002', name: 'Vendor Two' },
-  { id: 'vendor-003', name: 'Vendor Three' },
-] as const;
+
+type ProviderOption = {
+  id: string;
+  name: string;
+};
 
 /** Read model for `GET /api/v1/unified-requests/:id/history` (shared TicketAction shape). */
 type TimelineAction = {
@@ -76,7 +76,7 @@ function hoursSinceCreated(createdAt: string): number {
 }
 
 function isOpenForSla(status: DashboardRequestStatus): boolean {
-  return status !== 'completed';
+  return status === 'pending' || status === 'assigned' || status === 'in_progress';
 }
 
 type AgingTier = 'none' | 'aging' | 'overdue';
@@ -322,7 +322,8 @@ export default function AdminOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [assignForId, setAssignForId] = useState<string | null>(null);
-  const [assignVendorSelection, setAssignVendorSelection] = useState<string>(SIMPLE_VENDOR_OPTIONS[0]?.id ?? '');
+  const [providerOptions, setProviderOptions] = useState<ProviderOption[]>([]);
+  const [assignVendorSelection, setAssignVendorSelection] = useState<string>('');
   const [assignSubmittingRequestId, setAssignSubmittingRequestId] = useState<string | null>(null);
   const [timelineForId, setTimelineForId] = useState<string | null>(null);
   const [timelineActions, setTimelineActions] = useState<TimelineAction[]>([]);
@@ -360,7 +361,9 @@ export default function AdminOverviewPage() {
 
   const displayedRequests = useMemo(() => {
     let list = requests;
-    if (statusFilter === STATUS_FILTER_NON_COMPLETED) list = list.filter((r) => r.status !== 'completed');
+    if (statusFilter === STATUS_FILTER_NON_COMPLETED) {
+      list = list.filter((r) => r.status === 'pending' || r.status === 'assigned' || r.status === 'in_progress');
+    }
     else if (statusFilter) list = list.filter((r) => r.status === statusFilter);
     if (priorityFilter) list = list.filter((r) => r.priority === priorityFilter);
     const dir = sortCreatedAt === 'asc' ? 1 : -1;
@@ -414,19 +417,6 @@ export default function AdminOverviewPage() {
     return { overdue, aging, critical, openTotal };
   }, [displayedRequests]);
 
-  const sectionedRequests = useMemo(() => {
-    const attention: DashboardRequest[] = [];
-    const inProgress: DashboardRequest[] = [];
-    const completed: DashboardRequest[] = [];
-    for (const row of displayedRequests) {
-      const g = getRequestSectionGroup(row);
-      if (g === 'attention') attention.push(row);
-      else if (g === 'in_progress') inProgress.push(row);
-      else completed.push(row);
-    }
-    return { attention, inProgress, completed };
-  }, [displayedRequests]);
-
   const displayedRequestIds = useMemo(() => displayedRequests.map((r) => r.id), [displayedRequests]);
   const allDisplayedSelected = useMemo(
     () => displayedRequestIds.length > 0 && displayedRequestIds.every((id) => selectedRequestIds.includes(id)),
@@ -469,6 +459,41 @@ export default function AdminOverviewPage() {
     const socketAccessToken = getSocketAccessToken();
     let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
     let loadAbortController: AbortController | null = null;
+
+    const loadProviders = async (): Promise<void> => {
+      try {
+        const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/command-center/providers`, {
+          cache: 'no-store',
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(getLoadErrorMessage(payload));
+        }
+        const listRaw = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data: unknown }).data : payload;
+        const list = Array.isArray(listRaw)
+          ? listRaw
+            .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+            .map((row) => ({
+              id: typeof row.id === 'string' ? row.id : '',
+              name: typeof row.name === 'string' ? row.name : '',
+            }))
+            .filter((p) => p.id.length > 0)
+          : [];
+        if (!cancelled) {
+          setProviderOptions(list);
+          setAssignVendorSelection((prev) => {
+            if (prev && list.some((p) => p.id === prev)) return prev;
+            return list[0]?.id ?? '';
+          });
+        }
+      } catch (providersError) {
+        if (!cancelled) {
+          setProviderOptions([]);
+          setAssignVendorSelection('');
+          setError(providersError instanceof Error ? providersError.message : 'Failed to load providers');
+        }
+      }
+    };
 
     const load = async () => {
       loadAbortController?.abort();
@@ -525,7 +550,7 @@ export default function AdminOverviewPage() {
       }, 80);
     };
 
-    void load();
+    void Promise.all([load(), loadProviders()]);
     if (!socketAccessToken) {
       const socketError = 'Missing auth token for socket connection';
       if (process.env.NODE_ENV === 'development') {
@@ -803,7 +828,10 @@ export default function AdminOverviewPage() {
       return;
     }
     setAssignForId(requestId);
-    setAssignVendorSelection(SIMPLE_VENDOR_OPTIONS[0]?.id ?? '');
+    setAssignVendorSelection((prev) => {
+      if (prev && providerOptions.some((p) => p.id === prev)) return prev;
+      return providerOptions[0]?.id ?? '';
+    });
   };
 
   const assignVendor = async (requestId: string, selectedVendorId: string) => {
@@ -813,13 +841,14 @@ export default function AdminOverviewPage() {
     }
     setAssignSubmittingRequestId(requestId);
     try {
-      const response = await apiFetch('/api/requests', {
+      const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/assign-provider`, {
         method: 'POST',
-        body: JSON.stringify({ requestId, vendorId: selectedVendorId.trim() }),
+        cache: 'no-store',
+        body: JSON.stringify({ providerId: selectedVendorId.trim() }),
       });
-      const payload = await response.json();
+      const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        setError(payload?.error ?? 'Failed to assign vendor');
+        setError(getLoadErrorMessage(payload));
         return;
       }
       await refreshRequestList();
@@ -1146,22 +1175,22 @@ export default function AdminOverviewPage() {
         {assignForId === request.id ? (
           <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
             <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-              <span>Select vendor</span>
+              <span>Select provider</span>
               <select
                 value={assignVendorSelection}
                 onChange={(e) => setAssignVendorSelection(e.target.value)}
                 style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4, maxWidth: 280 }}
               >
-                {SIMPLE_VENDOR_OPTIONS.map((vendor) => (
-                  <option key={vendor.id} value={vendor.id}>
-                    {vendor.name} ({vendor.id})
+                {providerOptions.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name || provider.id} ({provider.id})
                   </option>
                 ))}
               </select>
             </label>
             <button
               type="button"
-              disabled={assignSubmittingRequestId === request.id}
+              disabled={assignSubmittingRequestId === request.id || !assignVendorSelection}
               onClick={() => void assignVendor(request.id, assignVendorSelection)}
               style={{ padding: '6px 12px', width: 'fit-content' }}
             >
@@ -1344,36 +1373,13 @@ export default function AdminOverviewPage() {
             <div style={{ display: 'grid', gap: 18 }}>
               <div>
                 <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
-                  🚨 Needs Attention{' '}
-                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>({sectionedRequests.attention.length})</span>
+                  Requests (sorted by created time)
+                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>
+                    {' '}
+                    ({sortCreatedAt === 'desc' ? 'newest first' : 'oldest first'})
+                  </span>
                 </h3>
-                {sectionedRequests.attention.length === 0 ? (
-                  <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>None</p>
-                ) : (
-                  <div style={{ display: 'grid', gap: 12 }}>{sectionedRequests.attention.map(renderRequestRow)}</div>
-                )}
-              </div>
-              <div>
-                <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
-                  ⚠️ In Progress{' '}
-                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>({sectionedRequests.inProgress.length})</span>
-                </h3>
-                {sectionedRequests.inProgress.length === 0 ? (
-                  <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>None</p>
-                ) : (
-                  <div style={{ display: 'grid', gap: 12 }}>{sectionedRequests.inProgress.map(renderRequestRow)}</div>
-                )}
-              </div>
-              <div>
-                <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
-                  📦 Completed{' '}
-                  <span style={{ fontWeight: 400, color: '#64748B', fontSize: 13 }}>({sectionedRequests.completed.length})</span>
-                </h3>
-                {sectionedRequests.completed.length === 0 ? (
-                  <p style={{ margin: 0, fontSize: 13, color: '#94A3B8' }}>None</p>
-                ) : (
-                  <div style={{ display: 'grid', gap: 12 }}>{sectionedRequests.completed.map(renderRequestRow)}</div>
-                )}
+                <div style={{ display: 'grid', gap: 12 }}>{displayedRequests.map(renderRequestRow)}</div>
               </div>
             </div>
           ) : null}
