@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { PropertyCommandService } from '../properties/property-command.service';
 import { CommandCenterService } from './command-center.service';
 
 @ApiTags('command-center')
@@ -12,7 +13,10 @@ import { CommandCenterService } from './command-center.service';
 @Roles('admin', 'command-center')
 @Controller('command-center')
 export class CommandCenterController {
-  constructor(private readonly commandCenterService: CommandCenterService) {}
+  constructor(
+    private readonly commandCenterService: CommandCenterService,
+    private readonly propertyCommandService: PropertyCommandService,
+  ) {}
 
   @Get('dashboard')
   getDashboard(@Query() query: { countryCode?: string; startDate?: string; endDate?: string; assetId?: string; serviceType?: string; status?: string; vendorId?: string }) {
@@ -80,5 +84,15 @@ export class CommandCenterController {
   @Get('audit-logs')
   listAuditLogs(@Query() query: { action?: string; entity?: string; countryCode?: string; severity?: 'INFO' | 'WARNING' | 'HIGH' | 'CRITICAL' }) {
     return this.commandCenterService.listAuditLogs(query);
+  }
+
+  @Post('properties/:propertyId/reserve')
+  reserveProperty(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
+    return this.propertyCommandService.reserveProperty(user.id, propertyId);
+  }
+
+  @Post('properties/:propertyId/release')
+  releasePropertyReservation(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
+    return this.propertyCommandService.releaseReservation(user.id, propertyId);
   }
 }
