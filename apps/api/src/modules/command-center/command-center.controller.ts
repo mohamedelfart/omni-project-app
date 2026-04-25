@@ -59,6 +59,15 @@ export class CommandCenterController {
     return this.commandCenterService.assignProvider(user.id, id, body.providerId);
   }
 
+  @Post('requests/:id/reassign-provider')
+  reassignProvider(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { providerId: string; reason?: string },
+  ) {
+    return this.commandCenterService.reassignProvider(user.id, id, body.providerId, body.reason);
+  }
+
   @Post('requests/:id/instructions')
   dispatchInstruction(
     @CurrentUser() user: { id: string },

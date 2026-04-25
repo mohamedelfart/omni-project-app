@@ -808,6 +808,19 @@ export class CommandCenterService {
     return request;
   }
 
+  async reassignProvider(actorUserId: string, requestId: string, providerId: string, reason?: string) {
+    const { changed, request } = await this.orchestratorService.reassignProviderFromCommandCenter({
+      requestId,
+      providerId,
+      actorUserId,
+      reason,
+    });
+    if (changed) {
+      this.unifiedRequestsService.emitProviderAssignmentSockets(request, providerId);
+    }
+    return request;
+  }
+
   async createOffer(userId: string, payload: { title: string; type: string; discountMinor?: number }) {
     const offer = await this.prisma.offer.create({
       data: {

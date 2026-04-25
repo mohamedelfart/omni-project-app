@@ -417,54 +417,48 @@ export class OrchestratorService {
    * No reassignment: blocks ASSIGNED with a different vendorId; idempotent if already same vendor.
    */
   async assignProviderToUnifiedRequest(params: { requestId: string; providerId: string; actorUserId?: string }) {
-    const { requestId, providerId, actorUserId } = params;
-
-    const existing = await this.prisma.unifiedRequest.findUnique({
-      where: { id: requestId },
-      include: {
-        viewingRequest: { include: { assignment: true } },
-        maintenanceRequest: { select: { id: true, providerId: true } },
-      },
+    return this.mutateProviderOwnership({
+      mode: 'assign',
+      requestId: params.requestId,
+      providerId: params.providerId,
+      actorUserId: params.actorUserId,
     });
-    if (!existing) {
-      throw new NotFoundException({ code: 'UNIFIED_REQUEST_NOT_FOUND', message: `Unified request ${requestId} not found` });
-    }
+  }
 
-    if (this.isTerminalRequestStatus(existing.status)) {
-      throw new BadRequestException({
-        code: 'ASSIGNMENT_BLOCKED_TERMINAL',
-        message: `Cannot assign provider in terminal request status ${existing.status}`,
-      });
-    }
+  async assignProviderFromCommandCenter(requestId: string, providerId: string, actorUserId?: string) {
+    const { request } = await this.assignProviderToUnifiedRequest({ requestId, providerId, actorUserId });
+    return request;
+  }
 
-    if (existing.status === 'ASSIGNED' && existing.vendorId === providerId) {
-      return { changed: false, request: existing };
-    }
+  async reassignProviderFromCommandCenter(params: {
+    requestId: string;
+    providerId: string;
+    actorUserId?: string;
+    reason?: string;
+  }) {
+    return this.mutateProviderOwnership({
+      mode: 'reassign',
+      requestId: params.requestId,
+      providerId: params.providerId,
+      actorUserId: params.actorUserId,
+      reason: params.reason,
+    });
+  }
 
-    if (existing.status === 'ASSIGNED' && existing.vendorId && existing.vendorId !== providerId) {
-      throw new ConflictException({
-        code: 'REASSIGNMENT_NOT_ALLOWED',
-        message: 'Request already assigned to a different provider; reassignment is not enabled in this phase.',
-      });
-    }
-
-    const operational = toOperationalReadModelStatus(existing.status);
-    if (operational !== 'pending') {
-      if (operational === 'assigned') {
-        throw new ConflictException({ code: 'REQUEST_ALREADY_ASSIGNED', message: 'Request is already assigned' });
-      }
-      throw new ConflictException({
-        code: 'ASSIGNMENT_INVALID_STATE',
-        message: `Vendor assignment is only allowed from assignable pending states (current operational: ${operational})`,
-      });
-    }
-
+  private async mutateProviderOwnership(params: {
+    mode: 'assign' | 'reassign';
+    requestId: string;
+    providerId: string;
+    actorUserId?: string;
+    reason?: string;
+  }) {
+    const { mode, requestId, providerId, actorUserId, reason } = params;
     const provider = await this.prisma.provider.findUnique({ where: { id: providerId }, select: { id: true } });
     if (!provider) {
       throw new BadRequestException({ code: 'PROVIDER_NOT_FOUND', message: `Provider ${providerId} not found` });
     }
 
-    const { request, didMutate } = await this.prisma.$transaction(async (tx) => {
+    const { request, didMutate, previousProviderId } = await this.prisma.$transaction(async (tx) => {
       const row = await tx.unifiedRequest.findUnique({
         where: { id: requestId },
         include: {
@@ -476,26 +470,49 @@ export class OrchestratorService {
         throw new NotFoundException({ code: 'UNIFIED_REQUEST_NOT_FOUND', message: `Unified request ${requestId} not found` });
       }
       if (this.isTerminalRequestStatus(row.status)) {
+        const code = mode === 'assign' ? 'ASSIGNMENT_BLOCKED_TERMINAL' : 'REASSIGNMENT_BLOCKED_TERMINAL';
         throw new BadRequestException({
-          code: 'ASSIGNMENT_BLOCKED_TERMINAL',
-          message: `Cannot assign provider in terminal request status ${row.status}`,
+          code,
+          message: `Cannot ${mode} provider in terminal request status ${row.status}`,
         });
       }
-      if (row.status === 'ASSIGNED' && row.vendorId === providerId) {
-        return { request: row, didMutate: false };
-      }
-      if (row.status === 'ASSIGNED' && row.vendorId && row.vendorId !== providerId) {
-        throw new ConflictException({
-          code: 'REASSIGNMENT_NOT_ALLOWED',
-          message: 'Request already assigned to a different provider; reassignment is not enabled in this phase.',
-        });
-      }
+
       const op = toOperationalReadModelStatus(row.status);
-      if (op !== 'pending') {
-        throw new ConflictException({
-          code: 'ASSIGNMENT_INVALID_STATE',
-          message: `Vendor assignment is only allowed from assignable pending states (current operational: ${op})`,
-        });
+      if (mode === 'assign') {
+        if (row.status === 'ASSIGNED' && row.vendorId === providerId) {
+          return { request: row, didMutate: false, previousProviderId: row.vendorId ?? null };
+        }
+        if (row.status === 'ASSIGNED' && row.vendorId && row.vendorId !== providerId) {
+          throw new ConflictException({
+            code: 'REASSIGNMENT_NOT_ALLOWED',
+            message: 'Request already assigned to a different provider; reassignment is not enabled in this phase.',
+          });
+        }
+        if (op !== 'pending') {
+          if (op === 'assigned') {
+            throw new ConflictException({ code: 'REQUEST_ALREADY_ASSIGNED', message: 'Request is already assigned' });
+          }
+          throw new ConflictException({
+            code: 'ASSIGNMENT_INVALID_STATE',
+            message: `Vendor assignment is only allowed from assignable pending states (current operational: ${op})`,
+          });
+        }
+      } else {
+        if (op !== 'assigned' || row.status !== 'ASSIGNED') {
+          throw new ConflictException({
+            code: 'REASSIGNMENT_INVALID_STATE',
+            message: `Provider reassignment requires ASSIGNED request; current operational state is ${op}.`,
+          });
+        }
+        if (!row.vendorId) {
+          throw new ConflictException({
+            code: 'REASSIGNMENT_WITHOUT_CURRENT_PROVIDER',
+            message: 'Cannot reassign request without an existing assigned provider.',
+          });
+        }
+        if (row.vendorId === providerId) {
+          return { request: row, didMutate: false, previousProviderId: row.vendorId ?? null };
+        }
       }
 
       await tx.unifiedRequest.update({
@@ -541,16 +558,37 @@ export class OrchestratorService {
         });
       }
 
+      const trackingTitle = mode === 'assign' ? 'Provider assigned by command center' : 'Provider reassigned by command center';
       await tx.unifiedRequestTrackingEvent.create({
         data: {
           unifiedRequestId: requestId,
           actorUserId,
           actorType: 'command-center',
-          title: 'Provider assigned by command center',
+          title: trackingTitle,
           status: 'ASSIGNED',
-          metadata: this.toJson({ providerId }),
+          metadata: this.toJson({
+            providerId,
+            previousProviderId: row.vendorId ?? null,
+            reason: reason?.trim() || undefined,
+          }),
         },
       });
+
+      if (mode === 'reassign') {
+        await tx.ticketAction.create({
+          data: {
+            ticketId: requestId,
+            actionType: 'REASSIGN',
+            actorType: 'command-center',
+            actorId: actorUserId ?? 'system',
+            payload: this.toJson({
+              previousProviderId: row.vendorId,
+              nextProviderId: providerId,
+              reason: reason?.trim() || undefined,
+            }),
+          },
+        });
+      }
 
       const next = await tx.unifiedRequest.findUniqueOrThrow({
         where: { id: requestId },
@@ -559,26 +597,25 @@ export class OrchestratorService {
           maintenanceRequest: { select: { id: true, providerId: true } },
         },
       });
-      return { request: next, didMutate: true };
+      return { request: next, didMutate: true, previousProviderId: row.vendorId ?? null };
     });
 
     if (didMutate) {
       await this.auditTrailService.write({
         actorUserId,
-        action: 'COMMAND_CENTER_PROVIDER_ASSIGNED',
+        action: mode === 'assign' ? 'COMMAND_CENTER_PROVIDER_ASSIGNED' : 'COMMAND_CENTER_PROVIDER_REASSIGNED',
         entity: 'UnifiedRequest',
         entityId: requestId,
         countryCode: request.country,
-        metadata: { providerId },
+        metadata: {
+          providerId,
+          previousProviderId: mode === 'reassign' ? previousProviderId : undefined,
+          reason: reason?.trim() || undefined,
+        },
       });
     }
 
     return { changed: didMutate, request };
-  }
-
-  async assignProviderFromCommandCenter(requestId: string, providerId: string, actorUserId?: string) {
-    const { request } = await this.assignProviderToUnifiedRequest({ requestId, providerId, actorUserId });
-    return request;
   }
 
   async updateRequestStatusFromVendor(requestId: string, actorUserId: string, status: string, note?: string) {
