@@ -100,4 +100,14 @@ export class CommandCenterController {
   releasePropertyReservation(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
     return this.propertyCommandService.releaseReservation(user.id, propertyId);
   }
+
+  @Post('properties/:propertyId/hide')
+  hideProperty(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
+    return this.propertyCommandService.hideProperty(user.id, propertyId);
+  }
+
+  @Post('properties/:propertyId/publish')
+  republishProperty(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
+    return this.propertyCommandService.republishProperty(user.id, propertyId);
+  }
 }

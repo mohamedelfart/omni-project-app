@@ -22,6 +22,14 @@ export type PropertyReleaseResult = {
   idempotent: boolean;
 };
 
+export type PropertyHideResult = {
+  property: Property;
+};
+
+export type PropertyRepublishResult = {
+  property: Property;
+};
+
 @Injectable()
 export class PropertyCommandService {
   constructor(
@@ -175,6 +183,122 @@ export class PropertyCommandService {
     }
 
     return { property: updated, idempotent: !transitioned };
+  }
+
+  /**
+   * Command: hide property from tenant discovery.
+   * PUBLISHED -> INACTIVE.
+   */
+  async hideProperty(actorUserId: string, propertyId: string): Promise<PropertyHideResult> {
+    const property = await this.prisma.property.findUnique({ where: { id: propertyId } });
+    if (!property) {
+      throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: `Property ${propertyId} not found` });
+    }
+
+    if (property.status === PropertyStatus.INACTIVE) {
+      throw new ConflictException({
+        code: 'PROPERTY_ALREADY_HIDDEN',
+        message: 'Property is already INACTIVE.',
+      });
+    }
+    if (property.status === PropertyStatus.BOOKED || property.status === PropertyStatus.OCCUPIED || property.status === PropertyStatus.RESERVED) {
+      throw new ConflictException({
+        code: 'PROPERTY_NOT_ALLOWED_TO_HIDE',
+        message: `Cannot hide: property status is ${property.status}.`,
+      });
+    }
+    if (property.status !== PropertyStatus.PUBLISHED) {
+      throw new BadRequestException({
+        code: 'INVALID_STATE_FOR_HIDE',
+        message: `Hide is only allowed from PUBLISHED; current status is ${property.status}.`,
+      });
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.property.updateMany({
+        where: { id: propertyId, status: PropertyStatus.PUBLISHED },
+        data: { status: PropertyStatus.INACTIVE },
+      });
+      if (result.count !== 1) {
+        throw new ConflictException({
+          code: 'HIDE_CONFLICT',
+          message: 'Hide failed: property state changed concurrently.',
+        });
+      }
+      return tx.property.findUniqueOrThrow({ where: { id: propertyId } });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'PROPERTY_HIDDEN',
+      entity: 'Property',
+      entityId: propertyId,
+      countryCode: updated.countryCode,
+      metadata: {
+        previousStatus: property.status,
+        nextStatus: updated.status,
+      },
+    });
+
+    return { property: updated };
+  }
+
+  /**
+   * Command: republish hidden property back to tenant discovery.
+   * INACTIVE -> PUBLISHED.
+   */
+  async republishProperty(actorUserId: string, propertyId: string): Promise<PropertyRepublishResult> {
+    const property = await this.prisma.property.findUnique({ where: { id: propertyId } });
+    if (!property) {
+      throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: `Property ${propertyId} not found` });
+    }
+
+    if (property.status === PropertyStatus.BOOKED || property.status === PropertyStatus.OCCUPIED) {
+      throw new ConflictException({
+        code: 'PROPERTY_NOT_ALLOWED_TO_PUBLISH',
+        message: `Cannot publish: property status is ${property.status}.`,
+      });
+    }
+    if (property.status === PropertyStatus.PUBLISHED) {
+      throw new ConflictException({
+        code: 'PROPERTY_ALREADY_PUBLISHED',
+        message: 'Property is already PUBLISHED.',
+      });
+    }
+    if (property.status !== PropertyStatus.INACTIVE) {
+      throw new BadRequestException({
+        code: 'INVALID_STATE_FOR_PUBLISH',
+        message: `Publish is only allowed from INACTIVE; current status is ${property.status}.`,
+      });
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.property.updateMany({
+        where: { id: propertyId, status: PropertyStatus.INACTIVE },
+        data: { status: PropertyStatus.PUBLISHED },
+      });
+      if (result.count !== 1) {
+        throw new ConflictException({
+          code: 'PUBLISH_CONFLICT',
+          message: 'Publish failed: property state changed concurrently.',
+        });
+      }
+      return tx.property.findUniqueOrThrow({ where: { id: propertyId } });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'PROPERTY_REPUBLISHED',
+      entity: 'Property',
+      entityId: propertyId,
+      countryCode: updated.countryCode,
+      metadata: {
+        previousStatus: property.status,
+        nextStatus: updated.status,
+      },
+    });
+
+    return { property: updated };
   }
 
   private assertReserveAllowed(property: Property): void {

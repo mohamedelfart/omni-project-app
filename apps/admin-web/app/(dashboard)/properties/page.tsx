@@ -105,7 +105,7 @@ export default function PropertiesPage() {
     };
   }, [load]);
 
-  const runCommand = async (propertyId: string, path: 'reserve' | 'release') => {
+  const runCommand = async (propertyId: string, path: 'reserve' | 'release' | 'hide' | 'publish') => {
     setActionBusyId(propertyId);
     setError(null);
     try {
@@ -195,6 +195,8 @@ export default function PropertiesPage() {
             const busy = actionBusyId === row.id;
             const canReserve = row.status === 'PUBLISHED';
             const canRelease = row.status === 'RESERVED';
+            const canHide = row.status === 'PUBLISHED';
+            const canPublish = row.status === 'INACTIVE';
             return (
               <article
                 key={row.id}
@@ -253,6 +255,26 @@ export default function PropertiesPage() {
                       Reserve
                     </button>
                   ) : null}
+                  {canHide ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void runCommand(row.id, 'hide')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border: '1px solid #475569',
+                        background: '#FFFFFF',
+                        color: '#334155',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        cursor: busy ? 'wait' : 'pointer',
+                        opacity: busy ? 0.7 : 1,
+                      }}
+                    >
+                      Hide
+                    </button>
+                  ) : null}
                   {canRelease ? (
                     <button
                       type="button"
@@ -271,6 +293,26 @@ export default function PropertiesPage() {
                       }}
                     >
                       Release
+                    </button>
+                  ) : null}
+                  {canPublish ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void runCommand(row.id, 'publish')}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: '#1D4ED8',
+                        color: '#FFFFFF',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        cursor: busy ? 'wait' : 'pointer',
+                        opacity: busy ? 0.7 : 1,
+                      }}
+                    >
+                      Publish
                     </button>
                   ) : null}
                   {busy ? <span style={{ fontSize: 12, color: '#64748B', fontStyle: 'italic' }}>Working…</span> : null}
