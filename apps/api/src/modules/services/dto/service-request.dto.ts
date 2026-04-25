@@ -22,6 +22,17 @@ export class CreateMaintenanceDto {
   @IsString()
   severity!: string;
 
+  /**
+   * Explicit scope flag for property-linked maintenance workflows.
+   * When true, `propertyId` is required and will be persisted on both UnifiedRequest and MaintenanceRequest.
+   */
+  @IsOptional()
+  isPropertyScoped?: boolean;
+
+  @IsOptional()
+  @IsString()
+  propertyId?: string;
+
   @IsOptional()
   @IsDateString()
   preferredVisitAt?: string;

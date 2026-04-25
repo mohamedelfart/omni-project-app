@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FreeServiceEngineService } from '../free-service-engine/free-service-engine.service';
 import { inferIntegrationDomain, mapServiceTypeToNormalizedRequestType } from '../integration-hub/integration-contracts';
@@ -176,7 +176,22 @@ export class ServicesService {
 
   async createMaintenance(userId: string, dto: CreateMaintenanceDto) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    const countryCode = user.countryCode ?? 'QA';
+    const tenantProfile = await this.prisma.tenantProfile.findUniqueOrThrow({ where: { userId } });
+    const requiresPropertyLink = dto.isPropertyScoped === true;
+    if (requiresPropertyLink && !dto.propertyId?.trim()) {
+      throw new BadRequestException('propertyId is required when isPropertyScoped=true');
+    }
+
+    const propertyId = dto.propertyId?.trim() || undefined;
+    const linkedProperty = propertyId
+      ? await this.prisma.property.findUnique({ where: { id: propertyId } })
+      : null;
+    if (propertyId && !linkedProperty) {
+      throw new BadRequestException(`Invalid propertyId: ${propertyId}`);
+    }
+
+    const countryCode = linkedProperty?.countryCode ?? user.countryCode ?? 'QA';
+    const city = linkedProperty?.city ?? (user.countryCode === 'QA' ? 'Doha' : (user.countryCode ?? 'Doha'));
     await this.operatorPolicyService.assertServiceEnabled(countryCode, 'maintenance');
     const costEvaluation = await this.evaluateServicePricing({
       userId,
@@ -189,11 +204,21 @@ export class ServicesService {
       requestType: 'maintenance',
       serviceType: 'maintenance',
       country: countryCode,
-      city: user.countryCode === 'QA' ? 'Doha' : (user.countryCode ?? 'Doha'),
+      city,
+      propertyIds: linkedProperty ? [linkedProperty.id] : [],
+      locationLabel: linkedProperty ? `${linkedProperty.title} (${linkedProperty.city})` : undefined,
+      targetLat: linkedProperty?.lat ?? undefined,
+      targetLng: linkedProperty?.lng ?? undefined,
       metadata: {
         ...(JSON.parse(JSON.stringify(dto)) as Record<string, unknown>),
         costEvaluation,
         policyContext,
+        propertyScope: {
+          isPropertyScoped: linkedProperty !== null,
+          propertyId: linkedProperty?.id ?? null,
+          propertyCountryCode: linkedProperty?.countryCode ?? null,
+          propertyCity: linkedProperty?.city ?? null,
+        },
       },
     });
 
@@ -208,7 +233,8 @@ export class ServicesService {
     return this.prisma.maintenanceRequest.create({
       data: {
         unifiedRequestId: unifiedRequest.id,
-        tenantProfileId: (await this.prisma.tenantProfile.findUniqueOrThrow({ where: { userId } })).id,
+        tenantProfileId: tenantProfile.id,
+        propertyId: linkedProperty?.id,
         category: dto.category,
         severity: dto.severity,
         preferredVisitAt: dto.preferredVisitAt ? new Date(dto.preferredVisitAt) : undefined,
