@@ -841,4 +841,26 @@ export class CommandCenterService {
       take: 300,
     });
   }
+
+  /** Command-center inventory read: all lifecycle statuses (not tenant-catalog filtered). */
+  listPropertiesForCommandCenter(query?: { countryCode?: string }) {
+    const raw = query?.countryCode?.trim();
+    const countryCode = raw ? raw.toUpperCase() : undefined;
+    return this.prisma.property.findMany({
+      where: countryCode ? { countryCode } : {},
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        title: true,
+        city: true,
+        district: true,
+        countryCode: true,
+        status: true,
+        propertyType: true,
+        slug: true,
+        createdAt: true,
+      },
+    });
+  }
 }
