@@ -140,4 +140,14 @@ export class CommandCenterController {
   cancelReservedBooking(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
     return this.bookingCommandService.cancelReservedBooking(user.id, bookingId);
   }
+
+  @Post('bookings/:bookingId/contract-pending')
+  moveBookingToContractPending(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
+    return this.bookingCommandService.moveBookingToContractPending(user.id, bookingId);
+  }
+
+  @Post('bookings/:bookingId/activate')
+  activateLease(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
+    return this.bookingCommandService.activateLease(user.id, bookingId);
+  }
 }

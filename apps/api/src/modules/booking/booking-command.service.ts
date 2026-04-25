@@ -10,6 +10,8 @@ type BookingWithContext = {
   propertyId: string;
   unifiedRequestId: string | null;
   confirmedAt: Date | null;
+  moveInDate: Date;
+  termMonths: number;
   property: {
     id: string;
     status: PropertyStatus;
@@ -53,6 +55,57 @@ export class BookingCommandService {
       ? booking.unifiedRequest.paymentStatus === 'SUCCEEDED' || booking.unifiedRequest.paymentStatus === 'WAIVED'
       : false;
     return bookingPaymentResolved || requestPaymentResolved;
+  }
+
+  private assertContractReadiness(booking: BookingWithContext): void {
+    if (!this.hasSuccessfulSettlement(booking)) {
+      throw new BadRequestException({
+        code: 'PAYMENT_NOT_SETTLED',
+        message: 'Contract readiness failed: payment is not settled (SUCCEEDED/WAIVED).',
+      });
+    }
+    if (!booking.confirmedAt) {
+      throw new BadRequestException({
+        code: 'BOOKING_NOT_CONFIRMED',
+        message: 'Contract readiness failed: booking is not confirmed.',
+      });
+    }
+    if (booking.termMonths <= 0) {
+      throw new BadRequestException({
+        code: 'INVALID_BOOKING_TERM',
+        message: 'Contract readiness failed: booking term must be greater than zero.',
+      });
+    }
+  }
+
+  private assertContractReadinessFromSnapshot(snapshot: {
+    payments: Array<{ status: PaymentStatus }>;
+    unifiedRequest: { paymentStatus: PaymentStatus } | null;
+    confirmedAt: Date | null;
+    termMonths: number;
+  }): void {
+    const settled = snapshot.payments.some((p) => p.status === 'SUCCEEDED' || p.status === 'WAIVED')
+      || (snapshot.unifiedRequest
+        ? snapshot.unifiedRequest.paymentStatus === 'SUCCEEDED' || snapshot.unifiedRequest.paymentStatus === 'WAIVED'
+        : false);
+    if (!settled) {
+      throw new BadRequestException({
+        code: 'PAYMENT_NOT_SETTLED',
+        message: 'Contract readiness failed: payment is not settled (SUCCEEDED/WAIVED).',
+      });
+    }
+    if (!snapshot.confirmedAt) {
+      throw new BadRequestException({
+        code: 'BOOKING_NOT_CONFIRMED',
+        message: 'Contract readiness failed: booking is not confirmed.',
+      });
+    }
+    if (snapshot.termMonths <= 0) {
+      throw new BadRequestException({
+        code: 'INVALID_BOOKING_TERM',
+        message: 'Contract readiness failed: booking term must be greater than zero.',
+      });
+    }
   }
 
   async confirmBooking(actorUserId: string, bookingId: string) {
@@ -258,6 +311,196 @@ export class BookingCommandService {
       metadata: {
         previousStatus: booking.status,
         nextStatus: 'CANCELLED',
+        propertyId: booking.propertyId,
+        propertyStatusAfter: updated.property.status,
+      },
+    });
+
+    return updated;
+  }
+
+  async moveBookingToContractPending(actorUserId: string, bookingId: string) {
+    const booking = await this.getBookingOrThrow(bookingId);
+
+    if (booking.status === 'CONTRACT_PENDING') {
+      throw new ConflictException({
+        code: 'BOOKING_ALREADY_CONTRACT_PENDING',
+        message: 'Booking is already in CONTRACT_PENDING state.',
+      });
+    }
+    if (booking.status === 'ACTIVE') {
+      throw new ConflictException({
+        code: 'BOOKING_ALREADY_ACTIVE',
+        message: 'Cannot move to CONTRACT_PENDING: booking is already ACTIVE.',
+      });
+    }
+    if (booking.status === 'CANCELLED' || booking.status === 'COMPLETED') {
+      throw new BadRequestException({
+        code: 'INVALID_BOOKING_STATE_FOR_CONTRACT_PENDING',
+        message: `Cannot move to CONTRACT_PENDING from ${booking.status}.`,
+      });
+    }
+    if (booking.status !== 'CONFIRMED') {
+      throw new BadRequestException({
+        code: 'BOOKING_NOT_CONFIRMED',
+        message: `Contract pending requires CONFIRMED booking; current status is ${booking.status}.`,
+      });
+    }
+
+    this.assertContractReadiness(booking);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.booking.findUnique({
+        where: { id: bookingId },
+        include: {
+          property: { select: { id: true, status: true } },
+          unifiedRequest: { select: { paymentStatus: true } },
+          payments: { select: { status: true } },
+        },
+      });
+      if (!row) {
+        throw new NotFoundException({ code: 'BOOKING_NOT_FOUND', message: `Booking ${bookingId} not found` });
+      }
+      if (row.status !== 'CONFIRMED') {
+        throw new ConflictException({
+          code: 'CONTRACT_PENDING_CONFLICT',
+          message: `Cannot move to CONTRACT_PENDING: booking is no longer CONFIRMED (${row.status}).`,
+        });
+      }
+      this.assertContractReadinessFromSnapshot({
+        payments: row.payments,
+        unifiedRequest: row.unifiedRequest,
+        confirmedAt: row.confirmedAt,
+        termMonths: row.termMonths,
+      });
+
+      await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'CONTRACT_PENDING' },
+      });
+
+      return tx.booking.findUniqueOrThrow({
+        where: { id: bookingId },
+        include: { property: true, payments: true, unifiedRequest: true },
+      });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'BOOKING_CONTRACT_PENDING',
+      entity: 'Booking',
+      entityId: bookingId,
+      countryCode: booking.property.countryCode,
+      metadata: {
+        previousStatus: booking.status,
+        nextStatus: 'CONTRACT_PENDING',
+        propertyId: booking.propertyId,
+      },
+    });
+
+    return updated;
+  }
+
+  async activateLease(actorUserId: string, bookingId: string) {
+    const booking = await this.getBookingOrThrow(bookingId);
+
+    if (booking.status === 'ACTIVE') {
+      throw new ConflictException({
+        code: 'BOOKING_ALREADY_ACTIVE',
+        message: 'Booking is already ACTIVE.',
+      });
+    }
+    if (booking.status === 'CANCELLED' || booking.status === 'COMPLETED') {
+      throw new BadRequestException({
+        code: 'INVALID_BOOKING_STATE_FOR_ACTIVATION',
+        message: `Cannot activate lease from ${booking.status}.`,
+      });
+    }
+    if (booking.status !== 'CONTRACT_PENDING') {
+      throw new BadRequestException({
+        code: 'CONTRACT_NOT_READY',
+        message: `Lease activation requires CONTRACT_PENDING booking; current status is ${booking.status}.`,
+      });
+    }
+
+    this.assertContractReadiness(booking);
+    if (booking.moveInDate.getTime() > Date.now()) {
+      throw new BadRequestException({
+        code: 'MOVE_IN_DATE_NOT_REACHED',
+        message: 'Cannot activate lease before move-in date.',
+      });
+    }
+    if (booking.property.status === 'RESERVED' || booking.property.status === 'INACTIVE') {
+      throw new ConflictException({
+        code: 'PROPERTY_STATE_CONFLICT',
+        message: `Cannot activate lease while property status is ${booking.property.status}.`,
+      });
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.booking.findUnique({
+        where: { id: bookingId },
+        include: {
+          property: { select: { id: true, status: true } },
+          unifiedRequest: { select: { paymentStatus: true } },
+          payments: { select: { status: true } },
+        },
+      });
+      if (!row) {
+        throw new NotFoundException({ code: 'BOOKING_NOT_FOUND', message: `Booking ${bookingId} not found` });
+      }
+      if (row.status !== 'CONTRACT_PENDING') {
+        throw new ConflictException({
+          code: 'ACTIVATION_CONFLICT',
+          message: `Lease activation failed: booking is no longer CONTRACT_PENDING (${row.status}).`,
+        });
+      }
+      this.assertContractReadinessFromSnapshot({
+        payments: row.payments,
+        unifiedRequest: row.unifiedRequest,
+        confirmedAt: row.confirmedAt,
+        termMonths: row.termMonths,
+      });
+      if (row.moveInDate.getTime() > Date.now()) {
+        throw new BadRequestException({
+          code: 'MOVE_IN_DATE_NOT_REACHED',
+          message: 'Cannot activate lease before move-in date.',
+        });
+      }
+      if (row.property.status === 'RESERVED' || row.property.status === 'INACTIVE') {
+        throw new ConflictException({
+          code: 'PROPERTY_STATE_CONFLICT',
+          message: `Cannot activate lease while property status is ${row.property.status}.`,
+        });
+      }
+
+      await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'ACTIVE' },
+      });
+
+      if (row.property.status === 'BOOKED') {
+        await tx.property.update({
+          where: { id: row.property.id },
+          data: { status: 'OCCUPIED' },
+        });
+      }
+
+      return tx.booking.findUniqueOrThrow({
+        where: { id: bookingId },
+        include: { property: true, payments: true, unifiedRequest: true },
+      });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'BOOKING_ACTIVATED',
+      entity: 'Booking',
+      entityId: bookingId,
+      countryCode: booking.property.countryCode,
+      metadata: {
+        previousStatus: booking.status,
+        nextStatus: 'ACTIVE',
         propertyId: booking.propertyId,
         propertyStatusAfter: updated.property.status,
       },
