@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { BookingStatus, Property, PropertyStatus } from '@prisma/client';
+import { BookingStatus, Prisma, Property, PropertyStatus, ServiceRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -28,6 +28,11 @@ export type PropertyHideResult = {
 
 export type PropertyRepublishResult = {
   property: Property;
+};
+
+export type PropertyMaintenanceHoldResult = {
+  property: Property;
+  maintenanceRequestId: string;
 };
 
 @Injectable()
@@ -301,6 +306,194 @@ export class PropertyCommandService {
     return { property: updated };
   }
 
+  /**
+   * Command: start operational maintenance hold on a property.
+   * This does not change PropertyStatus (distinct from hide/reserve).
+   * Inventory blocking truth is persisted on the linked MaintenanceRequest metadata.
+   */
+  async startMaintenanceHold(
+    actorUserId: string,
+    propertyId: string,
+    maintenanceRequestId: string,
+  ): Promise<PropertyMaintenanceHoldResult> {
+    const property = await this.prisma.property.findUnique({ where: { id: propertyId } });
+    if (!property) {
+      throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: `Property ${propertyId} not found` });
+    }
+    this.assertMaintenanceHoldAllowed(property);
+
+    const request = await this.prisma.maintenanceRequest.findUnique({
+      where: { id: maintenanceRequestId },
+      include: { unifiedRequest: true },
+    });
+    if (!request) {
+      throw new NotFoundException({ code: 'MAINTENANCE_REQUEST_NOT_FOUND', message: `MaintenanceRequest ${maintenanceRequestId} not found` });
+    }
+    if (request.unifiedRequest.serviceType !== 'maintenance') {
+      throw new BadRequestException({
+        code: 'INVALID_MAINTENANCE_REQUEST',
+        message: `Request ${maintenanceRequestId} is not a maintenance workflow.`,
+      });
+    }
+    if (request.propertyId !== propertyId) {
+      throw new BadRequestException({
+        code: 'PROPERTY_REQUEST_MISMATCH',
+        message: 'Maintenance request is not linked to this property.',
+      });
+    }
+    if (request.status === ServiceRequestStatus.COMPLETED || request.status === ServiceRequestStatus.CANCELLED || request.status === ServiceRequestStatus.REJECTED) {
+      throw new BadRequestException({
+        code: 'MAINTENANCE_REQUEST_TERMINAL',
+        message: `Cannot start hold: maintenance request status is ${request.status}.`,
+      });
+    }
+
+    const activeHold = await this.findActiveMaintenanceHoldByProperty(propertyId);
+    if (activeHold) {
+      throw new ConflictException({
+        code: 'PROPERTY_MAINTENANCE_HOLD_ACTIVE',
+        message: 'Property is already under maintenance hold.',
+        activeMaintenanceRequestId: activeHold.id,
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const concurrentHold = await tx.maintenanceRequest.findFirst({
+        where: {
+          propertyId,
+          metadata: {
+            path: ['maintenanceHold', 'active'],
+            equals: true,
+          },
+        },
+      });
+      if (concurrentHold) {
+        throw new ConflictException({
+          code: 'PROPERTY_MAINTENANCE_HOLD_ACTIVE',
+          message: 'Property is already under maintenance hold.',
+          activeMaintenanceRequestId: concurrentHold.id,
+        });
+      }
+
+      const current = await tx.maintenanceRequest.findUniqueOrThrow({ where: { id: maintenanceRequestId } });
+      const currentMeta = this.toRecord(current.metadata);
+      const holdMeta = this.toRecord(currentMeta.maintenanceHold);
+      const nextMetadata = {
+        ...currentMeta,
+        maintenanceHold: {
+          ...holdMeta,
+          active: true,
+          startedAt: new Date().toISOString(),
+          startedByUserId: actorUserId,
+          propertyId,
+        },
+      };
+
+      await tx.maintenanceRequest.update({
+        where: { id: maintenanceRequestId },
+        data: {
+          status: current.status === ServiceRequestStatus.PENDING ? ServiceRequestStatus.IN_PROGRESS : current.status,
+          metadata: this.toJson(nextMetadata),
+        },
+      });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'PROPERTY_MAINTENANCE_HOLD_STARTED',
+      entity: 'Property',
+      entityId: propertyId,
+      countryCode: property.countryCode,
+      metadata: {
+        maintenanceRequestId,
+      },
+    });
+
+    return { property, maintenanceRequestId };
+  }
+
+  /**
+   * Command: release operational maintenance hold.
+   * Safe idempotency: if hold is already inactive on this request, returns success.
+   */
+  async releaseMaintenanceHold(
+    actorUserId: string,
+    propertyId: string,
+    maintenanceRequestId: string,
+  ): Promise<PropertyMaintenanceHoldResult> {
+    const property = await this.prisma.property.findUnique({ where: { id: propertyId } });
+    if (!property) {
+      throw new NotFoundException({ code: 'PROPERTY_NOT_FOUND', message: `Property ${propertyId} not found` });
+    }
+
+    const request = await this.prisma.maintenanceRequest.findUnique({
+      where: { id: maintenanceRequestId },
+    });
+    if (!request) {
+      throw new NotFoundException({ code: 'MAINTENANCE_REQUEST_NOT_FOUND', message: `MaintenanceRequest ${maintenanceRequestId} not found` });
+    }
+    if (request.propertyId !== propertyId) {
+      throw new BadRequestException({
+        code: 'PROPERTY_REQUEST_MISMATCH',
+        message: 'Maintenance request is not linked to this property.',
+      });
+    }
+
+    const activeHold = await this.findActiveMaintenanceHoldByProperty(propertyId);
+    if (!activeHold) {
+      throw new BadRequestException({
+        code: 'MAINTENANCE_HOLD_NOT_ACTIVE',
+        message: 'Property is not under maintenance hold.',
+      });
+    }
+    if (activeHold.id !== maintenanceRequestId) {
+      throw new ConflictException({
+        code: 'MAINTENANCE_HOLD_REQUEST_MISMATCH',
+        message: 'Active maintenance hold belongs to a different maintenance request.',
+        activeMaintenanceRequestId: activeHold.id,
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const current = await tx.maintenanceRequest.findUniqueOrThrow({ where: { id: maintenanceRequestId } });
+      const currentMeta = this.toRecord(current.metadata);
+      const holdMeta = this.toRecord(currentMeta.maintenanceHold);
+      const isActive = holdMeta.active === true;
+      if (!isActive) {
+        return;
+      }
+      const nextMetadata = {
+        ...currentMeta,
+        maintenanceHold: {
+          ...holdMeta,
+          active: false,
+          releasedAt: new Date().toISOString(),
+          releasedByUserId: actorUserId,
+          propertyId,
+        },
+      };
+      await tx.maintenanceRequest.update({
+        where: { id: maintenanceRequestId },
+        data: {
+          metadata: this.toJson(nextMetadata),
+        },
+      });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'PROPERTY_MAINTENANCE_HOLD_RELEASED',
+      entity: 'Property',
+      entityId: propertyId,
+      countryCode: property.countryCode,
+      metadata: {
+        maintenanceRequestId,
+      },
+    });
+
+    return { property, maintenanceRequestId };
+  }
+
   private assertReserveAllowed(property: Property): void {
     if (property.status === PropertyStatus.RESERVED) {
       throw new ConflictException({
@@ -320,5 +513,47 @@ export class PropertyCommandService {
         message: `Reserve is only allowed from PUBLISHED; current status is ${property.status}.`,
       });
     }
+  }
+
+  private assertMaintenanceHoldAllowed(property: Property): void {
+    if (property.status === PropertyStatus.BOOKED || property.status === PropertyStatus.OCCUPIED) {
+      throw new ConflictException({
+        code: 'PROPERTY_NOT_ALLOWED_FOR_MAINTENANCE_HOLD',
+        message: `Cannot start maintenance hold: property status is ${property.status}.`,
+      });
+    }
+    if (property.status === PropertyStatus.RESERVED) {
+      throw new ConflictException({
+        code: 'PROPERTY_RESERVED_CONFLICT',
+        message: 'Cannot start maintenance hold while property is RESERVED.',
+      });
+    }
+    if (property.status !== PropertyStatus.PUBLISHED && property.status !== PropertyStatus.INACTIVE) {
+      throw new BadRequestException({
+        code: 'INVALID_STATE_FOR_MAINTENANCE_HOLD',
+        message: `Maintenance hold is only allowed from PUBLISHED/INACTIVE; current status is ${property.status}.`,
+      });
+    }
+  }
+
+  private async findActiveMaintenanceHoldByProperty(propertyId: string) {
+    return this.prisma.maintenanceRequest.findFirst({
+      where: {
+        propertyId,
+        metadata: {
+          path: ['maintenanceHold', 'active'],
+          equals: true,
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+  }
+
+  private toJson(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
+  }
+
+  private toRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   }
 }

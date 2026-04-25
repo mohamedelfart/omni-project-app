@@ -92,7 +92,22 @@ export class PropertiesService {
     };
   }
 
-  findAll(query: SearchPropertiesDto) {
+  async findAll(query: SearchPropertiesDto) {
+    const activeHolds = await this.prisma.maintenanceRequest.findMany({
+      where: {
+        propertyId: { not: null },
+        metadata: {
+          path: ['maintenanceHold', 'active'],
+          equals: true,
+        },
+      },
+      select: { propertyId: true },
+      distinct: ['propertyId'],
+    });
+    const blockedPropertyIds = activeHolds
+      .map((row) => row.propertyId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
     const where: Prisma.PropertyWhereInput = {
       countryCode: query.countryCode,
       city: query.city,
@@ -100,6 +115,7 @@ export class PropertiesService {
       bathrooms: query.bathrooms,
       monthlyRentMinor: query.minPrice || query.maxPrice ? { gte: query.minPrice, lte: query.maxPrice } : undefined,
       status: 'PUBLISHED',
+      id: blockedPropertyIds.length > 0 ? { notIn: blockedPropertyIds } : undefined,
     };
 
     const orderBy = query.sortBy === 'price-asc'

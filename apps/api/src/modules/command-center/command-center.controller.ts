@@ -110,4 +110,22 @@ export class CommandCenterController {
   republishProperty(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
     return this.propertyCommandService.republishProperty(user.id, propertyId);
   }
+
+  @Post('properties/:propertyId/maintenance-hold/start')
+  startMaintenanceHold(
+    @CurrentUser() user: { id: string },
+    @Param('propertyId') propertyId: string,
+    @Body() body: { maintenanceRequestId: string },
+  ) {
+    return this.propertyCommandService.startMaintenanceHold(user.id, propertyId, body.maintenanceRequestId);
+  }
+
+  @Post('properties/:propertyId/maintenance-hold/release')
+  releaseMaintenanceHold(
+    @CurrentUser() user: { id: string },
+    @Param('propertyId') propertyId: string,
+    @Body() body: { maintenanceRequestId: string },
+  ) {
+    return this.propertyCommandService.releaseMaintenanceHold(user.id, propertyId, body.maintenanceRequestId);
+  }
 }

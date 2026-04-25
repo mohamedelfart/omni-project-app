@@ -24,6 +24,33 @@ export class ViewingService {
     return `VWT-${datePart}-${indexPart}`;
   }
 
+  private async assertPropertySelectableForViewing(propertyId: string): Promise<void> {
+    const property = await this.prisma.property.findUnique({
+      where: { id: propertyId },
+      select: { id: true, status: true },
+    });
+    if (!property) {
+      throw new BadRequestException(`Property ${propertyId} not found`);
+    }
+    if (property.status !== 'PUBLISHED') {
+      throw new BadRequestException(`Property ${propertyId} is not available for tenant viewing selection`);
+    }
+
+    const activeHold = await this.prisma.maintenanceRequest.findFirst({
+      where: {
+        propertyId,
+        metadata: {
+          path: ['maintenanceHold', 'active'],
+          equals: true,
+        },
+      },
+      select: { id: true },
+    });
+    if (activeHold) {
+      throw new BadRequestException(`Property ${propertyId} is under maintenance hold`);
+    }
+  }
+
   async getOrCreateShortlist(userId: string) {
     const shortlist = await this.prisma.shortlist.findFirst({
       where: { userId, isActive: true },
@@ -41,6 +68,7 @@ export class ViewingService {
   }
 
   async addToShortlist(userId: string, propertyId: string) {
+    await this.assertPropertySelectableForViewing(propertyId);
     const shortlist = await this.getOrCreateShortlist(userId);
     const existingItem = shortlist.items.find((item) => item.propertyId === propertyId);
     if (existingItem) {
@@ -105,6 +133,10 @@ export class ViewingService {
     const shortlist = await this.getOrCreateShortlist(userId);
     if (!shortlist.items.length || shortlist.items.length > 3) {
       throw new BadRequestException('Viewing request requires 1 to 3 shortlisted properties');
+    }
+
+    for (const item of shortlist.items) {
+      await this.assertPropertySelectableForViewing(item.propertyId);
     }
 
     const primaryProperty = shortlist.items[0]?.property;
