@@ -87,11 +87,33 @@ const PROPERTY_BADGE: Record<string, { bg: string; color: string }> = {
   INACTIVE: { bg: '#E5E7EB', color: '#4B5563' },
 };
 
+type BookingCommandPath = 'confirm' | 'cancel' | 'contract-pending' | 'activate' | 'complete';
+
+/** UI affordance only; backend enforces real validity. */
+function bookingCommandsForStatus(status: string): Array<{ path: BookingCommandPath; label: string }> {
+  switch (status) {
+    case 'RESERVED':
+      return [
+        { path: 'confirm', label: 'Confirm' },
+        { path: 'cancel', label: 'Cancel' },
+      ];
+    case 'CONFIRMED':
+      return [{ path: 'contract-pending', label: 'Contract pending' }];
+    case 'CONTRACT_PENDING':
+      return [{ path: 'activate', label: 'Activate lease' }];
+    case 'ACTIVE':
+      return [{ path: 'complete', label: 'Complete lease' }];
+    default:
+      return [];
+  }
+}
+
 export default function BookingsPage() {
   const [rows, setRows] = useState<CommandBookingRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [countryCode, setCountryCode] = useState('');
+  const [actionBusy, setActionBusy] = useState<{ bookingId: string; path: BookingCommandPath } | null>(null);
 
   const load = useCallback(async () => {
     const base = apiBase.replace(/\/$/, '');
@@ -136,12 +158,34 @@ export default function BookingsPage() {
     return { total: rows.length, byStatus };
   }, [rows]);
 
+  const runBookingCommand = useCallback(
+    async (bookingId: string, path: BookingCommandPath) => {
+      setActionBusy({ bookingId, path });
+      setError(null);
+      try {
+        const base = apiBase.replace(/\/$/, '');
+        const url = `${base}/command-center/bookings/${encodeURIComponent(bookingId)}/${path}`;
+        const response = await apiFetch(url, { method: 'POST', cache: 'no-store' });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(getLoadErrorMessage(payload));
+        }
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Command failed');
+      } finally {
+        setActionBusy(null);
+      }
+    },
+    [load],
+  );
+
   return (
     <section style={{ display: 'grid', gap: 24 }}>
       <header>
         <h1 style={{ margin: 0, fontSize: 32, fontWeight: 800, color: '#1E3A5F' }}>Bookings</h1>
         <p style={{ color: '#6B7280', marginTop: 6, marginBottom: 0 }}>
-          Command-center operational read model: lifecycle, inventory projection, readiness, and next action from the API.
+          Operational read model from the API; row actions call existing command-center booking endpoints only (no local lifecycle edits).
         </p>
       </header>
 
@@ -158,7 +202,7 @@ export default function BookingsPage() {
         <button
           type="button"
           onClick={() => void load().catch((e) => setError(e instanceof Error ? e.message : 'Refresh failed'))}
-          disabled={loading}
+          disabled={loading || actionBusy !== null}
           style={{
             padding: '8px 16px',
             borderRadius: 10,
@@ -167,7 +211,7 @@ export default function BookingsPage() {
             color: '#FFFFFF',
             fontWeight: 600,
             fontSize: 13,
-            cursor: loading ? 'wait' : 'pointer',
+            cursor: loading || actionBusy !== null ? 'wait' : 'pointer',
           }}
         >
           {loading ? 'Loading…' : 'Refresh'}
@@ -202,6 +246,7 @@ export default function BookingsPage() {
                 'Occupancy',
                 'Next action',
                 'Blocker',
+                'Actions',
               ].map((col) => (
                 <th
                   key={col}
@@ -224,7 +269,7 @@ export default function BookingsPage() {
           <tbody>
             {!loading && rows.length === 0 && !error && (
               <tr>
-                <td colSpan={13} style={{ padding: 24, color: '#6B7280', fontSize: 14 }}>
+                <td colSpan={14} style={{ padding: 24, color: '#6B7280', fontSize: 14 }}>
                   No bookings returned for this filter.
                 </td>
               </tr>
@@ -232,6 +277,8 @@ export default function BookingsPage() {
             {rows.map((b, i) => {
               const bs = BOOKING_BADGE[b.bookingStatus] ?? { bg: '#F3F4F6', color: '#374151' };
               const ps = PROPERTY_BADGE[b.property.status] ?? { bg: '#F3F4F6', color: '#374151' };
+              const commands = bookingCommandsForStatus(b.bookingStatus);
+              const rowBusy = actionBusy?.bookingId === b.id;
               return (
                 <tr key={b.id} style={{ borderBottom: i < rows.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
                   <td style={{ padding: '14px', fontSize: 12, color: '#6B7280', fontFamily: 'monospace', verticalAlign: 'top' }}>{b.id}</td>
@@ -262,6 +309,32 @@ export default function BookingsPage() {
                   <td style={{ padding: '14px', fontSize: 12, color: '#374151', maxWidth: 280, verticalAlign: 'top' }}>{b.nextAction}</td>
                   <td style={{ padding: '14px', fontSize: 12, color: b.blockingReason ? '#991B1B' : '#9CA3AF', maxWidth: 260, verticalAlign: 'top' }}>
                     {b.blockingReason ?? '—'}
+                  </td>
+                  <td style={{ padding: '14px', verticalAlign: 'top' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {commands.map((cmd) => (
+                        <button
+                          key={cmd.path}
+                          type="button"
+                          disabled={rowBusy || loading}
+                          onClick={() => void runBookingCommand(b.id, cmd.path)}
+                          style={{
+                            padding: '5px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #D1D5DB',
+                            background: '#FFFFFF',
+                            color: '#1E3A5F',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: rowBusy || loading ? 'wait' : 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {rowBusy && actionBusy?.path === cmd.path ? '…' : cmd.label}
+                        </button>
+                      ))}
+                      {commands.length === 0 ? <span style={{ fontSize: 12, color: '#9CA3AF' }}>—</span> : null}
+                    </div>
                   </td>
                 </tr>
               );
