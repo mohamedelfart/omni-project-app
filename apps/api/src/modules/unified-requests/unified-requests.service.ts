@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, RequestPriority, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -364,56 +364,64 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  async assignVendor(requestId: string, dto: AssignVendorDto, user: AuthenticatedUser) {
-    const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
-      where: { id: requestId },
-      select: { status: true },
-    });
-    const operational = toOperationalReadModelStatus(existing.status);
-    if (operational !== 'pending') {
-      if (operational === 'assigned') {
-        throw new ConflictException('Request is already assigned');
-      }
-      throw new ConflictException(
-        `Vendor assignment is only allowed when the request is pending (current: ${operational})`,
-      );
-    }
-
-    const updated = await this.prisma.unifiedRequest.update({
-      where: { id: requestId },
-      data: {
-        vendorId: dto.vendorId,
-        status: UnifiedRequestStatus.ASSIGNED,
-      },
-    });
-
-    const minimal = this.toMinimalRequest(updated);
+  /**
+   * Realtime fan-out after canonical provider assignment (shared by admin realtime + command-center).
+   * Emits `request.assigned` then `request.updated` (existing client contract).
+   */
+  emitProviderAssignmentSockets(
+    unified: {
+      id: string;
+      tenantId: string;
+      vendorId: string | null;
+      requestType: string;
+      status: UnifiedRequestStatus;
+      priority: RequestPriority;
+      propertyIds: string[];
+      createdAt: Date;
+      updatedAt: Date;
+    },
+    providerId: string,
+  ): void {
+    const minimal = this.toMinimalRequest(unified);
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.assigned,
       [
         `user:${minimal.tenantId}`,
-        `user:${dto.vendorId}`,
+        `user:${providerId}`,
         'role:provider',
         'role:admin',
         'role:command-center',
       ],
-      { request: minimal, vendorId: dto.vendorId },
+      { request: minimal, vendorId: providerId },
     );
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.updated,
       [
         `user:${minimal.tenantId}`,
-        `user:${dto.vendorId}`,
+        `user:${providerId}`,
         'role:provider',
         'role:admin',
         'role:command-center',
       ],
       { requestId: minimal.id, status: minimal.status },
     );
-    void this.appendAssignTicketAction(requestId, user, dto).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown logging error';
-      console.warn(`TicketAction ASSIGN failed: ${message}`);
+  }
+
+  async assignVendor(requestId: string, dto: AssignVendorDto, user: AuthenticatedUser) {
+    const { changed, request } = await this.orchestratorService.assignProviderToUnifiedRequest({
+      requestId,
+      providerId: dto.vendorId,
+      actorUserId: user.id,
     });
+
+    const minimal = this.toMinimalRequest(request);
+    if (changed) {
+      this.emitProviderAssignmentSockets(request, dto.vendorId);
+      void this.appendAssignTicketAction(requestId, user, dto).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Unknown logging error';
+        console.warn(`TicketAction ASSIGN failed: ${message}`);
+      });
+    }
     return minimal;
   }
 

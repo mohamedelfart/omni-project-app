@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { CommandCenterStatus, Prisma, ServiceRequestStatus, UnifiedRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { IntegrationHubService } from '../integration-hub/integration-hub.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
+import { toOperationalReadModelStatus } from '../unified-requests/unified-request-operational-status';
 
 @Injectable()
 export class OrchestratorService {
@@ -410,64 +411,173 @@ export class OrchestratorService {
     return { requestId, instructionType, dispatched: true };
   }
 
-  async assignProviderFromCommandCenter(requestId: string, providerId: string, actorUserId?: string) {
-    const request = await this.prisma.unifiedRequest.update({
+  /**
+   * Single canonical provider assignment for unified requests (command-center + admin realtime).
+   * Transactional: UnifiedRequest + viewing + maintenance projections, tracking + audit.
+   * No reassignment: blocks ASSIGNED with a different vendorId; idempotent if already same vendor.
+   */
+  async assignProviderToUnifiedRequest(params: { requestId: string; providerId: string; actorUserId?: string }) {
+    const { requestId, providerId, actorUserId } = params;
+
+    const existing = await this.prisma.unifiedRequest.findUnique({
       where: { id: requestId },
-      data: {
-        vendorId: providerId,
-        status: 'ASSIGNED',
-        commandCenterStatus: 'MONITORING',
+      include: {
+        viewingRequest: { include: { assignment: true } },
+        maintenanceRequest: { select: { id: true, providerId: true } },
       },
-      include: { viewingRequest: { include: { assignment: true } } },
     });
+    if (!existing) {
+      throw new NotFoundException({ code: 'UNIFIED_REQUEST_NOT_FOUND', message: `Unified request ${requestId} not found` });
+    }
 
-    if (request.viewingRequest) {
-      await this.prisma.viewingRequest.update({
-        where: { id: request.viewingRequest.id },
-        data: { status: 'ASSIGNED' },
-      });
-
-      await this.prisma.viewingTripAssignment.upsert({
-        where: { viewingRequestId: request.viewingRequest.id },
-        update: {
-          providerId,
-          status: 'ASSIGNED',
-          etaMinutes: request.viewingRequest.assignment?.etaMinutes ?? 12,
-          assignedAgentId: actorUserId,
-          assignedAt: new Date(),
-          startedAt: null,
-          completedAt: null,
-        },
-        create: {
-          viewingRequestId: request.viewingRequest.id,
-          providerId,
-          status: 'ASSIGNED',
-          etaMinutes: 12,
-          assignedAgentId: actorUserId,
-        },
+    if (this.isTerminalRequestStatus(existing.status)) {
+      throw new BadRequestException({
+        code: 'ASSIGNMENT_BLOCKED_TERMINAL',
+        message: `Cannot assign provider in terminal request status ${existing.status}`,
       });
     }
 
-    await this.prisma.unifiedRequestTrackingEvent.create({
-      data: {
-        unifiedRequestId: requestId,
+    if (existing.status === 'ASSIGNED' && existing.vendorId === providerId) {
+      return { changed: false, request: existing };
+    }
+
+    if (existing.status === 'ASSIGNED' && existing.vendorId && existing.vendorId !== providerId) {
+      throw new ConflictException({
+        code: 'REASSIGNMENT_NOT_ALLOWED',
+        message: 'Request already assigned to a different provider; reassignment is not enabled in this phase.',
+      });
+    }
+
+    const operational = toOperationalReadModelStatus(existing.status);
+    if (operational !== 'pending') {
+      if (operational === 'assigned') {
+        throw new ConflictException({ code: 'REQUEST_ALREADY_ASSIGNED', message: 'Request is already assigned' });
+      }
+      throw new ConflictException({
+        code: 'ASSIGNMENT_INVALID_STATE',
+        message: `Vendor assignment is only allowed from assignable pending states (current operational: ${operational})`,
+      });
+    }
+
+    const provider = await this.prisma.provider.findUnique({ where: { id: providerId }, select: { id: true } });
+    if (!provider) {
+      throw new BadRequestException({ code: 'PROVIDER_NOT_FOUND', message: `Provider ${providerId} not found` });
+    }
+
+    const { request, didMutate } = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.unifiedRequest.findUnique({
+        where: { id: requestId },
+        include: {
+          viewingRequest: { include: { assignment: true } },
+          maintenanceRequest: { select: { id: true, providerId: true } },
+        },
+      });
+      if (!row) {
+        throw new NotFoundException({ code: 'UNIFIED_REQUEST_NOT_FOUND', message: `Unified request ${requestId} not found` });
+      }
+      if (this.isTerminalRequestStatus(row.status)) {
+        throw new BadRequestException({
+          code: 'ASSIGNMENT_BLOCKED_TERMINAL',
+          message: `Cannot assign provider in terminal request status ${row.status}`,
+        });
+      }
+      if (row.status === 'ASSIGNED' && row.vendorId === providerId) {
+        return { request: row, didMutate: false };
+      }
+      if (row.status === 'ASSIGNED' && row.vendorId && row.vendorId !== providerId) {
+        throw new ConflictException({
+          code: 'REASSIGNMENT_NOT_ALLOWED',
+          message: 'Request already assigned to a different provider; reassignment is not enabled in this phase.',
+        });
+      }
+      const op = toOperationalReadModelStatus(row.status);
+      if (op !== 'pending') {
+        throw new ConflictException({
+          code: 'ASSIGNMENT_INVALID_STATE',
+          message: `Vendor assignment is only allowed from assignable pending states (current operational: ${op})`,
+        });
+      }
+
+      await tx.unifiedRequest.update({
+        where: { id: requestId },
+        data: {
+          vendorId: providerId,
+          status: 'ASSIGNED',
+          commandCenterStatus: 'MONITORING',
+        },
+      });
+
+      if (row.viewingRequest) {
+        await tx.viewingRequest.update({
+          where: { id: row.viewingRequest.id },
+          data: { status: 'ASSIGNED' },
+        });
+
+        await tx.viewingTripAssignment.upsert({
+          where: { viewingRequestId: row.viewingRequest.id },
+          update: {
+            providerId,
+            status: 'ASSIGNED',
+            etaMinutes: row.viewingRequest.assignment?.etaMinutes ?? 12,
+            assignedAgentId: actorUserId,
+            assignedAt: new Date(),
+            startedAt: null,
+            completedAt: null,
+          },
+          create: {
+            viewingRequestId: row.viewingRequest.id,
+            providerId,
+            status: 'ASSIGNED',
+            etaMinutes: 12,
+            assignedAgentId: actorUserId,
+          },
+        });
+      }
+
+      if (row.maintenanceRequest) {
+        await tx.maintenanceRequest.update({
+          where: { id: row.maintenanceRequest.id },
+          data: { providerId },
+        });
+      }
+
+      await tx.unifiedRequestTrackingEvent.create({
+        data: {
+          unifiedRequestId: requestId,
+          actorUserId,
+          actorType: 'command-center',
+          title: 'Provider assigned by command center',
+          status: 'ASSIGNED',
+          metadata: this.toJson({ providerId }),
+        },
+      });
+
+      const next = await tx.unifiedRequest.findUniqueOrThrow({
+        where: { id: requestId },
+        include: {
+          viewingRequest: { include: { assignment: true } },
+          maintenanceRequest: { select: { id: true, providerId: true } },
+        },
+      });
+      return { request: next, didMutate: true };
+    });
+
+    if (didMutate) {
+      await this.auditTrailService.write({
         actorUserId,
-        actorType: 'command-center',
-        title: 'Provider assigned by command center',
-        status: 'ASSIGNED',
-        metadata: this.toJson({ providerId }),
-      },
-    });
+        action: 'COMMAND_CENTER_PROVIDER_ASSIGNED',
+        entity: 'UnifiedRequest',
+        entityId: requestId,
+        countryCode: request.country,
+        metadata: { providerId },
+      });
+    }
 
-    await this.auditTrailService.write({
-      actorUserId,
-      action: 'COMMAND_CENTER_PROVIDER_ASSIGNED',
-      entity: 'UnifiedRequest',
-      entityId: requestId,
-      countryCode: request.country,
-      metadata: { providerId },
-    });
+    return { changed: didMutate, request };
+  }
 
+  async assignProviderFromCommandCenter(requestId: string, providerId: string, actorUserId?: string) {
+    const { request } = await this.assignProviderToUnifiedRequest({ requestId, providerId, actorUserId });
     return request;
   }
 

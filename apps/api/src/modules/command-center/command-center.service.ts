@@ -5,6 +5,7 @@ import { LocationService } from '../location/location.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
+import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import { DecisionSupportService } from './decision-support.service';
 
 type DashboardFilters = {
@@ -61,6 +62,7 @@ export class CommandCenterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orchestratorService: OrchestratorService,
+    private readonly unifiedRequestsService: UnifiedRequestsService,
     private readonly auditTrailService: AuditTrailService,
     private readonly operatorPolicyService: OperatorPolicyService,
     private readonly decisionSupportService: DecisionSupportService,
@@ -795,7 +797,15 @@ export class CommandCenterService {
   }
 
   async assignProvider(actorUserId: string, requestId: string, providerId: string) {
-    return this.orchestratorService.assignProviderFromCommandCenter(requestId, providerId, actorUserId);
+    const { changed, request } = await this.orchestratorService.assignProviderToUnifiedRequest({
+      requestId,
+      providerId,
+      actorUserId,
+    });
+    if (changed) {
+      this.unifiedRequestsService.emitProviderAssignmentSockets(request, providerId);
+    }
+    return request;
   }
 
   async createOffer(userId: string, payload: { title: string; type: string; discountMinor?: number }) {
