@@ -150,4 +150,9 @@ export class CommandCenterController {
   activateLease(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
     return this.bookingCommandService.activateLease(user.id, bookingId);
   }
+
+  @Post('bookings/:bookingId/complete')
+  completeLease(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
+    return this.bookingCommandService.completeLease(user.id, bookingId);
+  }
 }

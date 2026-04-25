@@ -508,5 +508,106 @@ export class BookingCommandService {
 
     return updated;
   }
+
+  async completeLease(actorUserId: string, bookingId: string) {
+    const booking = await this.getBookingOrThrow(bookingId);
+
+    if (booking.status === 'COMPLETED') {
+      throw new ConflictException({
+        code: 'BOOKING_ALREADY_COMPLETED',
+        message: 'Booking is already COMPLETED.',
+      });
+    }
+    if (booking.status === 'CANCELLED') {
+      throw new BadRequestException({
+        code: 'INVALID_BOOKING_STATE_FOR_COMPLETION',
+        message: 'Cannot complete lease from CANCELLED state.',
+      });
+    }
+    if (booking.status !== 'ACTIVE') {
+      throw new BadRequestException({
+        code: 'INVALID_BOOKING_STATE_FOR_COMPLETION',
+        message: `Lease completion requires ACTIVE booking; current status is ${booking.status}.`,
+      });
+    }
+    if (booking.property.status !== 'OCCUPIED') {
+      throw new ConflictException({
+        code: 'PROPERTY_STATE_CONFLICT',
+        message: `Cannot complete lease while property status is ${booking.property.status}; expected OCCUPIED.`,
+      });
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.booking.findUnique({
+        where: { id: bookingId },
+        include: {
+          property: { select: { id: true, status: true } },
+        },
+      });
+      if (!row) {
+        throw new NotFoundException({ code: 'BOOKING_NOT_FOUND', message: `Booking ${bookingId} not found` });
+      }
+      if (row.status === 'COMPLETED') {
+        throw new ConflictException({
+          code: 'BOOKING_ALREADY_COMPLETED',
+          message: 'Booking is already COMPLETED.',
+        });
+      }
+      if (row.status === 'CANCELLED' || row.status !== 'ACTIVE') {
+        throw new ConflictException({
+          code: 'COMPLETION_CONFLICT',
+          message: `Lease completion failed: booking is no longer ACTIVE (${row.status}).`,
+        });
+      }
+      if (row.property.status !== 'OCCUPIED') {
+        throw new ConflictException({
+          code: 'PROPERTY_STATE_CONFLICT',
+          message: `Cannot complete lease while property status is ${row.property.status}; expected OCCUPIED.`,
+        });
+      }
+
+      await tx.booking.update({
+        where: { id: bookingId },
+        data: { status: 'COMPLETED' },
+      });
+
+      const activeHold = await tx.maintenanceRequest.findFirst({
+        where: {
+          propertyId: row.property.id,
+          metadata: {
+            path: ['maintenanceHold', 'active'],
+            equals: true,
+          },
+        },
+        select: { id: true },
+      });
+
+      await tx.property.update({
+        where: { id: row.property.id },
+        data: { status: activeHold ? 'INACTIVE' : 'PUBLISHED' },
+      });
+
+      return tx.booking.findUniqueOrThrow({
+        where: { id: bookingId },
+        include: { property: true, payments: true, unifiedRequest: true },
+      });
+    });
+
+    await this.auditTrailService.write({
+      actorUserId,
+      action: 'BOOKING_COMPLETED_COMMAND',
+      entity: 'Booking',
+      entityId: bookingId,
+      countryCode: booking.property.countryCode,
+      metadata: {
+        previousStatus: booking.status,
+        nextStatus: 'COMPLETED',
+        propertyId: booking.propertyId,
+        propertyStatusAfter: updated.property.status,
+      },
+    });
+
+    return updated;
+  }
 }
 
