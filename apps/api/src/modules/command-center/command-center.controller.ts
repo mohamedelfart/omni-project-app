@@ -4,6 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { BookingCommandService } from '../booking/booking-command.service';
 import { PropertyCommandService } from '../properties/property-command.service';
 import { CommandCenterService } from './command-center.service';
 
@@ -16,6 +17,7 @@ export class CommandCenterController {
   constructor(
     private readonly commandCenterService: CommandCenterService,
     private readonly propertyCommandService: PropertyCommandService,
+    private readonly bookingCommandService: BookingCommandService,
   ) {}
 
   @Get('dashboard')
@@ -127,5 +129,15 @@ export class CommandCenterController {
     @Body() body: { maintenanceRequestId: string },
   ) {
     return this.propertyCommandService.releaseMaintenanceHold(user.id, propertyId, body.maintenanceRequestId);
+  }
+
+  @Post('bookings/:bookingId/confirm')
+  confirmBooking(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
+    return this.bookingCommandService.confirmBooking(user.id, bookingId);
+  }
+
+  @Post('bookings/:bookingId/cancel')
+  cancelReservedBooking(@CurrentUser() user: { id: string }, @Param('bookingId') bookingId: string) {
+    return this.bookingCommandService.cancelReservedBooking(user.id, bookingId);
   }
 }
