@@ -41,6 +41,15 @@ export async function GET(request: NextRequest) {
   }
   const unwrapped = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data: unknown }).data : payload;
   const array = normalizeToRequestArray(unwrapped);
+  if (process.env.NODE_ENV === 'development') {
+    const hit = (array as { id?: unknown; status?: unknown }[]).find((r) => String(r?.status).toUpperCase() === 'COMPLETED');
+    if (hit) {
+      console.log('[admin-proxy-command-center-requests]', {
+        requestId: hit.id,
+        proxyRowStatus: hit.status,
+      });
+    }
+  }
   return NextResponse.json(array, { status: response.status });
 }
 

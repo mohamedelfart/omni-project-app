@@ -7,6 +7,7 @@ import {
   setAdminRequestsRealtimeHandlers,
 } from '../../lib/admin-requests-socket';
 import { apiFetch, getAuthSession, getSocketAccessToken } from '../../lib/auth';
+import { normalizeDashboardRequestStatus, type DashboardRequestStatus } from '../../lib/request-status-ui';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
 const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
@@ -14,15 +15,16 @@ const socketBase = apiBase.replace(/\/api\/v1\/?$/, '');
 type TenantRequestRow = {
   id: string;
   type: string;
-  status: 'pending' | 'assigned' | 'in_progress' | 'completed';
+  status: DashboardRequestStatus;
   createdAt: string;
 };
 
-const STATUS_LABEL: Record<TenantRequestRow['status'], string> = {
+const STATUS_LABEL: Record<DashboardRequestStatus, string> = {
   pending: 'Pending',
   assigned: 'Assigned',
   in_progress: 'In Progress',
   completed: 'Completed',
+  unknown: 'Unknown',
 };
 
 function normalizeList(raw: unknown): TenantRequestRow[] {
@@ -34,14 +36,7 @@ function normalizeList(raw: unknown): TenantRequestRow[] {
   return list
     .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
     .map((row) => {
-      const statusRaw = row.status;
-      const status: TenantRequestRow['status'] =
-        statusRaw === 'pending'
-        || statusRaw === 'assigned'
-        || statusRaw === 'in_progress'
-        || statusRaw === 'completed'
-          ? statusRaw
-          : 'pending';
+      const status = normalizeDashboardRequestStatus(row.status);
       return {
         id: typeof row.id === 'string' ? row.id : '',
         type: typeof row.type === 'string' ? row.type : '',

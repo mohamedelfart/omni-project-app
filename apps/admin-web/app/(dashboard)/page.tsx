@@ -8,13 +8,17 @@ import {
 } from '../lib/admin-requests-socket';
 import { apiFetch, getAuthSession, getSocketAccessToken } from '../lib/auth';
 import { extractSocketRequestId } from '../lib/extract-socket-request-id';
+import {
+  normalizeDashboardRequestStatus,
+  type DashboardRequestStatus,
+} from '../lib/request-status-ui';
 
 type DashboardRequest = {
   id: string;
   tenantId: string;
   vendorId?: string;
   type: 'cleaning' | 'moving' | 'maintenance';
-  status: 'pending' | 'assigned' | 'in_progress' | 'completed';
+  status: DashboardRequestStatus;
   createdAt: string;
   updatedAt: string;
   propertyIds?: string[];
@@ -23,7 +27,7 @@ type DashboardRequest = {
   priority?: string;
 };
 
-const DASHBOARD_STATUSES: DashboardRequest['status'][] = ['pending', 'assigned', 'in_progress', 'completed'];
+const DASHBOARD_STATUSES: Exclude<DashboardRequestStatus, 'unknown'>[] = ['pending', 'assigned', 'in_progress', 'completed'];
 const DASHBOARD_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT', 'CRITICAL'] as const;
 
 /** Default operator view: all statuses except `completed` (sentinel; not a real request status). */
@@ -71,13 +75,13 @@ function hoursSinceCreated(createdAt: string): number {
   return (Date.now() - start) / (1000 * 60 * 60);
 }
 
-function isOpenForSla(status: DashboardRequest['status']): boolean {
+function isOpenForSla(status: DashboardRequestStatus): boolean {
   return status !== 'completed';
 }
 
 type AgingTier = 'none' | 'aging' | 'overdue';
 
-function getAgingTier(createdAt: string, status: DashboardRequest['status']): AgingTier {
+function getAgingTier(createdAt: string, status: DashboardRequestStatus): AgingTier {
   if (!isOpenForSla(status)) return 'none';
   const h = hoursSinceCreated(createdAt);
   if (h >= SLA_OVERDUE_HOURS) return 'overdue';
@@ -122,17 +126,6 @@ function getRequestSectionGroup(request: DashboardRequest): RequestSectionGroup 
   return 'in_progress';
 }
 
-function normalizeUiStatus(value: unknown): 'pending' | 'assigned' | 'in_progress' | 'completed' {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-
-  if (normalized === 'submitted' || normalized === 'under_review') return 'pending';
-  if (normalized === 'assigned') return 'assigned';
-  if (normalized === 'in_progress') return 'in_progress';
-  if (normalized === 'completed') return 'completed';
-
-  return 'pending';
-}
-
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
   let list: unknown = raw;
   if (raw && typeof raw === 'object' && 'data' in raw) {
@@ -150,10 +143,18 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
           : typeof rawId === 'number' && Number.isFinite(rawId)
             ? String(rawId)
             : '';
+      const normalizedStatus = normalizeDashboardRequestStatus(rec.status);
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[admin-requests-ingest]', {
+          requestId: id,
+          rawBackendStatus: rec.status,
+          normalizedStatus,
+        });
+      }
       return {
         ...(row as unknown as DashboardRequest),
         id,
-        status: normalizeUiStatus(rec.status) as DashboardRequest['status'],
+        status: normalizedStatus,
         priority: typeof row.priority === 'string' ? row.priority : undefined,
       };
     })
@@ -368,12 +369,35 @@ export default function AdminOverviewPage() {
       return Number.isFinite(ms) ? ms : 0;
     };
     return [...list].sort((a, b) => {
-      const bucketA = getDashboardSlaSortBucket(a);
-      const bucketB = getDashboardSlaSortBucket(b);
-      if (bucketA !== bucketB) return bucketA - bucketB;
-      return (t(a.createdAt) - t(b.createdAt)) * dir;
+      const byCreated = (t(a.createdAt) - t(b.createdAt)) * dir;
+      if (byCreated !== 0) return byCreated;
+      return a.id.localeCompare(b.id);
     });
   }, [requests, statusFilter, priorityFilter, sortCreatedAt]);
+
+  /** Row id for SLA “top” card styling — worst bucket, then newest within that bucket (unchanged SLA semantics vs former bucket-first list order). */
+  const topSlaHighlightRequestId = useMemo(() => {
+    const rows = displayedRequests;
+    if (rows.length === 0) return null;
+    const t = (value: string) => {
+      const ms = new Date(value).getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    };
+    let best = rows[0]!;
+    let bestBucket = getDashboardSlaSortBucket(best);
+    let bestT = t(best.createdAt);
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i]!;
+      const b = getDashboardSlaSortBucket(r);
+      const rt = t(r.createdAt);
+      if (b < bestBucket || (b === bestBucket && rt > bestT)) {
+        best = r;
+        bestBucket = b;
+        bestT = rt;
+      }
+    }
+    return best.id;
+  }, [displayedRequests]);
 
   const slaSummaryCounts = useMemo(() => {
     let overdue = 0;
@@ -858,7 +882,7 @@ export default function AdminOverviewPage() {
   };
 
   function renderRequestRow(request: DashboardRequest) {
-    const normalizedStatus = normalizeUiStatus(request.status);
+    const rowStatus = request.status;
     const agingTier = getAgingTier(request.createdAt, request.status);
     const priorityTier = getPrioritySlaTier(request.priority);
     const hoursOpen = hoursSinceCreated(request.createdAt);
@@ -868,8 +892,7 @@ export default function AdminOverviewPage() {
     const accent = requestSlaAccentColor(agingTier, priorityTier);
     const slaBadges =
       agingTier === 'overdue' || agingTier === 'aging' || priorityTier === 'critical' || priorityTier === 'elevated';
-    const firstDisplayed = displayedRequests[0];
-    const isTopSlaRow = firstDisplayed !== undefined && request.id === firstDisplayed.id;
+    const isTopSlaRow = topSlaHighlightRequestId !== null && request.id === topSlaHighlightRequestId;
     const isRowSelected = selectedRequestIds.includes(request.id);
     const isArrivalFlash = arrivalFlashIds.has(String(request.id).trim());
     if (isArrivalFlash) {
@@ -1025,7 +1048,7 @@ export default function AdminOverviewPage() {
               Quick Escalate
             </button>
           ) : null}
-          {normalizedStatus === 'pending' ? (
+          {rowStatus === 'pending' ? (
             <button
               type="button"
               disabled={assignSubmittingRequestId === request.id}
@@ -1035,10 +1058,10 @@ export default function AdminOverviewPage() {
               {assignForId === request.id ? 'Cancel Assign' : 'Assign Vendor'}
             </button>
           ) : null}
-          {normalizedStatus === 'assigned' ? (
+          {rowStatus === 'assigned' ? (
             <span style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Assigned</span>
           ) : null}
-          {normalizedStatus === 'assigned' ? (
+          {rowStatus === 'assigned' ? (
             <button
               type="button"
               disabled={statusActionRequestId === request.id}
@@ -1053,7 +1076,7 @@ export default function AdminOverviewPage() {
               Start
             </button>
           ) : null}
-          {normalizedStatus === 'in_progress' ? (
+          {rowStatus === 'in_progress' ? (
             <button
               type="button"
               disabled={statusActionRequestId === request.id}
@@ -1067,6 +1090,14 @@ export default function AdminOverviewPage() {
             >
               Complete
             </button>
+          ) : null}
+          {rowStatus === 'completed' ? (
+            <span style={{ fontSize: 12, color: '#15803D', fontWeight: 600 }}>Completed</span>
+          ) : null}
+          {rowStatus === 'unknown' ? (
+            <span style={{ fontSize: 12, color: '#B45309', fontWeight: 600 }} title="Upstream status could not be mapped">
+              Unknown status
+            </span>
           ) : null}
           {rowActionBusy ? (
             <span style={{ fontSize: 11, color: '#64748B', fontStyle: 'italic' }}>Processing...</span>
