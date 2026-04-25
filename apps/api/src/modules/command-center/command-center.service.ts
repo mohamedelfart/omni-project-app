@@ -842,11 +842,11 @@ export class CommandCenterService {
     });
   }
 
-  /** Command-center inventory read: all lifecycle statuses (not tenant-catalog filtered). */
-  listPropertiesForCommandCenter(query?: { countryCode?: string }) {
+  /** Command-center inventory read: all lifecycle statuses + maintenance-hold operational context. */
+  async listPropertiesForCommandCenter(query?: { countryCode?: string }) {
     const raw = query?.countryCode?.trim();
     const countryCode = raw ? raw.toUpperCase() : undefined;
-    return this.prisma.property.findMany({
+    const properties = await this.prisma.property.findMany({
       where: countryCode ? { countryCode } : {},
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -861,6 +861,72 @@ export class CommandCenterService {
         slug: true,
         createdAt: true,
       },
+    });
+
+    const propertyIds = properties.map((p) => p.id);
+    if (propertyIds.length === 0) return properties.map((p) => ({ ...p, maintenanceHold: null }));
+
+    const activeHolds = await this.prisma.maintenanceRequest.findMany({
+      where: {
+        propertyId: { in: propertyIds },
+        metadata: {
+          path: ['maintenanceHold', 'active'],
+          equals: true,
+        },
+      },
+      include: {
+        unifiedRequest: {
+          select: {
+            id: true,
+            status: true,
+            vendorId: true,
+            paymentStatus: true,
+            updatedAt: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const holdByProperty = new Map<string, (typeof activeHolds)[number]>();
+    for (const hold of activeHolds) {
+      if (!hold.propertyId) continue;
+      if (!holdByProperty.has(hold.propertyId)) {
+        holdByProperty.set(hold.propertyId, hold);
+      }
+    }
+
+    return properties.map((property) => {
+      const hold = holdByProperty.get(property.id);
+      if (!hold) {
+        return {
+          ...property,
+          maintenanceHold: null,
+        };
+      }
+
+      const unifiedStatus = hold.unifiedRequest.status;
+      const requestTerminal = ['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED'].includes(unifiedStatus);
+      const releaseAllowed = !requestTerminal;
+      const nextAction = releaseAllowed
+        ? (hold.providerId || hold.unifiedRequest.vendorId ? 'Monitor execution and release hold when work is done' : 'Assign provider and start execution')
+        : 'Review terminal maintenance workflow before hold release';
+
+      return {
+        ...property,
+        maintenanceHold: {
+          active: true,
+          maintenanceRequestId: hold.id,
+          maintenanceRequestStatus: hold.status,
+          unifiedRequestId: hold.unifiedRequestId,
+          unifiedRequestStatus: unifiedStatus,
+          assignedProviderId: hold.providerId ?? hold.unifiedRequest.vendorId ?? null,
+          category: hold.category,
+          severity: hold.severity,
+          releaseAllowed,
+          nextAction,
+        },
+      };
     });
   }
 }

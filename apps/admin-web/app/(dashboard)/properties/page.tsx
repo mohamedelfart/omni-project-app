@@ -17,6 +17,18 @@ type CommandPropertyRow = {
   propertyType: string;
   slug: string;
   createdAt: string;
+  maintenanceHold: {
+    active: boolean;
+    maintenanceRequestId: string;
+    maintenanceRequestStatus: string;
+    unifiedRequestId: string;
+    unifiedRequestStatus: string;
+    assignedProviderId: string | null;
+    category: string;
+    severity: string;
+    releaseAllowed: boolean;
+    nextAction: string;
+  } | null;
 };
 
 const STATUS_BADGE: Record<PropertyStatus, { bg: string; color: string }> = {
@@ -105,7 +117,11 @@ export default function PropertiesPage() {
     };
   }, [load]);
 
-  const runCommand = async (propertyId: string, path: 'reserve' | 'release' | 'hide' | 'publish') => {
+  const runCommand = async (
+    propertyId: string,
+    path: 'reserve' | 'release' | 'hide' | 'publish' | 'maintenance-hold/start' | 'maintenance-hold/release',
+    body?: Record<string, unknown>,
+  ) => {
     setActionBusyId(propertyId);
     setError(null);
     try {
@@ -113,6 +129,7 @@ export default function PropertiesPage() {
       const response = await apiFetch(`${base}/command-center/properties/${encodeURIComponent(propertyId)}/${path}`, {
         method: 'POST',
         cache: 'no-store',
+        body: body ? JSON.stringify(body) : undefined,
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
@@ -193,6 +210,7 @@ export default function PropertiesPage() {
           {rows.map((row) => {
             const badge = STATUS_BADGE[row.status] ?? STATUS_BADGE.INACTIVE;
             const busy = actionBusyId === row.id;
+            const activeHold = row.maintenanceHold?.active === true ? row.maintenanceHold : null;
             const canReserve = row.status === 'PUBLISHED';
             const canRelease = row.status === 'RESERVED';
             const canHide = row.status === 'PUBLISHED';
@@ -234,6 +252,39 @@ export default function PropertiesPage() {
                 <div style={{ fontSize: 13, color: '#64748B' }}>
                   <strong style={{ color: '#334155' }}>Tenant catalog:</strong> {tenantCatalogLabel(row.status)}
                 </div>
+                {activeHold ? (
+                  <div
+                    style={{
+                      border: '1px solid #FCD34D',
+                      background: '#FFFBEB',
+                      borderRadius: 8,
+                      padding: 10,
+                      display: 'grid',
+                      gap: 6,
+                      fontSize: 12,
+                      color: '#92400E',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, color: '#78350F' }}>Maintenance Hold Active</div>
+                    <div>
+                      <strong>Request:</strong> {activeHold.maintenanceRequestId} · <strong>Workflow:</strong> {activeHold.maintenanceRequestStatus}
+                      {' / '}
+                      {activeHold.unifiedRequestStatus}
+                    </div>
+                    <div>
+                      <strong>Category:</strong> {activeHold.category} · <strong>Severity:</strong> {activeHold.severity}
+                    </div>
+                    <div>
+                      <strong>Responsible:</strong> {activeHold.assignedProviderId ?? 'Unassigned provider'}
+                    </div>
+                    <div>
+                      <strong>Next action:</strong> {activeHold.nextAction}
+                    </div>
+                    <div>
+                      <strong>Release eligibility:</strong> {activeHold.releaseAllowed ? 'Allowed' : 'Blocked'}
+                    </div>
+                  </div>
+                ) : null}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   {canReserve ? (
                     <button
@@ -313,6 +364,26 @@ export default function PropertiesPage() {
                       }}
                     >
                       Publish
+                    </button>
+                  ) : null}
+                  {activeHold?.releaseAllowed ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void runCommand(row.id, 'maintenance-hold/release', { maintenanceRequestId: activeHold.maintenanceRequestId })}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border: '1px solid #92400E',
+                        background: '#FFFFFF',
+                        color: '#92400E',
+                        fontWeight: 700,
+                        fontSize: 13,
+                        cursor: busy ? 'wait' : 'pointer',
+                        opacity: busy ? 0.7 : 1,
+                      }}
+                    >
+                      Release Maintenance Hold
                     </button>
                   ) : null}
                   {busy ? <span style={{ fontSize: 12, color: '#64748B', fontStyle: 'italic' }}>Working…</span> : null}
