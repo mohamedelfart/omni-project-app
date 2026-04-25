@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { BookingStatus, PaymentStatus, PropertyStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { LocationService } from '../location/location.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
@@ -928,5 +929,208 @@ export class CommandCenterService {
         },
       };
     });
+  }
+
+  private bookingPaymentSettled(
+    payments: Array<{ status: PaymentStatus }>,
+    unifiedRequest: { paymentStatus: PaymentStatus } | null,
+  ): boolean {
+    const viaBooking = payments.some((p) => p.status === 'SUCCEEDED' || p.status === 'WAIVED');
+    const viaRequest = unifiedRequest
+      ? unifiedRequest.paymentStatus === 'SUCCEEDED' || unifiedRequest.paymentStatus === 'WAIVED'
+      : false;
+    return viaBooking || viaRequest;
+  }
+
+  private bookingContractReady(snapshot: {
+    payments: Array<{ status: PaymentStatus }>;
+    unifiedRequest: { paymentStatus: PaymentStatus } | null;
+    confirmedAt: Date | null;
+    termMonths: number;
+  }): boolean {
+    if (!this.bookingPaymentSettled(snapshot.payments, snapshot.unifiedRequest)) {
+      return false;
+    }
+    if (!snapshot.confirmedAt) {
+      return false;
+    }
+    return snapshot.termMonths > 0;
+  }
+
+  /**
+   * Command-center booking read model: lifecycle + inventory projection + readiness + guidance.
+   * Aligns with booking command validation (Phases 1–3A); does not execute commands.
+   */
+  private buildBookingCommandCenterOperationalRow(row: {
+    id: string;
+    status: BookingStatus;
+    moveInDate: Date;
+    termMonths: number;
+    confirmedAt: Date | null;
+    unifiedRequestId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    totalAmountMinor: number;
+    securityDepositMinor: number;
+    currency: string;
+    tenant: { id: string; fullName: string };
+    property: { id: string; title: string; city: string; countryCode: string; status: PropertyStatus };
+    payments: Array<{ status: PaymentStatus }>;
+    unifiedRequest: { paymentStatus: PaymentStatus } | null;
+  }) {
+    const paymentSettled = this.bookingPaymentSettled(row.payments, row.unifiedRequest);
+    const contractReady = this.bookingContractReady({
+      payments: row.payments,
+      unifiedRequest: row.unifiedRequest,
+      confirmedAt: row.confirmedAt,
+      termMonths: row.termMonths,
+    });
+
+    let occupancyState: { code: string; label: string };
+    if (row.status === 'CANCELLED') {
+      occupancyState = { code: 'CANCELLED', label: 'Cancelled — no active lease' };
+    } else if (row.status === 'COMPLETED') {
+      occupancyState = { code: 'POST_LEASE', label: 'Lease completed (booking truth)' };
+    } else if (row.status === 'ACTIVE') {
+      occupancyState =
+        row.property.status === 'OCCUPIED'
+          ? { code: 'UNDER_ACTIVE_LEASE', label: 'Occupied under active lease' }
+          : { code: 'ACTIVE_PROJECTION_MISMATCH', label: 'Active lease but property is not OCCUPIED' };
+    } else {
+      occupancyState = { code: 'PRE_ACTIVE_LEASE', label: 'Not yet in active occupancy phase' };
+    }
+
+    let nextAction = '';
+    let blockingReason: string | null = null;
+
+    switch (row.status) {
+      case 'DRAFT':
+        nextAction = 'Resolve draft booking via operational intake (no command-center booking commands yet).';
+        blockingReason = 'Booking is DRAFT; command-center booking commands are not defined for this state.';
+        break;
+      case 'RESERVED':
+        if (!paymentSettled) {
+          blockingReason = 'Payment not settled (SUCCEEDED or WAIVED required before confirm).';
+          nextAction = 'Collect or record successful payment, then confirm booking.';
+        } else if (row.property.status === 'RESERVED') {
+          blockingReason = 'Property is under operational reserve; release reserve before confirm.';
+          nextAction = 'Release property reserve, then confirm booking.';
+        } else if (row.property.status === 'INACTIVE') {
+          blockingReason = 'Property is hidden/inactive; republish before confirm.';
+          nextAction = 'Republish property, then confirm booking.';
+        } else if (row.property.status === 'OCCUPIED') {
+          blockingReason = 'Property is OCCUPIED; cannot confirm booking.';
+          nextAction = 'Reconcile occupancy conflict before confirm.';
+        } else {
+          nextAction = 'Run confirm-booking command when operationally ready.';
+        }
+        break;
+      case 'CONFIRMED':
+        if (!contractReady) {
+          if (!paymentSettled) {
+            blockingReason = 'Contract readiness: payment not settled.';
+          } else if (!row.confirmedAt) {
+            blockingReason = 'Contract readiness: booking not confirmed (missing confirmedAt).';
+          } else if (row.termMonths <= 0) {
+            blockingReason = 'Contract readiness: invalid term (termMonths must be > 0).';
+          }
+          nextAction = 'Fix readiness blockers, then move to contract pending.';
+        } else if (row.property.status === 'RESERVED') {
+          blockingReason = 'Property is under operational reserve; release reserve before contract pending.';
+          nextAction = 'Release reserve, then move to contract pending.';
+        } else {
+          nextAction = 'Run contract-pending command.';
+        }
+        break;
+      case 'CONTRACT_PENDING':
+        if (!contractReady) {
+          blockingReason = 'Contract readiness failed; check payment, confirmation, and term.';
+          nextAction = 'Resolve readiness, then activate lease.';
+        } else if (row.moveInDate.getTime() > Date.now()) {
+          blockingReason = 'Move-in date not reached; activation blocked until on or after move-in date.';
+          nextAction = 'Wait until move-in date, then run activate-lease command.';
+        } else if (row.property.status === 'RESERVED' || row.property.status === 'INACTIVE') {
+          blockingReason = `Property status ${row.property.status} blocks lease activation.`;
+          nextAction = 'Resolve property state (reserve/hide), then activate lease.';
+        } else {
+          nextAction = 'Run activate-lease command.';
+        }
+        break;
+      case 'ACTIVE':
+        if (row.property.status !== 'OCCUPIED') {
+          blockingReason = 'Booking is ACTIVE but property is not OCCUPIED; inventory projection must be reconciled.';
+          nextAction = 'Reconcile property projection, then manage end-of-lease completion.';
+        } else {
+          nextAction = 'At end of tenancy, run complete-lease command.';
+        }
+        break;
+      case 'COMPLETED':
+        if (row.property.status === 'OCCUPIED') {
+          blockingReason = 'Booking is COMPLETED but property is still OCCUPIED; data inconsistency.';
+          nextAction = 'Reconcile inventory projection (complete-lease should have released OCCUPIED).';
+        } else {
+          nextAction = 'No further booking commands; monitor post-lease / settlement workflows when enabled.';
+        }
+        break;
+      case 'CANCELLED':
+        nextAction = 'No active booking operations.';
+        break;
+      default:
+        nextAction = 'Review booking status.';
+        blockingReason = `Unhandled booking status: ${row.status}`;
+    }
+
+    return {
+      id: row.id,
+      bookingStatus: row.status,
+      moveInDate: row.moveInDate,
+      termMonths: row.termMonths,
+      confirmedAt: row.confirmedAt,
+      unifiedRequestId: row.unifiedRequestId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      totalAmountMinor: row.totalAmountMinor,
+      securityDepositMinor: row.securityDepositMinor,
+      currency: row.currency,
+      tenant: row.tenant,
+      property: row.property,
+      paymentReadiness: {
+        settled: paymentSettled,
+        summary: paymentSettled ? 'SETTLED' : 'NOT_SETTLED',
+      },
+      contractReadiness: { ready: contractReady },
+      occupancyState,
+      nextAction,
+      blockingReason,
+    };
+  }
+
+  async listBookingsForCommandCenter(query?: { countryCode?: string }) {
+    const raw = query?.countryCode?.trim();
+    const countryCode = raw ? raw.toUpperCase() : undefined;
+    const rows = await this.prisma.booking.findMany({
+      where: countryCode ? { property: { countryCode } } : {},
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        status: true,
+        moveInDate: true,
+        termMonths: true,
+        confirmedAt: true,
+        unifiedRequestId: true,
+        createdAt: true,
+        updatedAt: true,
+        totalAmountMinor: true,
+        securityDepositMinor: true,
+        currency: true,
+        tenant: { select: { id: true, fullName: true } },
+        property: { select: { id: true, title: true, city: true, countryCode: true, status: true } },
+        payments: { select: { status: true } },
+        unifiedRequest: { select: { paymentStatus: true } },
+      },
+    });
+
+    return rows.map((r) => this.buildBookingCommandCenterOperationalRow(r));
   }
 }

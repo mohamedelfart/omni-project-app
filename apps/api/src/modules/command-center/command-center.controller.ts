@@ -93,6 +93,11 @@ export class CommandCenterController {
     return this.commandCenterService.listPropertiesForCommandCenter({ countryCode });
   }
 
+  @Get('bookings')
+  listCommandCenterBookings(@Query('countryCode') countryCode?: string) {
+    return this.commandCenterService.listBookingsForCommandCenter({ countryCode });
+  }
+
   @Post('properties/:propertyId/reserve')
   reserveProperty(@CurrentUser() user: { id: string }, @Param('propertyId') propertyId: string) {
     return this.propertyCommandService.reserveProperty(user.id, propertyId);

@@ -1,92 +1,271 @@
-const bookings = [
-  { id: 'BK-20481', tenant: 'Mohamed Al-Rashdi', property: 'Lusail Marina Tower 2BR', country: 'QA', city: 'Lusail', status: 'ACTIVE', startDate: '2026-01-15', endDate: '2026-07-15', monthlyRent: '8,500 QAR', totalValue: '51,000 QAR', services: 3 },
-  { id: 'BK-20482', tenant: 'Nora Hassan', property: 'Downtown Dubai Studio', country: 'AE', city: 'Dubai', status: 'ACTIVE', startDate: '2026-02-01', endDate: '2027-01-31', monthlyRent: '7,200 AED', totalValue: '86,400 AED', services: 1 },
-  { id: 'BK-20483', tenant: 'Khalid Ibrahim', property: 'Riyadh Financial District 3BR', country: 'SA', city: 'Riyadh', status: 'PENDING', startDate: '2026-04-10', endDate: '2027-04-09', monthlyRent: '12,000 SAR', totalValue: '144,000 SAR', services: 0 },
-  { id: 'BK-20484', tenant: 'Sara Al-Mansouri', property: 'Pearl Qatar Villa 4BR', country: 'QA', city: 'Al Khor', status: 'COMPLETED', startDate: '2025-03-01', endDate: '2025-12-31', monthlyRent: '22,000 QAR', totalValue: '220,000 QAR', services: 8 },
-  { id: 'BK-20485', tenant: 'Ahmed Farouk', property: 'Abu Dhabi Corniche 1BR', country: 'AE', city: 'Abu Dhabi', status: 'ACTIVE', startDate: '2026-03-01', endDate: '2026-08-31', monthlyRent: '6,800 AED', totalValue: '40,800 AED', services: 2 },
-  { id: 'BK-20486', tenant: 'Layla Khamis', property: 'Doha West Bay 2BR', country: 'QA', city: 'Doha', status: 'UNDER_REVIEW', startDate: '2026-05-01', endDate: '2027-04-30', monthlyRent: '7,800 QAR', totalValue: '93,600 QAR', services: 0 },
-];
+'use client';
 
-const statusConfig: Record<string, { bg: string; color: string; label: string }> = {
-  ACTIVE: { bg: '#D1FAE5', color: '#065F46', label: 'Active' },
-  PENDING: { bg: '#FEF3C7', color: '#92400E', label: 'Pending' },
-  COMPLETED: { bg: '#F3F4F6', color: '#374151', label: 'Completed' },
-  UNDER_REVIEW: { bg: '#EDE9FE', color: '#5B21B6', label: 'Under Review' },
-  CANCELLED: { bg: '#FEE2E2', color: '#991B1B', label: 'Cancelled' },
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '../../lib/auth';
+
+const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+
+type CommandBookingRow = {
+  id: string;
+  bookingStatus: string;
+  moveInDate: string;
+  termMonths: number;
+  confirmedAt: string | null;
+  unifiedRequestId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  totalAmountMinor: number;
+  securityDepositMinor: number;
+  currency: string;
+  tenant: { id: string; fullName: string };
+  property: { id: string; title: string; city: string; countryCode: string; status: string };
+  paymentReadiness: { settled: boolean; summary: string };
+  contractReadiness: { ready: boolean };
+  occupancyState: { code: string; label: string };
+  nextAction: string;
+  blockingReason: string | null;
 };
 
-const stats = [
-  { label: 'Total Bookings', value: '4,281' },
-  { label: 'Active', value: '2,914', accent: '#10B981' },
-  { label: 'Pending Review', value: '187', accent: '#F59E0B' },
-  { label: 'Avg. Duration', value: '8.4 mo', accent: '#3B82F6' },
-];
+function getLoadErrorMessage(payload: unknown): string {
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    if (typeof record.error === 'string') return record.error;
+    if (typeof record.message === 'string') return record.message;
+    if (record.message && typeof record.message === 'object' && record.message !== null && 'message' in record.message) {
+      const nested = (record.message as { message?: unknown }).message;
+      if (typeof nested === 'string') return nested;
+    }
+  }
+  return 'Request failed';
+}
+
+function unwrapBookings(payload: unknown): CommandBookingRow[] {
+  if (Array.isArray(payload)) {
+    return payload.filter(
+      (r): r is CommandBookingRow =>
+        !!r && typeof r === 'object' && typeof (r as CommandBookingRow).id === 'string',
+    );
+  }
+  if (payload && typeof payload === 'object' && 'data' in payload) {
+    const inner = (payload as { data: unknown }).data;
+    if (Array.isArray(inner)) return unwrapBookings(inner);
+  }
+  return [];
+}
+
+function formatMoneyMinor(minor: number, currency: string): string {
+  const major = minor / 100;
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 2 }).format(major);
+  } catch {
+    return `${currency} ${major.toFixed(2)}`;
+  }
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+const BOOKING_BADGE: Record<string, { bg: string; color: string }> = {
+  DRAFT: { bg: '#F3F4F6', color: '#374151' },
+  RESERVED: { bg: '#FEF3C7', color: '#92400E' },
+  CONFIRMED: { bg: '#DBEAFE', color: '#1E40AF' },
+  CONTRACT_PENDING: { bg: '#EDE9FE', color: '#5B21B6' },
+  ACTIVE: { bg: '#D1FAE5', color: '#065F46' },
+  COMPLETED: { bg: '#E5E7EB', color: '#374151' },
+  CANCELLED: { bg: '#FEE2E2', color: '#991B1B' },
+};
+
+const PROPERTY_BADGE: Record<string, { bg: string; color: string }> = {
+  DRAFT: { bg: '#F3F4F6', color: '#374151' },
+  PUBLISHED: { bg: '#D1FAE5', color: '#065F46' },
+  RESERVED: { bg: '#FEF3C7', color: '#92400E' },
+  BOOKED: { bg: '#DBEAFE', color: '#1E40AF' },
+  OCCUPIED: { bg: '#BFDBFE', color: '#1E3A8A' },
+  INACTIVE: { bg: '#E5E7EB', color: '#4B5563' },
+};
 
 export default function BookingsPage() {
+  const [rows, setRows] = useState<CommandBookingRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [countryCode, setCountryCode] = useState('');
+
+  const load = useCallback(async () => {
+    const base = apiBase.replace(/\/$/, '');
+    const url = new URL(`${base}/command-center/bookings`);
+    if (countryCode.trim()) {
+      url.searchParams.set('countryCode', countryCode.trim());
+    }
+    const response = await apiFetch(url.toString(), { cache: 'no-store' });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(getLoadErrorMessage(payload));
+    }
+    setRows(unwrapBookings(payload));
+    setError(null);
+  }, [countryCode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        await load();
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'Load failed');
+          setRows([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
+
+  const summary = useMemo(() => {
+    const byStatus = rows.reduce<Record<string, number>>((acc, r) => {
+      acc[r.bookingStatus] = (acc[r.bookingStatus] ?? 0) + 1;
+      return acc;
+    }, {});
+    return { total: rows.length, byStatus };
+  }, [rows]);
+
   return (
     <section style={{ display: 'grid', gap: 24 }}>
       <header>
         <h1 style={{ margin: 0, fontSize: 32, fontWeight: 800, color: '#1E3A5F' }}>Bookings</h1>
         <p style={{ color: '#6B7280', marginTop: 6, marginBottom: 0 }}>
-          Every booking is an Order in the inventory system. Full lifecycle visibility for the command center.
+          Command-center operational read model: lifecycle, inventory projection, readiness, and next action from the API.
         </p>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        {stats.map((s) => (
-          <article key={s.label} style={{ background: '#FFFFFF', border: '1px solid #E5EDF5', borderRadius: 16, padding: '18px 20px' }}>
-            <div style={{ color: '#6B7280', fontSize: 13 }}>{s.label}</div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: '#1E3A5F', margin: '6px 0 0' }}>{s.value}</div>
-          </article>
-        ))}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', background: '#FFFFFF', border: '1px solid #E5EDF5', borderRadius: 16, padding: '14px 20px' }}>
+        <label style={{ fontSize: 13, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 8 }}>
+          Country
+          <input
+            value={countryCode}
+            onChange={(e) => setCountryCode(e.target.value)}
+            placeholder="e.g. QA (optional)"
+            style={{ border: '1px solid #D1D5DB', borderRadius: 10, padding: '8px 12px', fontSize: 14, minWidth: 120 }}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => void load().catch((e) => setError(e instanceof Error ? e.message : 'Refresh failed'))}
+          disabled={loading}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 10,
+            border: '1px solid #1E3A5F',
+            background: '#1E3A5F',
+            color: '#FFFFFF',
+            fontWeight: 600,
+            fontSize: 13,
+            cursor: loading ? 'wait' : 'pointer',
+          }}
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+        <span style={{ fontSize: 13, color: '#6B7280', marginLeft: 'auto' }}>
+          {summary.total} booking{summary.total === 1 ? '' : 's'}
+          {summary.total > 0 ? ` · ${Object.entries(summary.byStatus).map(([k, v]) => `${k}: ${v}`).join(' · ')}` : ''}
+        </span>
       </div>
 
-      {/* Filter */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: '#FFFFFF', border: '1px solid #E5EDF5', borderRadius: 16, padding: '14px 20px', flexWrap: 'wrap' }}>
-        <input readOnly placeholder="Search booking ID or tenant…" style={{ flex: 1, minWidth: 180, border: '1px solid #D1D5DB', borderRadius: 10, padding: '10px 14px', fontSize: 14, background: '#F9FAFB' }} />
-        {['All', 'ACTIVE', 'PENDING', 'UNDER_REVIEW', 'COMPLETED'].map((s) => (
-          <button key={s} style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #D1D5DB', background: s === 'All' ? '#1E3A5F' : '#FFFFFF', color: s === 'All' ? '#FFFFFF' : '#374151', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>{s}</button>
-        ))}
-      </div>
+      {error && (
+        <div style={{ padding: 14, borderRadius: 12, background: '#FEF2F2', color: '#991B1B', fontSize: 14 }} role="alert">
+          {error}
+        </div>
+      )}
 
-      {/* Table */}
       <article style={{ background: '#FFFFFF', border: '1px solid #E5EDF5', borderRadius: 16, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: '#F8FAFC', borderBottom: '1px solid #E5EDF5' }}>
-              {['Booking ID', 'Tenant', 'Property', 'Market', 'Period', 'Monthly', 'Total Value', 'Services', 'Status', 'Actions'].map((col) => (
-                <th key={col} style={{ padding: '12px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5, whiteSpace: 'nowrap' }}>{col}</th>
+              {[
+                'Booking',
+                'Tenant',
+                'Property',
+                'Market',
+                'Move-in',
+                'Total',
+                'Booking status',
+                'Property status',
+                'Payment',
+                'Contract',
+                'Occupancy',
+                'Next action',
+                'Blocker',
+              ].map((col) => (
+                <th
+                  key={col}
+                  style={{
+                    padding: '12px 14px',
+                    textAlign: 'left',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#6B7280',
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {col}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {bookings.map((b, i) => (
-              <tr key={b.id} style={{ borderBottom: i < bookings.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
-                <td style={{ padding: '14px', fontSize: 12, color: '#9CA3AF', fontFamily: 'monospace' }}>{b.id}</td>
-                <td style={{ padding: '14px', fontSize: 14, fontWeight: 600, color: '#111827', whiteSpace: 'nowrap' }}>{b.tenant}</td>
-                <td style={{ padding: '14px', fontSize: 13, color: '#4B5563', maxWidth: 200 }}>{b.property}</td>
-                <td style={{ padding: '14px', fontSize: 12, color: '#6B7280', whiteSpace: 'nowrap' }}>{b.country} / {b.city}</td>
-                <td style={{ padding: '14px', fontSize: 12, color: '#6B7280', whiteSpace: 'nowrap' }}>{b.startDate}<br/><span style={{ color: '#D1D5DB' }}>→</span> {b.endDate}</td>
-                <td style={{ padding: '14px', fontSize: 13, fontWeight: 700, color: '#1E3A5F', whiteSpace: 'nowrap' }}>{b.monthlyRent}</td>
-                <td style={{ padding: '14px', fontSize: 13, fontWeight: 700, color: '#059669', whiteSpace: 'nowrap' }}>{b.totalValue}</td>
-                <td style={{ padding: '14px', textAlign: 'center', fontSize: 14, fontWeight: 700, color: b.services > 0 ? '#7C3AED' : '#D1D5DB' }}>{b.services}</td>
-                <td style={{ padding: '14px' }}>
-                  <span style={{
-                    padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700,
-                    background: (statusConfig[b.status] ?? { bg: '#F3F4F6' }).bg,
-                    color: (statusConfig[b.status] ?? { color: '#374151' }).color,
-                  }}>{(statusConfig[b.status] ?? { label: b.status }).label}</span>
-                </td>
-                <td style={{ padding: '14px' }}>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#1E3A5F', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>View</button>
-                    {b.status === 'UNDER_REVIEW' && (
-                      <button style={{ padding: '5px 10px', borderRadius: 8, border: 'none', background: '#D1FAE5', color: '#065F46', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Approve</button>
-                    )}
-                  </div>
+            {!loading && rows.length === 0 && !error && (
+              <tr>
+                <td colSpan={13} style={{ padding: 24, color: '#6B7280', fontSize: 14 }}>
+                  No bookings returned for this filter.
                 </td>
               </tr>
-            ))}
+            )}
+            {rows.map((b, i) => {
+              const bs = BOOKING_BADGE[b.bookingStatus] ?? { bg: '#F3F4F6', color: '#374151' };
+              const ps = PROPERTY_BADGE[b.property.status] ?? { bg: '#F3F4F6', color: '#374151' };
+              return (
+                <tr key={b.id} style={{ borderBottom: i < rows.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
+                  <td style={{ padding: '14px', fontSize: 12, color: '#6B7280', fontFamily: 'monospace', verticalAlign: 'top' }}>{b.id}</td>
+                  <td style={{ padding: '14px', fontSize: 14, fontWeight: 600, color: '#111827', verticalAlign: 'top' }}>{b.tenant.fullName}</td>
+                  <td style={{ padding: '14px', fontSize: 13, color: '#4B5563', maxWidth: 200, verticalAlign: 'top' }}>{b.property.title}</td>
+                  <td style={{ padding: '14px', fontSize: 12, color: '#6B7280', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+                    {b.property.countryCode} / {b.property.city}
+                  </td>
+                  <td style={{ padding: '14px', fontSize: 12, color: '#6B7280', whiteSpace: 'nowrap', verticalAlign: 'top' }}>{formatDate(b.moveInDate)}</td>
+                  <td style={{ padding: '14px', fontSize: 13, fontWeight: 700, color: '#1E3A5F', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+                    {formatMoneyMinor(b.totalAmountMinor, b.currency)}
+                  </td>
+                  <td style={{ padding: '14px', verticalAlign: 'top' }}>
+                    <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: bs.bg, color: bs.color }}>{b.bookingStatus}</span>
+                  </td>
+                  <td style={{ padding: '14px', verticalAlign: 'top' }}>
+                    <span style={{ padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: ps.bg, color: ps.color }}>{b.property.status}</span>
+                  </td>
+                  <td style={{ padding: '14px', fontSize: 12, verticalAlign: 'top', color: b.paymentReadiness.settled ? '#065F46' : '#92400E', fontWeight: 600 }}>
+                    {b.paymentReadiness.summary}
+                  </td>
+                  <td style={{ padding: '14px', fontSize: 12, verticalAlign: 'top', color: b.contractReadiness.ready ? '#065F46' : '#92400E', fontWeight: 600 }}>
+                    {b.contractReadiness.ready ? 'READY' : 'NOT_READY'}
+                  </td>
+                  <td style={{ padding: '14px', fontSize: 12, color: '#4B5563', maxWidth: 200, verticalAlign: 'top' }} title={b.occupancyState.code}>
+                    {b.occupancyState.label}
+                  </td>
+                  <td style={{ padding: '14px', fontSize: 12, color: '#374151', maxWidth: 280, verticalAlign: 'top' }}>{b.nextAction}</td>
+                  <td style={{ padding: '14px', fontSize: 12, color: b.blockingReason ? '#991B1B' : '#9CA3AF', maxWidth: 260, verticalAlign: 'top' }}>
+                    {b.blockingReason ?? '—'}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </article>
