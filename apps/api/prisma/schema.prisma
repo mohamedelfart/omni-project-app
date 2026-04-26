@@ -184,6 +184,20 @@ enum AuditSeverity {
   CRITICAL
 }
 
+enum SessionType {
+  USER
+  GUEST
+}
+
+enum SessionActiveRole {
+  TENANT
+  LANDLORD
+  ADMIN
+  PROVIDER
+  COMMAND_CENTER
+  GUEST
+}
+
 model User {
   id                      String                   @id @default(cuid())
   email                   String?                  @unique
@@ -204,6 +218,7 @@ model User {
   tenantProfile           TenantProfile?
   landlordProfile         LandlordProfile?
   providerProfiles        ProviderProfile[]
+  sessions                Session[]
   ownedProperties         Property[]               @relation("PropertyOwner")
   favorites               Favorite[]
   shortlists              Shortlist[]
@@ -221,6 +236,33 @@ model User {
   auditLogs               AuditLog[]               @relation("AuditActor")
   viewingRequests         ViewingRequest[]
   tripAssignments         ViewingTripAssignment[]  @relation("AssignmentAgent")
+}
+
+model Session {
+  id                  String            @id @default(cuid())
+  userId              String
+  sessionType         SessionType
+  activeRole          SessionActiveRole?
+  refreshTokenHash    String
+  refreshTokenFamily  String
+  refreshTokenVersion Int               @default(1)
+  providerContextId   String?
+  tenantContextId     String?
+  deviceId            String?
+  userAgent           String?
+  ipAddress           String?
+  revokedAt           DateTime?
+  revokedReason       String?
+  expiresAt           DateTime
+  lastUsedAt          DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshTokenFamily])
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 model Role {
