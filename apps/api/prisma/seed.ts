@@ -194,6 +194,22 @@ async function main(): Promise<void> {
     },
   });
 
+  await prisma.provider.upsert({
+    where: { id: 'provider_moving_qr_2' },
+    update: {},
+    create: {
+      id: 'provider_moving_qr_2',
+      name: 'Doha Move Assist',
+      legalName: 'Doha Move Assist Logistics WLL',
+      countryCode: 'QA',
+      city: 'Doha',
+      providerType: ProviderType.MOVING,
+      serviceTypes: ['move-in', 'viewing-transport'],
+      supportEmail: 'ops@dohamoveassist.qa',
+      supportPhone: '+97440002222',
+    },
+  });
+
   await prisma.providerProfile.upsert({
     where: { userId_providerId: { userId: providerUser.id, providerId: movingProvider.id } },
     update: {},

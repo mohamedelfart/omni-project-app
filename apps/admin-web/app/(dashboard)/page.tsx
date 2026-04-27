@@ -329,6 +329,10 @@ export default function AdminOverviewPage() {
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>([]);
   const [assignVendorSelection, setAssignVendorSelection] = useState<string>('');
   const [assignSubmittingRequestId, setAssignSubmittingRequestId] = useState<string | null>(null);
+  const [reassignForId, setReassignForId] = useState<string | null>(null);
+  const [reassignVendorSelection, setReassignVendorSelection] = useState<string>('');
+  const [reassignReason, setReassignReason] = useState<string>('');
+  const [reassignSubmittingRequestId, setReassignSubmittingRequestId] = useState<string | null>(null);
   const [timelineForId, setTimelineForId] = useState<string | null>(null);
   const [timelineActions, setTimelineActions] = useState<TimelineAction[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -831,10 +835,27 @@ export default function AdminOverviewPage() {
       setAssignForId(null);
       return;
     }
+    setReassignForId(null);
+    setReassignReason('');
     setAssignForId(requestId);
     setAssignVendorSelection((prev) => {
       if (prev && providerOptions.some((p) => p.id === prev)) return prev;
       return providerOptions[0]?.id ?? '';
+    });
+  };
+
+  const openReassignVendor = (requestId: string, currentVendorId?: string) => {
+    if (reassignForId === requestId) {
+      setReassignForId(null);
+      return;
+    }
+    setAssignForId(null);
+    setReassignForId(requestId);
+    setReassignReason('');
+    setReassignVendorSelection((prev) => {
+      if (prev && providerOptions.some((p) => p.id === prev) && prev !== currentVendorId) return prev;
+      const firstEligible = providerOptions.find((p) => p.id !== currentVendorId)?.id ?? '';
+      return firstEligible;
     });
   };
 
@@ -860,6 +881,38 @@ export default function AdminOverviewPage() {
       setError(null);
     } finally {
       setAssignSubmittingRequestId(null);
+    }
+  };
+
+  const reassignVendor = async (requestId: string, selectedVendorId: string, reason?: string) => {
+    if (!selectedVendorId.trim()) {
+      setError('Select a provider to reassign');
+      return;
+    }
+    setReassignSubmittingRequestId(requestId);
+    try {
+      const response = await apiFetch(
+        `${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/reassign-provider`,
+        {
+          method: 'POST',
+          cache: 'no-store',
+          body: JSON.stringify({
+            providerId: selectedVendorId.trim(),
+            reason: reason?.trim() ? reason.trim() : undefined,
+          }),
+        },
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setError(getLoadErrorMessage(payload));
+        return;
+      }
+      await refreshRequestList();
+      setReassignForId(null);
+      setReassignReason('');
+      setError(null);
+    } finally {
+      setReassignSubmittingRequestId(null);
     }
   };
 
@@ -936,7 +989,11 @@ export default function AdminOverviewPage() {
       });
     }
     const rowActionBusy =
-      statusActionRequestId === request.id || escalateSubmitting || bulkEscalating || assignSubmittingRequestId === request.id;
+      statusActionRequestId === request.id
+      || escalateSubmitting
+      || bulkEscalating
+      || assignSubmittingRequestId === request.id
+      || reassignSubmittingRequestId === request.id;
 
     const rowCardStyle: CSSProperties = {
       borderRadius: 8,
@@ -1082,7 +1139,7 @@ export default function AdminOverviewPage() {
               Quick Escalate
             </button>
           ) : null}
-          {rowStatus === 'pending' ? (
+          {rowStatus === 'pending' && !request.vendorId ? (
             <button
               type="button"
               disabled={assignSubmittingRequestId === request.id}
@@ -1094,6 +1151,16 @@ export default function AdminOverviewPage() {
           ) : null}
           {rowStatus === 'assigned' ? (
             <span style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Assigned</span>
+          ) : null}
+          {rowStatus === 'assigned' && rawStatus === 'ASSIGNED' ? (
+            <button
+              type="button"
+              disabled={reassignSubmittingRequestId === request.id}
+              onClick={() => openReassignVendor(request.id, request.vendorId)}
+              style={{ width: 160, padding: 8, ...DASHBOARD_PRIMARY_ACTION_BTN }}
+            >
+              {reassignForId === request.id ? 'Cancel Reassign' : 'Reassign Provider'}
+            </button>
           ) : null}
           {rowStatus === 'assigned' && rawStatus === 'ASSIGNED' ? (
             <button
@@ -1200,6 +1267,43 @@ export default function AdminOverviewPage() {
               style={{ padding: '6px 12px', width: 'fit-content' }}
             >
               {assignSubmittingRequestId === request.id ? 'Assigning…' : 'Confirm Assign'}
+            </button>
+          </div>
+        ) : null}
+        {reassignForId === request.id ? (
+          <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              <span>Select replacement provider</span>
+              <select
+                value={reassignVendorSelection}
+                onChange={(e) => setReassignVendorSelection(e.target.value)}
+                style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4, maxWidth: 320 }}
+              >
+                {providerOptions
+                  .filter((provider) => provider.id !== request.vendorId)
+                  .map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name || provider.id} ({provider.id})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              <span>Reason (optional)</span>
+              <input
+                value={reassignReason}
+                onChange={(e) => setReassignReason(e.target.value)}
+                placeholder="Operational reason for reassignment"
+                style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4, maxWidth: 420 }}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={reassignSubmittingRequestId === request.id || !reassignVendorSelection}
+              onClick={() => void reassignVendor(request.id, reassignVendorSelection, reassignReason)}
+              style={{ padding: '6px 12px', width: 'fit-content' }}
+            >
+              {reassignSubmittingRequestId === request.id ? 'Reassigning…' : 'Confirm Reassign'}
             </button>
           </div>
         ) : null}
