@@ -1,7 +1,7 @@
 import { ConflictException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { RoleCode } from '@prisma/client';
+import { RoleCode, SessionActiveRole, SessionType } from '@prisma/client';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 
 import { AuthTokens, UserRole } from '@quickrent/shared-types';
@@ -115,7 +115,7 @@ export class AuthService {
       await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
       const roles = user.userRoles.map((entry) => this.toSharedRole(entry.role.code));
-      return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
+      return this.issueTokensWithNewSession(user.id, roles[0] ?? 'tenant', roles);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
@@ -135,7 +135,7 @@ export class AuthService {
         isProfileCompleted: false,
       },
     });
-    return this.issueTokens(guestId, 'guest', ['guest'], { sessionType: 'guest' });
+    return this.issueTokensWithNewSession(guestId, 'guest', ['guest'], { sessionType: 'guest' });
   }
 
   async requestPhoneOtp(payload: PhoneOtpRequestDto): Promise<{ challengeId: string; expiresInSeconds: number; devOtpCode?: string }> {
@@ -209,7 +209,7 @@ export class AuthService {
     }
 
     const roles = user.userRoles.map((entry) => this.toSharedRole(entry.role.code));
-    return this.issueTokens(user.id, roles[0] ?? 'tenant', roles);
+    return this.issueTokensWithNewSession(user.id, roles[0] ?? 'tenant', roles);
   }
 
   /**
@@ -246,7 +246,34 @@ export class AuthService {
     const roles = decoded.roles?.length ? decoded.roles : [role];
 
     const sessionType = decoded.sessionType === 'guest' ? 'guest' : undefined;
-    return this.issueTokens(decoded.sub, role, roles, { sessionType });
+    const existingSessionId = typeof decoded.sid === 'string' && decoded.sid.trim() ? decoded.sid : null;
+    if (!existingSessionId) {
+      // Legacy refresh tokens (without sid) continue on stateless path during migration.
+      return this.issueTokens(decoded.sub, role, roles, { sessionType });
+    }
+
+    const existingSession = await this.prisma.session.findFirst({
+      where: {
+        id: existingSessionId,
+        userId: decoded.sub,
+        revokedAt: null,
+      },
+      select: {
+        id: true,
+        sessionType: true,
+        activeRole: true,
+        providerContextId: true,
+        tenantContextId: true,
+        refreshTokenFamily: true,
+        refreshTokenVersion: true,
+      },
+    });
+    if (!existingSession) {
+      // Preserve compatibility if sid references a non-existent session.
+      return this.issueTokens(decoded.sub, role, roles, { sessionType });
+    }
+
+    return this.issueTokensWithSessionRefresh(decoded.sub, role, roles, existingSession, { sessionType });
   }
 
   async verifyAccount(payload: VerifyAccountDto): Promise<{ verified: boolean }> {
@@ -359,6 +386,117 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
+  private async issueTokensWithNewSession(
+    userId: string,
+    role: UserRole,
+    roles: UserRole[],
+    options?: { sessionType?: 'guest' },
+  ): Promise<AuthTokens> {
+    const createdSession = await this.prisma.session.create({
+      data: {
+        userId,
+        sessionType: options?.sessionType === 'guest' ? SessionType.GUEST : SessionType.USER,
+        activeRole: this.toSessionActiveRole(role),
+        refreshTokenHash: this.hashSecret(randomUUID()),
+        refreshTokenFamily: randomUUID(),
+        refreshTokenVersion: 1,
+        providerContextId: this.getSafeProviderContextId(role),
+        tenantContextId: this.getSafeTenantContextId(role, userId),
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        lastUsedAt: new Date(),
+      },
+      select: {
+        id: true,
+        refreshTokenFamily: true,
+        refreshTokenVersion: true,
+      },
+    });
+
+    const tokens = await this.issueTokens(userId, role, roles, {
+      sessionType: options?.sessionType,
+      sessionId: createdSession.id,
+    });
+
+    await this.persistSessionTokenMetadata({
+      sessionId: createdSession.id,
+      refreshToken: tokens.refreshToken,
+      refreshTokenFamily: createdSession.refreshTokenFamily,
+      refreshTokenVersion: createdSession.refreshTokenVersion,
+    });
+
+    return tokens;
+  }
+
+  private async issueTokensWithSessionRefresh(
+    userId: string,
+    role: UserRole,
+    roles: UserRole[],
+    existingSession: {
+      id: string;
+      sessionType: SessionType;
+      activeRole: SessionActiveRole | null;
+      providerContextId: string | null;
+      tenantContextId: string | null;
+      refreshTokenFamily: string;
+      refreshTokenVersion: number;
+    },
+    options?: { sessionType?: 'guest' },
+  ): Promise<AuthTokens> {
+    const nextVersion = existingSession.refreshTokenVersion + 1;
+    const tokens = await this.issueTokens(userId, role, roles, {
+      sessionType: options?.sessionType,
+      sessionId: existingSession.id,
+    });
+
+    await this.persistSessionTokenMetadata({
+      sessionId: existingSession.id,
+      refreshToken: tokens.refreshToken,
+      refreshTokenFamily: existingSession.refreshTokenFamily,
+      refreshTokenVersion: nextVersion,
+      sessionType: existingSession.sessionType,
+      activeRole: existingSession.activeRole ?? this.toSessionActiveRole(role),
+      providerContextId: existingSession.providerContextId,
+      tenantContextId: existingSession.tenantContextId,
+    });
+
+    return tokens;
+  }
+
+  private async persistSessionTokenMetadata(params: {
+    sessionId: string;
+    refreshToken: string;
+    refreshTokenFamily: string;
+    refreshTokenVersion: number;
+    sessionType?: SessionType;
+    activeRole?: SessionActiveRole | null;
+    providerContextId?: string | null;
+    tenantContextId?: string | null;
+  }): Promise<void> {
+    await this.prisma.session.update({
+      where: { id: params.sessionId },
+      data: {
+        refreshTokenHash: this.hashSecret(params.refreshToken),
+        refreshTokenFamily: params.refreshTokenFamily,
+        refreshTokenVersion: params.refreshTokenVersion,
+        sessionType: params.sessionType,
+        activeRole: params.activeRole,
+        providerContextId: params.providerContextId,
+        tenantContextId: params.tenantContextId,
+        expiresAt: this.getRefreshTokenExpiryDate(params.refreshToken),
+        lastUsedAt: new Date(),
+      },
+    });
+  }
+
+  private getRefreshTokenExpiryDate(refreshToken: string): Date {
+    const decoded = this.jwtService.decode(refreshToken) as { exp?: number } | null;
+    if (typeof decoded?.exp === 'number') {
+      return new Date(decoded.exp * 1000);
+    }
+    // Safe fallback when exp claim is absent for any reason.
+    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  }
+
   private hashSecret(value: string): string {
     const salt = randomBytes(16).toString('hex');
     const hash = scryptSync(value, salt, 64).toString('hex');
@@ -423,5 +561,37 @@ export class AuthService {
       default:
         return 'tenant';
     }
+  }
+
+  private toSessionActiveRole(role: UserRole): SessionActiveRole | null {
+    switch (role) {
+      case 'admin':
+        return SessionActiveRole.ADMIN;
+      case 'command-center':
+        return SessionActiveRole.COMMAND_CENTER;
+      case 'provider':
+        return SessionActiveRole.PROVIDER;
+      case 'guest':
+        return SessionActiveRole.GUEST;
+      case 'tenant':
+        return SessionActiveRole.TENANT;
+      default:
+        return null;
+    }
+  }
+
+  private getSafeProviderContextId(role: UserRole): string | null {
+    if (role !== 'provider') {
+      return null;
+    }
+    // Provider context can be backfilled later when provider profile context is wired in auth payload.
+    return null;
+  }
+
+  private getSafeTenantContextId(role: UserRole, userId: string): string | null {
+    if (role === 'tenant') {
+      return userId;
+    }
+    return null;
   }
 }
