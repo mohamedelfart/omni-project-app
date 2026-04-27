@@ -555,7 +555,7 @@ export class AuthService {
       case RoleCode.COMMAND_CENTER:
         return 'command-center';
       case RoleCode.LANDLORD:
-        return 'tenant';
+        return 'landlord';
       case RoleCode.PROVIDER:
         return 'provider';
       default:
