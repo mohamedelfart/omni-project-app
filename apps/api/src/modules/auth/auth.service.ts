@@ -217,7 +217,16 @@ export class AuthService {
    * Rejects other tokens minted with the same secret (e.g. password-reset) that are not refresh sessions.
    */
   async refreshTokens(payload: RefreshTokenDto): Promise<AuthTokens> {
-    type RefreshClaims = { sub: string; role?: UserRole; roles?: UserRole[]; type?: string; sessionType?: string };
+    type RefreshClaims = {
+      sub: string;
+      role?: UserRole;
+      roles?: UserRole[];
+      type?: string;
+      typ?: string;
+      sid?: string | null;
+      jti?: string;
+      sessionType?: string;
+    };
 
     let decoded: RefreshClaims;
     try {
@@ -228,7 +237,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    if (decoded.type !== 'refresh') {
+    const refreshType = decoded.typ ?? decoded.type;
+    if (refreshType !== 'refresh') {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -307,20 +317,41 @@ export class AuthService {
     userId: string,
     role: UserRole,
     roles: UserRole[],
-    options?: { sessionType?: 'guest' },
+    options?: { sessionType?: 'guest'; sessionId?: string | null },
   ): Promise<AuthTokens> {
     const accessSecret = this.configService.getOrThrow<string>('JWT_ACCESS_SECRET');
     const refreshSecret = this.configService.getOrThrow<string>('JWT_REFRESH_SECRET');
     const accessExpiresIn = this.configService.get<string>('JWT_ACCESS_TTL') ?? '15m';
     const refreshExpiresIn = this.configService.get<string>('JWT_REFRESH_TTL') ?? '7d';
+    const sessionId = options?.sessionId ?? null;
+    const accessJti = randomUUID();
+    const refreshJti = randomUUID();
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(
-        { sub: userId, role, roles, ...(options?.sessionType ? { sessionType: options.sessionType } : {}) },
+        {
+          sub: userId,
+          role,
+          roles,
+          sid: sessionId,
+          jti: accessJti,
+          typ: 'access',
+          ...(options?.sessionType ? { sessionType: options.sessionType } : {}),
+        },
         { secret: accessSecret, expiresIn: accessExpiresIn },
       ),
       this.jwtService.signAsync(
-        { sub: userId, role, roles, type: 'refresh', ...(options?.sessionType ? { sessionType: options.sessionType } : {}) },
+        {
+          sub: userId,
+          role,
+          roles,
+          sid: sessionId,
+          jti: refreshJti,
+          typ: 'refresh',
+          // Keep legacy claim for backwards compatibility with old consumers.
+          type: 'refresh',
+          ...(options?.sessionType ? { sessionType: options.sessionType } : {}),
+        },
         { secret: refreshSecret, expiresIn: refreshExpiresIn },
       ),
     ]);
