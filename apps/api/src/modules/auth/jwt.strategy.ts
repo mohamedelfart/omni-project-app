@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
@@ -23,7 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: { sub: string; role: UserRole; roles?: UserRole[]; sid?: string | null }) {
-    await this.validateSessionSoft(payload);
+    await this.validateSessionStrict(payload);
     return {
       id: payload.sub,
       role: payload.role,
@@ -31,7 +31,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     };
   }
 
-  private async validateSessionSoft(payload: { sub: string; sid?: string | null }): Promise<void> {
+  private async validateSessionStrict(payload: { sub: string; sid?: string | null }): Promise<void> {
     const sid = typeof payload.sid === 'string' && payload.sid.trim() ? payload.sid.trim() : null;
     if (!sid) {
       // Legacy access tokens without sid remain valid during migration.
@@ -50,49 +50,49 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!session) {
       this.logger.warn(
         JSON.stringify({
-          event: 'auth.session.soft_validation',
+          event: 'auth.session.validation',
           outcome: 'missing_session',
-          softFailure: true,
+          strict: true,
           sid,
           userId: payload.sub,
         }),
       );
-      return;
+      throw new UnauthorizedException('Session is invalid');
     }
 
     if (session.revokedAt) {
       this.logger.warn(
         JSON.stringify({
-          event: 'auth.session.soft_validation',
+          event: 'auth.session.validation',
           outcome: 'revoked_session',
-          softFailure: true,
+          strict: true,
           sid,
           userId: payload.sub,
           revokedAt: session.revokedAt.toISOString(),
         }),
       );
-      return;
+      throw new UnauthorizedException('Session is revoked');
     }
 
     if (session.expiresAt.getTime() <= Date.now()) {
       this.logger.warn(
         JSON.stringify({
-          event: 'auth.session.soft_validation',
+          event: 'auth.session.validation',
           outcome: 'expired_session',
-          softFailure: true,
+          strict: true,
           sid,
           userId: payload.sub,
           expiresAt: session.expiresAt.toISOString(),
         }),
       );
-      return;
+      throw new UnauthorizedException('Session is expired');
     }
 
     this.logger.debug(
       JSON.stringify({
-        event: 'auth.session.soft_validation',
+        event: 'auth.session.validation',
         outcome: 'valid_session',
-        softFailure: false,
+        strict: true,
         sid,
         userId: payload.sub,
       }),
