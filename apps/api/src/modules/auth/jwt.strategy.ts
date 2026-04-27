@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
+import { SessionActiveRole } from '@prisma/client';
 import { UserRole } from '@quickrent/shared-types';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -23,25 +24,36 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: { sub: string; role: UserRole; roles?: UserRole[]; sid?: string | null }) {
-    await this.validateSessionStrict(payload);
+    const authorityRoles = payload.roles ?? [payload.role];
+    const sessionContext = await this.validateSessionStrict(payload, authorityRoles, payload.role);
     return {
       id: payload.sub,
       role: payload.role,
-      roles: payload.roles ?? [payload.role],
+      roles: authorityRoles,
+      activeRole: sessionContext.activeRole,
+      providerContextId: sessionContext.providerContextId,
+      tenantContextId: sessionContext.tenantContextId,
     };
   }
 
-  private async validateSessionStrict(payload: { sub: string; sid?: string | null }): Promise<void> {
+  private async validateSessionStrict(
+    payload: { sub: string; sid?: string | null },
+    authorityRoles: UserRole[],
+    fallbackRole: UserRole,
+  ): Promise<{ activeRole: UserRole; providerContextId?: string; tenantContextId?: string }> {
     const sid = typeof payload.sid === 'string' && payload.sid.trim() ? payload.sid.trim() : null;
     if (!sid) {
       // Legacy access tokens without sid remain valid during migration.
-      return;
+      return { activeRole: fallbackRole };
     }
 
     const session = await this.prisma.session.findFirst({
       where: { id: sid, userId: payload.sub },
       select: {
         id: true,
+        activeRole: true,
+        providerContextId: true,
+        tenantContextId: true,
         revokedAt: true,
         expiresAt: true,
       },
@@ -88,6 +100,34 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Session is expired');
     }
 
+    const sessionActiveRoleEnum = session.activeRole;
+    const sessionActiveRoleUser = this.sessionActiveRoleToUserRole(sessionActiveRoleEnum);
+    let normalizedActiveRole: UserRole = fallbackRole;
+    let activeRoleOutcome: 'valid_active_role' | 'invalid_active_role_normalized' | 'missing_active_role_fallback' =
+      'missing_active_role_fallback';
+
+    if (sessionActiveRoleUser && authorityRoles.includes(sessionActiveRoleUser)) {
+      normalizedActiveRole = sessionActiveRoleUser;
+      activeRoleOutcome = 'valid_active_role';
+    } else if (sessionActiveRoleUser && !authorityRoles.includes(sessionActiveRoleUser)) {
+      activeRoleOutcome = 'invalid_active_role_normalized';
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'auth.session.active_role',
+        outcome: activeRoleOutcome,
+        sid,
+        userId: payload.sub,
+        authorityRoles,
+        sessionActiveRole: sessionActiveRoleEnum,
+        normalizedActiveRole,
+
+        providerContextId: session.providerContextId ?? null,
+        tenantContextId: session.tenantContextId ?? null,
+      }),
+    );
+
     this.logger.debug(
       JSON.stringify({
         event: 'auth.session.validation',
@@ -97,5 +137,32 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         userId: payload.sub,
       }),
     );
+
+    return {
+      activeRole: normalizedActiveRole,
+      providerContextId: session.providerContextId ?? undefined,
+      tenantContextId: session.tenantContextId ?? undefined,
+    };
+  }
+
+  /** Map Prisma `SessionActiveRole` (DB enum) to shared `UserRole` strings used in JWT claims. */
+  private sessionActiveRoleToUserRole(role: SessionActiveRole | null): UserRole | null {
+    if (!role) return null;
+    switch (role) {
+      case SessionActiveRole.ADMIN:
+        return 'admin';
+      case SessionActiveRole.PROVIDER:
+        return 'provider';
+      case SessionActiveRole.TENANT:
+        return 'tenant';
+      case SessionActiveRole.LANDLORD:
+        return 'landlord';
+      case SessionActiveRole.COMMAND_CENTER:
+        return 'command-center';
+      case SessionActiveRole.GUEST:
+        return 'guest';
+      default:
+        return null;
+    }
   }
 }
