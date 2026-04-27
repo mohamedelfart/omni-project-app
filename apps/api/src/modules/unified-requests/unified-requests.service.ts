@@ -34,6 +34,14 @@ export class UnifiedRequestsService {
     return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
   }
 
+  private async providerIdsForUser(userId: string): Promise<string[]> {
+    const profiles = await this.prisma.providerProfile.findMany({
+      where: { userId },
+      select: { providerId: true },
+    });
+    return profiles.map((profile) => profile.providerId);
+  }
+
   async create(userId: string, dto: CreateUnifiedRequestDto) {
     const unifiedRequest = await this.prisma.$transaction((tx) =>
       tx.unifiedRequest.create({
@@ -150,8 +158,11 @@ export class UnifiedRequestsService {
     if (isTenant && (ticket.tenantId === user.id || ticket.userId === user.id)) {
       return this.ticketActionsService.listHistoryByTicketId(requestId);
     }
-    if (isProvider && ticket.vendorId === user.id) {
-      return this.ticketActionsService.listHistoryByTicketId(requestId);
+    if (isProvider) {
+      const providerIds = await this.providerIdsForUser(user.id);
+      if (ticket.vendorId && providerIds.includes(ticket.vendorId)) {
+        return this.ticketActionsService.listHistoryByTicketId(requestId);
+      }
     }
 
     throw new ForbiddenException('Not allowed to read action history for this request');
@@ -357,9 +368,14 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  listRealtimeForVendor(vendorId: string) {
+  async listRealtimeForVendor(userId: string) {
+    const providerIds = await this.providerIdsForUser(userId);
+    if (!providerIds.length) {
+      return [];
+    }
+
     return this.prisma.unifiedRequest.findMany({
-      where: { vendorId },
+      where: { vendorId: { in: providerIds } },
       orderBy: { createdAt: 'desc' },
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
@@ -508,13 +524,18 @@ export class UnifiedRequestsService {
     });
   }
 
-  async updateRealtimeStatus(requestId: string, vendorId: string, dto: UpdateRealtimeRequestStatusDto) {
+  async updateRealtimeStatus(requestId: string, userId: string, dto: UpdateRealtimeRequestStatusDto) {
+    const providerIds = await this.providerIdsForUser(userId);
+    if (!providerIds.length) {
+      throw new ForbiddenException('No provider profile attached to current user');
+    }
+
     const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
       where: { id: requestId },
       select: { id: true, vendorId: true, status: true },
     });
 
-    if (!existing.vendorId || existing.vendorId !== vendorId) {
+    if (!existing.vendorId || !providerIds.includes(existing.vendorId)) {
       throw new ForbiddenException('Request is not assigned to this vendor');
     }
 
@@ -550,10 +571,11 @@ export class UnifiedRequestsService {
       ticketId: requestId,
       actionType: 'CHANGE_STATUS',
       actorType: 'provider',
-      actorId: vendorId,
+      actorId: userId,
       payload: {
         fromStatus: current,
         toStatus: dto.status,
+        providerId: existing.vendorId,
       },
     });
     return minimal;
