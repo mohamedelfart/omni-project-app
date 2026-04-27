@@ -42,6 +42,20 @@ export class UnifiedRequestsService {
     return profiles.map((profile) => profile.providerId);
   }
 
+  private async providerUserRoomsForProviderId(providerId: string | null | undefined): Promise<string[]> {
+    if (!providerId) {
+      return [];
+    }
+    const profiles = await this.prisma.providerProfile.findMany({
+      where: { providerId },
+      select: { userId: true },
+    });
+    return profiles
+      .map((profile) => profile.userId)
+      .filter((userId): userId is string => typeof userId === 'string' && userId.length > 0)
+      .map((userId) => `user:${userId}`);
+  }
+
   async create(userId: string, dto: CreateUnifiedRequestDto) {
     const unifiedRequest = await this.prisma.$transaction((tx) =>
       tx.unifiedRequest.create({
@@ -279,12 +293,12 @@ export class UnifiedRequestsService {
     });
 
     const minimal = this.toMinimalRequest(updated);
+    const providerRooms = await this.providerUserRoomsForProviderId(minimal.vendorId);
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.updated,
       [
         `user:${minimal.tenantId}`,
-        ...(minimal.vendorId ? [`user:${minimal.vendorId}`] : []),
-        'role:provider',
+        ...providerRooms,
         'role:admin',
         'role:command-center',
       ],
@@ -384,7 +398,7 @@ export class UnifiedRequestsService {
    * Realtime fan-out after canonical provider assignment (shared by admin realtime + command-center).
    * Emits `request.assigned` then `request.updated` (existing client contract).
    */
-  emitProviderAssignmentSockets(
+  async emitProviderAssignmentSockets(
     unified: {
       id: string;
       tenantId: string;
@@ -397,14 +411,14 @@ export class UnifiedRequestsService {
       updatedAt: Date;
     },
     providerId: string,
-  ): void {
+  ): Promise<void> {
     const minimal = this.toMinimalRequest(unified);
+    const providerRooms = await this.providerUserRoomsForProviderId(providerId);
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.assigned,
       [
         `user:${minimal.tenantId}`,
-        `user:${providerId}`,
-        'role:provider',
+        ...providerRooms,
         'role:admin',
         'role:command-center',
       ],
@@ -414,8 +428,7 @@ export class UnifiedRequestsService {
       REQUEST_SOCKET_EVENTS.updated,
       [
         `user:${minimal.tenantId}`,
-        `user:${providerId}`,
-        'role:provider',
+        ...providerRooms,
         'role:admin',
         'role:command-center',
       ],
@@ -432,7 +445,7 @@ export class UnifiedRequestsService {
 
     const minimal = this.toMinimalRequest(request);
     if (changed) {
-      this.emitProviderAssignmentSockets(request, dto.vendorId);
+      void this.emitProviderAssignmentSockets(request, dto.vendorId);
       void this.appendAssignTicketAction(requestId, user, dto).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : 'Unknown logging error';
         console.warn(`TicketAction ASSIGN failed: ${message}`);
@@ -483,12 +496,12 @@ export class UnifiedRequestsService {
     });
 
     const minimal = this.toMinimalRequest(updated);
+    const providerRooms = await this.providerUserRoomsForProviderId(minimal.vendorId);
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.updated,
       [
         `user:${minimal.tenantId}`,
-        ...(minimal.vendorId ? [`user:${minimal.vendorId}`] : []),
-        'role:provider',
+        ...providerRooms,
         'role:admin',
         'role:command-center',
       ],
@@ -556,12 +569,12 @@ export class UnifiedRequestsService {
     });
 
     const minimal = this.toMinimalRequest(updated);
+    const providerRooms = await this.providerUserRoomsForProviderId(minimal.vendorId);
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.updated,
       [
         `user:${minimal.tenantId}`,
-        ...(minimal.vendorId ? [`user:${minimal.vendorId}`] : []),
-        'role:provider',
+        ...providerRooms,
         'role:admin',
         'role:command-center',
       ],
