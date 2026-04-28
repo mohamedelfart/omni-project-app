@@ -1,10 +1,24 @@
-const escalations = [
-  { id: 'ESC-0081', requestId: 'REQ-20483', tenant: 'Maya Hassan', service: 'Airport Transfer', severity: 'CRITICAL', market: 'AE / Dubai', assignedTo: 'Ops Lead A', reason: 'Provider SLA breached — 45 min overdue. Tenant at airport.', status: 'OPEN', opened: '2026-04-04 10:22', slaMinutes: 30 },
-  { id: 'ESC-0082', requestId: 'REQ-20441', tenant: 'Omar Al-Said', service: 'Move-In', severity: 'HIGH', market: 'QA / Lusail', assignedTo: 'Ops Lead B', reason: 'Free cap exceeded by 200 QAR. Tenant disputes charge.', status: 'IN_REVIEW', opened: '2026-04-04 09:15', slaMinutes: 60 },
-  { id: 'ESC-0083', requestId: 'REQ-20390', tenant: 'Sara Ibrahim', service: 'Maintenance', severity: 'MEDIUM', market: 'SA / Riyadh', assignedTo: null, reason: 'Vendor rejected ticket. No fallback available in city.', status: 'OPEN', opened: '2026-04-04 08:44', slaMinutes: 120 },
-  { id: 'ESC-0079', requestId: 'REQ-20360', tenant: 'Khalid Mansouri', service: 'Cleaning', severity: 'LOW', market: 'AE / Abu Dhabi', assignedTo: 'Ops Lead A', reason: 'Tenant requested rescheduling 3 times. Vendor unhappy.', status: 'RESOLVED', opened: '2026-04-03 14:00', slaMinutes: 240 },
-  { id: 'ESC-0080', requestId: 'PAY-10243', tenant: 'Khalid Ibrahim', service: 'Payment', severity: 'HIGH', market: 'SA / Riyadh', assignedTo: 'Finance Lead', reason: 'Bank transfer of 24,000 SAR pending for 72 hours. Deposit not received.', status: 'IN_REVIEW', opened: '2026-04-03 16:30', slaMinutes: 60 },
-];
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '../../lib/auth';
+
+type CommandCenterRequest = {
+  id: string;
+  serviceType: string;
+  country: string;
+  city: string;
+  vendorId: string | null;
+  createdAt: string;
+  user?: { fullName?: string | null };
+  sla?: {
+    slaBreached?: boolean;
+    escalationLevel?: number;
+    firstBreachedAt?: string | null;
+  };
+};
+
+type ProviderOption = { id: string; name: string };
 
 const severityConfig: Record<string, { bg: string; color: string; border: string }> = {
   CRITICAL: { bg: '#FEF2F2', color: '#991B1B', border: '#FCA5A5' },
@@ -20,14 +34,182 @@ const statusConfig: Record<string, { bg: string; color: string }> = {
   CLOSED: { bg: '#F3F4F6', color: '#6B7280' },
 };
 
-const stats = [
-  { label: 'Open Escalations', value: '19', accent: '#EF4444' },
-  { label: 'Critical / High', value: '8', accent: '#DC2626' },
-  { label: 'Avg. Resolution', value: '42 min', accent: '#F59E0B' },
-  { label: 'Resolved Today', value: '14', accent: '#10B981' },
-];
+function getEscalationSeverity(level: number): 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' {
+  if (level >= 3) return 'CRITICAL';
+  if (level >= 2) return 'HIGH';
+  if (level >= 1) return 'MEDIUM';
+  return 'LOW';
+}
 
 export default function EscalationsPage() {
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+  const [requests, setRequests] = useState<CommandCenterRequest[]>([]);
+  const [providers, setProviders] = useState<ProviderOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionRequestId, setActionRequestId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [requestsRes, providersRes] = await Promise.all([
+        apiFetch('/api/requests', { cache: 'no-store' }),
+        apiFetch(`${apiBase.replace(/\/$/, '')}/command-center/providers`, { cache: 'no-store' }),
+      ]);
+      const reqPayload = await requestsRes.json().catch(() => []);
+      const providersPayload = await providersRes.json().catch(() => []);
+      const reqRows: CommandCenterRequest[] = Array.isArray(reqPayload)
+        ? reqPayload
+        : Array.isArray(reqPayload?.data)
+          ? reqPayload.data
+          : [];
+      const providerRowsRaw = Array.isArray(providersPayload)
+        ? providersPayload
+        : Array.isArray(providersPayload?.data)
+          ? providersPayload.data
+          : [];
+      setRequests(reqRows);
+      setProviders(
+        providerRowsRaw
+          .filter((p: unknown): p is Record<string, unknown> => !!p && typeof p === 'object')
+          .map((p: Record<string, unknown>) => ({
+            id: typeof p.id === 'string' ? p.id : '',
+            name: typeof p.name === 'string' ? p.name : '',
+          }))
+          .filter((p: ProviderOption) => p.id.length > 0),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load escalations');
+    } finally {
+      setLoading(false);
+    }
+  }, [apiBase]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const escalations = useMemo(
+    () =>
+      requests
+        .filter((r) => Boolean(r.sla?.slaBreached) || (r.sla?.escalationLevel ?? 0) > 0)
+        .map((r) => {
+          const escalationLevel = r.sla?.escalationLevel ?? 0;
+          const severity = getEscalationSeverity(escalationLevel);
+          const status = escalationLevel > 0 ? 'OPEN' : 'RESOLVED';
+          return {
+            id: `ESC-${r.id.slice(-6).toUpperCase()}`,
+            requestId: r.id,
+            tenant: r.user?.fullName || r.id,
+            service: r.serviceType,
+            severity,
+            market: `${r.country} / ${r.city}`,
+            assignedTo: r.vendorId,
+            reason: escalationLevel > 0
+              ? `SLA breach active at escalation level ${escalationLevel}.`
+              : 'Escalation operationally resolved.',
+            status,
+            opened: new Date(r.sla?.firstBreachedAt ?? r.createdAt).toLocaleString(),
+            slaMinutes: escalationLevel > 0 ? 30 : 0,
+            escalationLevel,
+          };
+        }),
+    [requests],
+  );
+
+  const stats = useMemo(() => {
+    const open = escalations.filter((e) => e.status !== 'RESOLVED').length;
+    const criticalHigh = escalations.filter((e) => e.severity === 'CRITICAL' || e.severity === 'HIGH').length;
+    const resolved = escalations.filter((e) => e.status === 'RESOLVED').length;
+    return [
+      { label: 'Open Escalations', value: String(open), accent: '#EF4444' },
+      { label: 'Critical / High', value: String(criticalHigh), accent: '#DC2626' },
+      { label: 'Avg. Resolution', value: '-', accent: '#F59E0B' },
+      { label: 'Resolved', value: String(resolved), accent: '#10B981' },
+    ];
+  }, [escalations]);
+
+  const postAction = useCallback(
+    async (url: string, body: Record<string, unknown>) => {
+      const response = await apiFetch(url, {
+        method: 'POST',
+        cache: 'no-store',
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const msg =
+          (payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string' && (payload as { error: string }).error)
+          || (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string' && (payload as { message: string }).message)
+          || 'Action failed';
+        throw new Error(msg);
+      }
+    },
+    [],
+  );
+
+  const onIntervene = useCallback(
+    async (requestId: string) => {
+      const reason = window.prompt('Intervention reason', 'Manual command-center intervention');
+      setActionRequestId(requestId);
+      setError(null);
+      try {
+        await postAction(`${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/intervene`, {
+          reason: reason?.trim() || 'Manual command-center intervention',
+        });
+        await loadData();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Intervention failed');
+      } finally {
+        setActionRequestId(null);
+      }
+    },
+    [apiBase, loadData, postAction],
+  );
+
+  const onResolve = useCallback(
+    async (requestId: string) => {
+      const reason = window.prompt('Resolution note', 'Escalation resolved by command-center');
+      setActionRequestId(requestId);
+      setError(null);
+      try {
+        await postAction(`${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/resolve-escalation`, {
+          reason: reason?.trim() || 'Escalation resolved by command-center',
+        });
+        await loadData();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Resolve failed');
+      } finally {
+        setActionRequestId(null);
+      }
+    },
+    [apiBase, loadData, postAction],
+  );
+
+  const onReassign = useCallback(
+    async (requestId: string, currentVendorId: string | null) => {
+      const providerSuggestion = providers.find((p) => p.id !== currentVendorId)?.id ?? '';
+      const providerId = window.prompt('Provider ID to reassign', providerSuggestion) ?? '';
+      if (!providerId.trim()) return;
+      const reason = window.prompt('Reassignment reason (optional)', 'Escalation reassignment') ?? '';
+      setActionRequestId(requestId);
+      setError(null);
+      try {
+        await postAction(
+          `${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/reassign-provider`,
+          { providerId: providerId.trim(), reason: reason.trim() || undefined },
+        );
+        await loadData();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Reassign failed');
+      } finally {
+        setActionRequestId(null);
+      }
+    },
+    [apiBase, loadData, postAction, providers],
+  );
+
   return (
     <section style={{ display: 'grid', gap: 24 }}>
       <header>
@@ -36,6 +218,11 @@ export default function EscalationsPage() {
           Command Center intervention queue. Every escalation is trackable, assignable, and auditable.
         </p>
       </header>
+      {error ? (
+        <div style={{ border: '1px solid #FECACA', background: '#FEF2F2', color: '#991B1B', borderRadius: 12, padding: 12 }}>
+          {error}
+        </div>
+      ) : null}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
         {stats.map((s) => (
@@ -48,6 +235,16 @@ export default function EscalationsPage() {
 
       {/* Escalation cards */}
       <div style={{ display: 'grid', gap: 14 }}>
+        {loading ? (
+          <article style={{ background: '#FFFFFF', border: '1px solid #E5EDF5', borderRadius: 16, padding: 20 }}>
+            Loading escalations...
+          </article>
+        ) : null}
+        {!loading && escalations.length === 0 ? (
+          <article style={{ background: '#FFFFFF', border: '1px solid #E5EDF5', borderRadius: 16, padding: 20 }}>
+            No escalations found.
+          </article>
+        ) : null}
         {escalations.map((e) => {
           const sev = severityConfig[e.severity] ?? { bg: '#F9FAFB', color: '#374151', border: '#E5E7EB' };
           const sta = statusConfig[e.status] ?? { bg: '#F3F4F6', color: '#374151' };
@@ -93,9 +290,27 @@ export default function EscalationsPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 140 }}>
                 {e.status !== 'RESOLVED' && (
                   <>
-                    <button style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#1E3A5F', color: '#FFFFFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Intervene</button>
-                    <button style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#374151', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Reassign</button>
-                    <button style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#10B981', color: '#FFFFFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Resolve</button>
+                    <button
+                      disabled={actionRequestId === e.requestId}
+                      onClick={() => void onIntervene(e.requestId)}
+                      style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#1E3A5F', color: '#FFFFFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Intervene
+                    </button>
+                    <button
+                      disabled={actionRequestId === e.requestId}
+                      onClick={() => void onReassign(e.requestId, e.assignedTo)}
+                      style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#374151', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      Reassign
+                    </button>
+                    <button
+                      disabled={actionRequestId === e.requestId}
+                      onClick={() => void onResolve(e.requestId)}
+                      style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#10B981', color: '#FFFFFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Resolve
+                    </button>
                   </>
                 )}
                 {e.status === 'RESOLVED' && (

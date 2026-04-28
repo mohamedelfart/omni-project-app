@@ -6,6 +6,8 @@ import { LocationService } from '../location/location.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
+import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import { DecisionSupportService } from './decision-support.service';
 
@@ -65,10 +67,18 @@ export class CommandCenterService {
     private readonly orchestratorService: OrchestratorService,
     private readonly unifiedRequestsService: UnifiedRequestsService,
     private readonly auditTrailService: AuditTrailService,
+    private readonly ticketActionsService: TicketActionsService,
     private readonly operatorPolicyService: OperatorPolicyService,
     private readonly decisionSupportService: DecisionSupportService,
     private readonly locationService: LocationService,
   ) {}
+
+  private toActorType(user: AuthenticatedUser): string {
+    const roles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    if (roles.includes('admin')) return 'admin';
+    if (roles.includes('command-center')) return 'command-center';
+    return user.role || 'command-center';
+  }
 
   private buildDateRange(filters?: DashboardFilters) {
     if (!filters?.startDate && !filters?.endDate) {
@@ -822,11 +832,11 @@ export class CommandCenterService {
       .then((rows) => rows.map((row) => ({ ...row, sla: this.pickSlaSnapshot(row) })));
   }
 
-  async assignProvider(actorUserId: string, requestId: string, providerId: string) {
+  async assignProvider(user: AuthenticatedUser, requestId: string, providerId: string) {
     const { changed, request } = await this.orchestratorService.assignProviderToUnifiedRequest({
       requestId,
       providerId,
-      actorUserId,
+      actorUserId: user.id,
     });
     if (changed) {
       this.unifiedRequestsService.emitProviderAssignmentSockets(request, providerId);
@@ -834,17 +844,121 @@ export class CommandCenterService {
     return request;
   }
 
-  async reassignProvider(actorUserId: string, requestId: string, providerId: string, reason?: string) {
+  async reassignProvider(user: AuthenticatedUser, requestId: string, providerId: string, reason?: string) {
+    const before = await this.prisma.unifiedRequest.findUnique({
+      where: { id: requestId },
+      select: { vendorId: true, country: true, escalationLevel: true },
+    });
     const { changed, request } = await this.orchestratorService.reassignProviderFromCommandCenter({
       requestId,
       providerId,
-      actorUserId,
+      actorUserId: user.id,
       reason,
     });
     if (changed) {
       this.unifiedRequestsService.emitProviderAssignmentSockets(request, providerId);
     }
+    await this.ticketActionsService.createAction({
+      ticketId: requestId,
+      actionType: 'REASSIGN',
+      actorType: this.toActorType(user),
+      actorId: user.id,
+      payload: {
+        fromVendorId: before?.vendorId ?? null,
+        toVendorId: providerId,
+        reason: reason?.trim() || null,
+        escalationContext: (before?.escalationLevel ?? 0) > 0,
+      },
+    });
+    await this.auditTrailService.write({
+      actorUserId: user.id,
+      action: 'COMMAND_CENTER_REQUEST_REASSIGNED',
+      entity: 'UnifiedRequest',
+      entityId: requestId,
+      countryCode: before?.country ?? request.country,
+      metadata: {
+        fromVendorId: before?.vendorId ?? null,
+        toVendorId: providerId,
+        reason: reason?.trim() || null,
+      },
+    });
     return request;
+  }
+
+  async interveneEscalation(user: AuthenticatedUser, requestId: string, reason?: string) {
+    const request = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: requestId },
+      select: { id: true, country: true, escalationLevel: true, slaBreached: true },
+    });
+    await this.ticketActionsService.createAction({
+      ticketId: requestId,
+      actionType: 'INTERVENE',
+      actorType: this.toActorType(user),
+      actorId: user.id,
+      payload: {
+        reason: reason?.trim() || 'Manual command-center intervention',
+        escalationLevel: request.escalationLevel,
+        slaBreached: request.slaBreached,
+      },
+    });
+    await this.auditTrailService.write({
+      actorUserId: user.id,
+      action: 'COMMAND_CENTER_ESCALATION_INTERVENED',
+      entity: 'UnifiedRequest',
+      entityId: requestId,
+      countryCode: request.country,
+      metadata: {
+        reason: reason?.trim() || 'Manual command-center intervention',
+        escalationLevel: request.escalationLevel,
+      },
+    });
+    return this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: requestId },
+      include: { trackingEvents: true },
+    });
+  }
+
+  async resolveEscalation(user: AuthenticatedUser, requestId: string, reason?: string) {
+    const resolved = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.unifiedRequest.findUniqueOrThrow({
+        where: { id: requestId },
+        select: { id: true, country: true, escalationLevel: true, slaBreached: true },
+      });
+      const nextEscalationLevel = 0;
+      await tx.unifiedRequest.update({
+        where: { id: requestId },
+        data: { escalationLevel: nextEscalationLevel },
+      });
+      await this.ticketActionsService.createAction({
+        ticketId: requestId,
+        actionType: 'RESOLVE_ESCALATION',
+        actorType: this.toActorType(user),
+        actorId: user.id,
+        payload: {
+          reason: reason?.trim() || 'Escalation resolved by command-center',
+          fromEscalationLevel: existing.escalationLevel ?? 0,
+          toEscalationLevel: nextEscalationLevel,
+          slaBreached: existing.slaBreached,
+        },
+      });
+      await this.auditTrailService.write({
+        actorUserId: user.id,
+        action: 'COMMAND_CENTER_ESCALATION_RESOLVED',
+        entity: 'UnifiedRequest',
+        entityId: requestId,
+        countryCode: existing.country,
+        metadata: {
+          reason: reason?.trim() || 'Escalation resolved by command-center',
+          fromEscalationLevel: existing.escalationLevel ?? 0,
+          toEscalationLevel: nextEscalationLevel,
+        },
+      });
+      return tx.unifiedRequest.findUniqueOrThrow({
+        where: { id: requestId },
+        include: { trackingEvents: true },
+      });
+    });
+    return resolved;
   }
 
   async createOffer(userId: string, payload: { title: string; type: string; discountMinor?: number }) {

@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -52,20 +52,38 @@ export class CommandCenterController {
 
   @Post('requests/:id/assign-provider')
   assignProvider(
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() body: { providerId: string },
   ) {
-    return this.commandCenterService.assignProvider(user.id, id, body.providerId);
+    return this.commandCenterService.assignProvider(user, id, body.providerId);
   }
 
   @Post('requests/:id/reassign-provider')
   reassignProvider(
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() body: { providerId: string; reason?: string },
   ) {
-    return this.commandCenterService.reassignProvider(user.id, id, body.providerId, body.reason);
+    return this.commandCenterService.reassignProvider(user, id, body.providerId, body.reason);
+  }
+
+  @Post('requests/:id/intervene')
+  interveneEscalation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.commandCenterService.interveneEscalation(user, id, body.reason);
+  }
+
+  @Post('requests/:id/resolve-escalation')
+  resolveEscalation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    return this.commandCenterService.resolveEscalation(user, id, body.reason);
   }
 
   @Post('requests/:id/instructions')
