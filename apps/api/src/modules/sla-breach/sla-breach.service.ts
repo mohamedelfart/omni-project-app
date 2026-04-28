@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 
 const TERMINAL_STATUSES: UnifiedRequestStatus[] = ['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED'];
 
@@ -14,6 +15,7 @@ export class SlaBreachService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditTrailService: AuditTrailService,
+    private readonly ticketActionsService: TicketActionsService,
   ) {}
 
   /**
@@ -69,15 +71,27 @@ export class SlaBreachService {
       }
 
       if (r.slaBreached && r.firstBreachedAt && mergedBreachType !== r.breachType) {
+        const nextEscalationLevel = Math.max(r.escalationLevel ?? 0, 1);
         await client.unifiedRequest.update({
           where: { id: requestId },
-          data: { breachType: mergedBreachType },
+          data: {
+            breachType: mergedBreachType,
+            escalationLevel: nextEscalationLevel,
+          },
         });
         await this.writeBreachAudit(r.country, requestId, {
           breachType: mergedBreachType,
           responseBreached,
           completionBreached,
           phase: 'upgrade',
+        });
+        await this.writeEscalationActionIfMaterialTransition(client, {
+          requestId,
+          fromEscalationLevel: r.escalationLevel ?? 0,
+          toEscalationLevel: nextEscalationLevel,
+          fromBreachType: r.breachType,
+          toBreachType: mergedBreachType,
+          reason: 'sla_breach_type_widened',
         });
         return 'updated' as const;
       }
@@ -100,6 +114,14 @@ export class SlaBreachService {
         responseBreached,
         completionBreached,
         phase: 'initial',
+      });
+      await this.writeEscalationActionIfMaterialTransition(client, {
+        requestId,
+        fromEscalationLevel: r.escalationLevel ?? 0,
+        toEscalationLevel: escalationLevel,
+        fromBreachType: r.breachType,
+        toBreachType: mergedBreachType,
+        reason: 'sla_breach_detected',
       });
 
       return 'updated' as const;
@@ -139,6 +161,74 @@ export class SlaBreachService {
       severity: 'WARNING',
       metadata,
     });
+  }
+
+  private async writeEscalationActionIfMaterialTransition(
+    client: Prisma.TransactionClient | PrismaService,
+    input: {
+      requestId: string;
+      fromEscalationLevel: number;
+      toEscalationLevel: number;
+      fromBreachType: string | null;
+      toBreachType: string;
+      reason: string;
+    },
+  ): Promise<void> {
+    const hasEscalationLevelIncrease = input.toEscalationLevel > input.fromEscalationLevel;
+    const hasBreachTypeWidened = input.toBreachType !== (input.fromBreachType ?? null);
+    if (!hasEscalationLevelIncrease && !hasBreachTypeWidened) {
+      return;
+    }
+
+    const transitionKey = this.buildEscalationTransitionKey(input);
+    const latestEscalate = await client.ticketAction.findFirst({
+      where: { ticketId: input.requestId, actionType: 'ESCALATE' },
+      orderBy: { createdAt: 'desc' },
+      select: { payload: true },
+    });
+    if (this.payloadHasTransitionKey(latestEscalate?.payload, transitionKey)) {
+      return;
+    }
+
+    await this.ticketActionsService.createAction({
+      ticketId: input.requestId,
+      actionType: 'ESCALATE',
+      actorType: 'system',
+      actorId: 'sla-engine',
+      payload: {
+        source: 'sla-breach',
+        reason: input.reason,
+        fromEscalationLevel: input.fromEscalationLevel,
+        toEscalationLevel: input.toEscalationLevel,
+        fromBreachType: input.fromBreachType,
+        toBreachType: input.toBreachType,
+        transitionKey,
+      },
+    });
+  }
+
+  private buildEscalationTransitionKey(input: {
+    requestId: string;
+    fromEscalationLevel: number;
+    toEscalationLevel: number;
+    fromBreachType: string | null;
+    toBreachType: string;
+    reason: string;
+  }): string {
+    return [
+      input.requestId,
+      input.reason,
+      `lvl:${input.fromEscalationLevel}->${input.toEscalationLevel}`,
+      `breach:${input.fromBreachType ?? 'none'}->${input.toBreachType}`,
+    ].join('|');
+  }
+
+  private payloadHasTransitionKey(payload: Prisma.JsonValue | null | undefined, key: string): boolean {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return false;
+    }
+    const transitionKey = (payload as Record<string, unknown>).transitionKey;
+    return typeof transitionKey === 'string' && transitionKey === key;
   }
 
   /**
