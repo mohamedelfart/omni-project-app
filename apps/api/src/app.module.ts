@@ -27,6 +27,7 @@ import { OrchestratorModule } from './modules/orchestrator/orchestrator.module';
 import { HealthModule } from './modules/health/health.module';
 import { LocationModule } from './modules/location/location.module';
 import { TenantIntelligenceModule } from './modules/tenant-intelligence/tenant-intelligence.module';
+import { SlaBreachModule } from './modules/sla-breach/sla-breach.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { TenantIntelligenceModule } from './modules/tenant-intelligence/tenant-i
     InventoryModule,
     LocationModule,
     TenantIntelligenceModule,
+    SlaBreachModule,
   ],
 })
 export class AppModule {}
