@@ -62,6 +62,10 @@ export const QATAR_CONFIG = {
   supportedLanguages: ['ar', 'en'],
   taxPercent: 0,
   maintenanceSlaHours: 24,
+  slaFallbackMinutes: {
+    responseSlaMinutes: 120,
+    completionSlaMinutes: 24 * 60,
+  },
   freeMoveInCapMinor: 50000,
   googleRegionCode: 'QA',
   cities: ['Doha', 'Lusail', 'Al Rayyan', 'Al Wakrah', 'Al Khor'],

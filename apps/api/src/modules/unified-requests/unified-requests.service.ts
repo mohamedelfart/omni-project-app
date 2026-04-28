@@ -3,6 +3,7 @@ import { Prisma, RequestPriority, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
+import { SlaPolicyService } from '../sla-policy/sla-policy.service';
 import type { TicketAction } from '@quickrent/shared-types';
 import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -28,6 +29,7 @@ export class UnifiedRequestsService {
     private readonly auditTrailService: AuditTrailService,
     private readonly unifiedRequestsGateway: UnifiedRequestsGateway,
     private readonly ticketActionsService: TicketActionsService,
+    private readonly slaPolicyService: SlaPolicyService,
   ) {}
 
   private toJson(value: unknown): Prisma.InputJsonValue {
@@ -57,8 +59,8 @@ export class UnifiedRequestsService {
   }
 
   async create(userId: string, dto: CreateUnifiedRequestDto) {
-    const unifiedRequest = await this.prisma.$transaction((tx) =>
-      tx.unifiedRequest.create({
+    const unifiedRequest = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.unifiedRequest.create({
         data: {
           userId,
           tenantId: userId,
@@ -85,8 +87,29 @@ export class UnifiedRequestsService {
           },
         },
         include: { trackingEvents: true },
-      }),
-    );
+      });
+
+      const resolved = await this.slaPolicyService.resolveSla(
+        {
+          countryCode: created.country,
+          serviceType: created.serviceType,
+          priority: created.priority,
+          at: created.createdAt,
+        },
+        tx,
+      );
+
+      const baseMs = created.createdAt.getTime();
+      return tx.unifiedRequest.update({
+        where: { id: created.id },
+        data: {
+          slaPolicyRuleId: resolved.matchedRule?.id ?? null,
+          responseDueAt: new Date(baseMs + resolved.responseSlaMinutes * 60_000),
+          completionDueAt: new Date(baseMs + resolved.completionSlaMinutes * 60_000),
+        },
+        include: { trackingEvents: true },
+      });
+    });
 
     const routing = await this.orchestratorService.routeRequest(unifiedRequest.id);
 
@@ -348,8 +371,8 @@ export class UnifiedRequestsService {
   }
 
   async createRealtimeRequest(userId: string, dto: CreateRealtimeRequestDto) {
-    const created = await this.prisma.$transaction((tx) =>
-      tx.unifiedRequest.create({
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.unifiedRequest.create({
         data: {
           userId,
           tenantId: userId,
@@ -364,8 +387,28 @@ export class UnifiedRequestsService {
           status: UnifiedRequestStatus.SUBMITTED,
           vendorId: dto.vendorId,
         },
-      }),
-    );
+      });
+
+      const resolved = await this.slaPolicyService.resolveSla(
+        {
+          countryCode: row.country,
+          serviceType: row.serviceType,
+          priority: row.priority,
+          at: row.createdAt,
+        },
+        tx,
+      );
+
+      const baseMs = row.createdAt.getTime();
+      return tx.unifiedRequest.update({
+        where: { id: row.id },
+        data: {
+          slaPolicyRuleId: resolved.matchedRule?.id ?? null,
+          responseDueAt: new Date(baseMs + resolved.responseSlaMinutes * 60_000),
+          completionDueAt: new Date(baseMs + resolved.completionSlaMinutes * 60_000),
+        },
+      });
+    });
 
     const minimal = this.toMinimalRequest(created);
     this.unifiedRequestsGateway.emitToRooms(

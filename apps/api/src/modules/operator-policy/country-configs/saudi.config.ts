@@ -54,6 +54,10 @@ export const SAUDI_CONFIG = {
   supportedLanguages: ['ar', 'en'],
   taxPercent: 15,
   maintenanceSlaHours: 24,
+  slaFallbackMinutes: {
+    responseSlaMinutes: 120,
+    completionSlaMinutes: 24 * 60,
+  },
   freeMoveInCapMinor: 75000,
   googleRegionCode: 'SA',
   cities: ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'NEOM'],

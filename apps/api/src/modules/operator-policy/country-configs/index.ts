@@ -47,6 +47,11 @@ export interface CountryDefinition {
   supportedLanguages: string[];
   taxPercent: number;
   maintenanceSlaHours: number;
+  /** Fallback SLA when no `SlaPolicyRule` row matches (minutes from request `createdAt`). */
+  slaFallbackMinutes: {
+    responseSlaMinutes: number;
+    completionSlaMinutes: number;
+  };
   freeMoveInCapMinor: number;
   googleRegionCode: string;
   cities: string[];

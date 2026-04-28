@@ -45,6 +45,10 @@ export const EGYPT_READY_CONFIG = {
   supportedLanguages: ['ar', 'en'],
   taxPercent: 14,
   maintenanceSlaHours: 24,
+  slaFallbackMinutes: {
+    responseSlaMinutes: 120,
+    completionSlaMinutes: 24 * 60,
+  },
   freeMoveInCapMinor: 120000,
   googleRegionCode: 'EG',
   cities: ['Cairo', 'New Cairo', '6th of October', 'Alexandria'],

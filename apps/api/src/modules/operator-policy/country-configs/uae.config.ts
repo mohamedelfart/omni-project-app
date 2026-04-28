@@ -70,6 +70,10 @@ export const UAE_CONFIG = {
   supportedLanguages: ['ar', 'en'],
   taxPercent: 5,             // 5% VAT
   maintenanceSlaHours: 12,
+  slaFallbackMinutes: {
+    responseSlaMinutes: 120,
+    completionSlaMinutes: 12 * 60,
+  },
   freeMoveInCapMinor: 60000,
   googleRegionCode: 'AE',
   cities: ['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman', 'Ras Al Khaimah'],
