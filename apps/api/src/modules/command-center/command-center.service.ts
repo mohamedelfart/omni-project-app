@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { BookingStatus, PaymentStatus, PropertyStatus } from '@prisma/client';
+import type { CommandCenterRequestSlaSnapshot } from './dto/command-center-request-sla.dto';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { LocationService } from '../location/location.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
@@ -162,6 +163,25 @@ export class CommandCenterService {
     };
   }
 
+  /** DB-backed SLA slice for command-center payloads (no derived urgency labels). */
+  private pickSlaSnapshot(request: {
+    responseDueAt: Date | null;
+    completionDueAt: Date | null;
+    slaBreached: boolean;
+    breachType: string | null;
+    escalationLevel: number;
+    firstBreachedAt: Date | null;
+  }): CommandCenterRequestSlaSnapshot {
+    return {
+      responseDueAt: request.responseDueAt,
+      completionDueAt: request.completionDueAt,
+      slaBreached: request.slaBreached,
+      breachType: request.breachType,
+      escalationLevel: request.escalationLevel,
+      firstBreachedAt: request.firstBreachedAt,
+    };
+  }
+
   private extractTicketLocationContext(request: {
     pickupLat?: number | null;
     pickupLng?: number | null;
@@ -268,6 +288,7 @@ export class CommandCenterService {
           updatedAt: request.updatedAt,
           country: request.country,
           city: request.city,
+          sla: this.pickSlaSnapshot(request),
           cost: {
             coveredAmountMinor: financials.coveredAmountMinor,
             excessAmountMinor: financials.tenantOwesMinor,
@@ -736,6 +757,9 @@ export class CommandCenterService {
         confirmedBookings: bookings.filter((booking) => ['CONFIRMED', 'ACTIVE'].includes(booking.status)).length,
         paymentExceptions: requests.filter((request) => request.paymentStatus === 'FAILED').length,
         escalationAlerts: alerts,
+        slaBreachedActiveTickets: requests.filter(
+          (request) => this.isActiveStatus(request.status) && request.slaBreached,
+        ).length,
       },
       operations: {
         activeTickets,
@@ -772,28 +796,30 @@ export class CommandCenterService {
   }
 
   listRequests(filters?: DashboardFilters) {
-    return this.prisma.unifiedRequest.findMany({
-      where: this.buildRequestWhere(filters),
-      include: {
-        trackingEvents: true,
-        user: { select: { fullName: true, phoneNumber: true } },
-        payment: {
-          select: {
-            id: true,
-            amountMinor: true,
-            currency: true,
-            status: true,
+    return this.prisma.unifiedRequest
+      .findMany({
+        where: this.buildRequestWhere(filters),
+        include: {
+          trackingEvents: true,
+          user: { select: { fullName: true, phoneNumber: true } },
+          payment: {
+            select: {
+              id: true,
+              amountMinor: true,
+              currency: true,
+              status: true,
+            },
+          },
+          viewingRequest: {
+            include: {
+              items: { include: { property: { select: { id: true, title: true, city: true, district: true } } } },
+              assignment: { include: { provider: { select: { id: true, name: true, city: true } } } },
+            },
           },
         },
-        viewingRequest: {
-          include: {
-            items: { include: { property: { select: { id: true, title: true, city: true, district: true } } } },
-            assignment: { include: { provider: { select: { id: true, name: true, city: true } } } },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        orderBy: { createdAt: 'desc' },
+      })
+      .then((rows) => rows.map((row) => ({ ...row, sla: this.pickSlaSnapshot(row) })));
   }
 
   async assignProvider(actorUserId: string, requestId: string, providerId: string) {
