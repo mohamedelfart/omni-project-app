@@ -431,6 +431,24 @@ model ShortlistItem {
   @@unique([shortlistId, position])
 }
 
+/// Versioned SLA windows per country / service / priority. Resolution logic is added later.
+model SlaPolicyRule {
+  id                    String           @id @default(cuid())
+  countryCode           String
+  serviceType           String
+  priority              RequestPriority
+  responseSlaMinutes    Int
+  completionSlaMinutes  Int
+  effectiveFrom         DateTime
+  effectiveTo           DateTime?
+  isActive              Boolean          @default(true)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  unifiedRequests       UnifiedRequest[]
+
+  @@index([countryCode, serviceType, priority, effectiveFrom])
+}
+
 model UnifiedRequest {
   id                    String                        @id @default(cuid())
   userId                String
@@ -460,9 +478,19 @@ model UnifiedRequest {
   notes                 String?
   metadata              Json?
   routeData             Json?
+  slaPolicyRuleId       String?
+  responseDueAt         DateTime?
+  completionDueAt       DateTime?
+  firstResponseAt       DateTime?
+  completedAt           DateTime?
+  slaBreached           Boolean                      @default(false)
+  firstBreachedAt       DateTime?
+  breachType            String?
+  escalationLevel       Int                          @default(0)
   createdAt             DateTime                     @default(now())
   updatedAt             DateTime                     @updatedAt
   user                  User                         @relation("UnifiedRequestUser", fields: [userId], references: [id], onDelete: Restrict)
+  slaPolicyRule         SlaPolicyRule?               @relation(fields: [slaPolicyRuleId], references: [id], onDelete: SetNull)
   trackingEvents        UnifiedRequestTrackingEvent[]
   viewingRequest        ViewingRequest?
   booking               Booking?
@@ -476,6 +504,7 @@ model UnifiedRequest {
   ticketActions         TicketAction[]
 
   @@index([status, serviceType, country, city])
+  @@index([slaPolicyRuleId])
 }
 
 model TicketAction {
