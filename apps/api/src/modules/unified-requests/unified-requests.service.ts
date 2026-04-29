@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { SlaPolicyService } from '../sla-policy/sla-policy.service';
 import type { TicketAction } from '@quickrent/shared-types';
+import { mapPersistedTicketActionToDomain } from '../ticket-actions/ticket-actions.mapper';
 import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import {
@@ -206,7 +207,8 @@ export class UnifiedRequestsService {
   }
 
   /**
-   * Append-only: records `ESCALATE` on the ticket. Does not mutate `UnifiedRequest` state.
+   * Records `ESCALATE` on the ticket (append-only action row) and raises `UnifiedRequest.escalationLevel`
+   * to at least 1 so command-center / escalations read models stay aligned with manual escalation.
    */
   async appendEscalationAction(
     ticketId: string,
@@ -217,14 +219,6 @@ export class UnifiedRequestsService {
     const canEscalate = effectiveRoles.some((r) => r === 'admin' || r === 'command-center');
     if (!canEscalate) {
       throw new ForbiddenException('Only admin or command-center can escalate');
-    }
-
-    const ticket = await this.prisma.unifiedRequest.findUnique({
-      where: { id: ticketId },
-      select: { id: true },
-    });
-    if (!ticket) {
-      throw new NotFoundException('Request not found');
     }
 
     const payload: Record<string, unknown> = { reason: dto.reason };
@@ -238,12 +232,37 @@ export class UnifiedRequestsService {
         ? 'command-center'
         : user.role;
 
-    return this.ticketActionsService.createAction({
-      ticketId,
-      actionType: 'ESCALATE',
-      actorType,
-      actorId: user.id,
-      payload: this.toJson(payload),
+    const payloadJson = this.toJson(payload);
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.unifiedRequest.findUnique({
+        where: { id: ticketId },
+        select: { id: true, escalationLevel: true },
+      });
+      if (!existing) {
+        throw new NotFoundException('Request not found');
+      }
+
+      const created = await tx.ticketAction.create({
+        data: {
+          ticketId,
+          actionType: 'ESCALATE',
+          actorType,
+          actorId: user.id,
+          payload: payloadJson,
+        },
+      });
+
+      const priorLevel = existing.escalationLevel ?? 0;
+      const nextLevel = Math.max(priorLevel, 1);
+      if (nextLevel > priorLevel) {
+        await tx.unifiedRequest.update({
+          where: { id: ticketId },
+          data: { escalationLevel: nextLevel },
+        });
+      }
+
+      return mapPersistedTicketActionToDomain(created);
     });
   }
 
