@@ -54,8 +54,8 @@ export class UnifiedRequestsController {
 
   @Get('realtime/vendor/me')
   @Roles('provider')
-  listRealtimeForVendor(@CurrentUser() user: { id: string }) {
-    return this.unifiedRequestsService.listRealtimeForVendor(user.id);
+  listRealtimeForVendor(@CurrentUser() user: AuthenticatedUser) {
+    return this.unifiedRequestsService.listRealtimeForVendor(user);
   }
 
   @Get('realtime')
@@ -73,11 +73,11 @@ export class UnifiedRequestsController {
   @Post('realtime/:id/status')
   @Roles('provider')
   updateRealtimeStatus(
-    @CurrentUser() user: { id: string },
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() dto: UpdateRealtimeRequestStatusDto,
   ) {
-    return this.unifiedRequestsService.updateRealtimeStatus(id, user.id, dto);
+    return this.unifiedRequestsService.updateRealtimeStatus(id, user, dto);
   }
 
   @Get(':id/history')

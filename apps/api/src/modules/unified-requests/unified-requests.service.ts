@@ -459,14 +459,20 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  async listRealtimeForVendor(userId: string) {
-    const providerIds = await this.providerIdsForUser(userId);
+  async listRealtimeForVendor(user: AuthenticatedUser) {
+    const providerIds = await this.providerIdsForUser(user.id);
     if (!providerIds.length) {
       return [];
     }
+    const providerContextId = typeof user.providerContextId === 'string' ? user.providerContextId : null;
+    const scopedProviderIds = providerContextId
+      ? providerIds.includes(providerContextId)
+        ? [providerContextId]
+        : (() => { throw new ForbiddenException('Provider session context is invalid for current user'); })()
+      : providerIds;
 
     return this.prisma.unifiedRequest.findMany({
-      where: { vendorId: { in: providerIds } },
+      where: { vendorId: { in: scopedProviderIds } },
       orderBy: { createdAt: 'desc' },
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
@@ -614,18 +620,24 @@ export class UnifiedRequestsService {
     });
   }
 
-  async updateRealtimeStatus(requestId: string, userId: string, dto: UpdateRealtimeRequestStatusDto) {
-    const providerIds = await this.providerIdsForUser(userId);
+  async updateRealtimeStatus(requestId: string, user: AuthenticatedUser, dto: UpdateRealtimeRequestStatusDto) {
+    const providerIds = await this.providerIdsForUser(user.id);
     if (!providerIds.length) {
       throw new ForbiddenException('No provider profile attached to current user');
     }
+    const providerContextId = typeof user.providerContextId === 'string' ? user.providerContextId : null;
+    const scopedProviderIds = providerContextId
+      ? providerIds.includes(providerContextId)
+        ? [providerContextId]
+        : (() => { throw new ForbiddenException('Provider session context is invalid for current user'); })()
+      : providerIds;
 
     const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
       where: { id: requestId },
       select: { id: true, vendorId: true, status: true },
     });
 
-    if (!existing.vendorId || !providerIds.includes(existing.vendorId)) {
+    if (!existing.vendorId || !scopedProviderIds.includes(existing.vendorId)) {
       throw new ForbiddenException('Request is not assigned to this vendor');
     }
 
@@ -661,7 +673,7 @@ export class UnifiedRequestsService {
       ticketId: requestId,
       actionType: 'CHANGE_STATUS',
       actorType: 'provider',
-      actorId: userId,
+      actorId: user.id,
       payload: {
         fromStatus: current,
         toStatus: dto.status,
