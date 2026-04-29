@@ -233,11 +233,15 @@ export class UnifiedRequestsService {
         : user.role;
 
     const payloadJson = this.toJson(payload);
+    const auditMetadata: Record<string, unknown> = { reason: dto.reason };
+    if (dto.level !== undefined && dto.level !== '') auditMetadata.level = dto.level;
+    if (dto.target !== undefined && dto.target !== '') auditMetadata.target = dto.target;
+    if (dto.references && dto.references.length > 0) auditMetadata.referencesCount = dto.references.length;
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.unifiedRequest.findUnique({
         where: { id: ticketId },
-        select: { id: true, escalationLevel: true },
+        select: { id: true, escalationLevel: true, country: true },
       });
       if (!existing) {
         throw new NotFoundException('Request not found');
@@ -261,6 +265,17 @@ export class UnifiedRequestsService {
           data: { escalationLevel: nextLevel },
         });
       }
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: user.id || undefined,
+          action: 'manual_escalation',
+          entity: 'UnifiedRequest',
+          entityId: ticketId,
+          countryCode: existing.country,
+          metadata: this.toJson(auditMetadata),
+        },
+      });
 
       return mapPersistedTicketActionToDomain(created);
     });
