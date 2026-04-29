@@ -392,6 +392,7 @@ export class AuthService {
     roles: UserRole[],
     options?: { sessionType?: 'guest' },
   ): Promise<AuthTokens> {
+    const providerContextId = await this.getSafeProviderContextId(role, userId);
     const createdSession = await this.prisma.session.create({
       data: {
         userId,
@@ -400,7 +401,7 @@ export class AuthService {
         refreshTokenHash: this.hashSecret(randomUUID()),
         refreshTokenFamily: randomUUID(),
         refreshTokenVersion: 1,
-        providerContextId: this.getSafeProviderContextId(role),
+        providerContextId,
         tenantContextId: this.getSafeTenantContextId(role, userId),
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         lastUsedAt: new Date(),
@@ -582,12 +583,18 @@ export class AuthService {
     }
   }
 
-  private getSafeProviderContextId(role: UserRole): string | null {
+  private async getSafeProviderContextId(role: UserRole, userId: string): Promise<string | null> {
     if (role !== 'provider') {
       return null;
     }
-    // Provider context can be backfilled later when provider profile context is wired in auth payload.
-    return null;
+    const profiles = await this.prisma.providerProfile.findMany({
+      where: { userId },
+      select: { providerId: true },
+    });
+    if (profiles.length !== 1) {
+      return null;
+    }
+    return profiles[0]!.providerId;
   }
 
   private getSafeTenantContextId(role: UserRole, userId: string): string | null {
