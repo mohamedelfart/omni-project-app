@@ -575,6 +575,8 @@ export class AuthService {
         return SessionActiveRole.GUEST;
       case 'tenant':
         return SessionActiveRole.TENANT;
+      case 'landlord':
+        return SessionActiveRole.LANDLORD;
       default:
         return null;
     }
