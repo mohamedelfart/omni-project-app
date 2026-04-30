@@ -28,6 +28,7 @@ import { HealthModule } from './modules/health/health.module';
 import { LocationModule } from './modules/location/location.module';
 import { TenantIntelligenceModule } from './modules/tenant-intelligence/tenant-intelligence.module';
 import { SlaBreachModule } from './modules/sla-breach/sla-breach.module';
+import { ProviderProfilesModule } from './modules/provider-profiles/provider-profiles.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { SlaBreachModule } from './modules/sla-breach/sla-breach.module';
     CommandCenterModule,
     CostControlModule,
     VendorExecutionModule,
+    ProviderProfilesModule,
     InventoryModule,
     LocationModule,
     TenantIntelligenceModule,
