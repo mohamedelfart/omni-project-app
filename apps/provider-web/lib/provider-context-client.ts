@@ -1,4 +1,9 @@
-import { buildAuthHeaders, getAccessToken } from './vendor-session';
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { createElement, useEffect, useState, type ReactElement } from 'react';
+
+import { buildAuthHeaders, clearSession, getAccessToken } from './vendor-session';
 
 export type ProviderMembership = {
   providerId: string;
@@ -104,4 +109,119 @@ export async function postSwitchProviderContext(providerId: string): Promise<Swi
     return { ok: false, authRejected: false, message: extractErrorMessage(payload) };
   }
   return { ok: true };
+}
+
+type NavProviderContext = {
+  label: string;
+  canSwitch: boolean;
+};
+
+export function ProviderNavContextControls(): ReactElement | null {
+  const router = useRouter();
+  const [ctx, setCtx] = useState<NavProviderContext | null>(null);
+
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token) {
+      setCtx(null);
+      return;
+    }
+
+    let cancelled = false;
+    const load = async () => {
+      const outcome = await fetchProviderMemberships();
+      if (cancelled || !outcome.ok) {
+        setCtx(null);
+        return;
+      }
+      const onlyMembership = outcome.memberships.length === 1 ? outcome.memberships[0] : undefined;
+      if (onlyMembership) {
+        setCtx({ label: onlyMembership.providerName, canSwitch: true });
+        return;
+      }
+      if (outcome.memberships.length > 1) {
+        setCtx({ label: 'Provider', canSwitch: true });
+        return;
+      }
+      setCtx(null);
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!ctx) return null;
+
+  const controls: ReactElement[] = [
+    createElement(
+      'span',
+      {
+        key: 'provider-label',
+        style: {
+          padding: '6px 10px',
+          borderRadius: 8,
+          background: 'rgba(249,115,22,0.2)',
+          color: '#FDBA74',
+          fontSize: 12,
+          fontWeight: 700,
+          maxWidth: 180,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        },
+        title: ctx.label,
+      },
+      ctx.label,
+    ),
+  ];
+
+  if (ctx.canSwitch) {
+    controls.push(
+      createElement(
+        'a',
+        {
+          key: 'switch-provider',
+          href: '/select-provider',
+          style: {
+            padding: '8px 14px',
+            borderRadius: 8,
+            color: 'rgba(255,255,255,0.85)',
+            textDecoration: 'none',
+            fontSize: 14,
+            fontWeight: 600,
+          },
+        },
+        'Switch provider',
+      ),
+    );
+  }
+
+  controls.push(
+    createElement(
+      'button',
+      {
+        key: 'global-signout',
+        type: 'button',
+        onClick: () => {
+          clearSession();
+          router.replace('/login');
+        },
+        style: {
+          padding: '8px 14px',
+          borderRadius: 8,
+          border: '1px solid rgba(255,255,255,0.35)',
+          background: 'transparent',
+          color: '#FFFFFF',
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: 'pointer',
+        },
+      },
+      'Sign out',
+    ),
+  );
+
+  return createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } }, ...controls);
 }

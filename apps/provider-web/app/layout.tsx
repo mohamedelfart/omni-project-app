@@ -2,6 +2,7 @@ import './globals.css';
 import type { Metadata } from 'next';
 import { ReactNode } from 'react';
 import Link from 'next/link';
+import { ProviderNavContextControls } from '../lib/provider-context-client';
 
 export const metadata: Metadata = {
   title: 'QuickRent Vendor App',
@@ -37,6 +38,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           </div>
           {/* Status indicator */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ProviderNavContextControls />
             <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#10B981', display: 'inline-block', boxShadow: '0 0 6px #10B981' }} />
             <span style={{ fontSize: 13, fontWeight: 600 }}>Online</span>
           </div>
