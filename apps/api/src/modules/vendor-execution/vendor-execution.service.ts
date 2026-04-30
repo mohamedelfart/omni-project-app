@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { TenantPerksService } from '../notifications/tenant-perks.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
@@ -22,14 +23,27 @@ export class VendorExecutionService {
     return profiles.map((profile) => profile.providerId);
   }
 
-  async listMyTickets(userId: string) {
-    const providerIds = await this.providerIdsForUser(userId);
+  private scopeProviderIds(providerIds: string[], user: AuthenticatedUser): string[] {
+    const providerContextId = typeof user.providerContextId === 'string' ? user.providerContextId : null;
+    if (!providerContextId) {
+      return providerIds;
+    }
+    if (!providerIds.includes(providerContextId)) {
+      throw new ForbiddenException('Provider session context is invalid for current user');
+    }
+    return [providerContextId];
+  }
+
+  async listMyTickets(user: AuthenticatedUser) {
+    const providerIds = await this.providerIdsForUser(user.id);
     if (!providerIds.length) {
       return [];
     }
 
+    const scopedProviderIds = this.scopeProviderIds(providerIds, user);
+
     const requests = await this.prisma.unifiedRequest.findMany({
-      where: { vendorId: { in: providerIds } },
+      where: { vendorId: { in: scopedProviderIds } },
       include: {
         user: { select: { fullName: true, phoneNumber: true, email: true } },
         viewingRequest: {
@@ -79,22 +93,24 @@ export class VendorExecutionService {
     }));
   }
 
-  async updateTicketStatus(userId: string, ticketId: string, status: string, note?: string) {
-    const providerIds = await this.providerIdsForUser(userId);
+  async updateTicketStatus(user: AuthenticatedUser, ticketId: string, status: string, note?: string) {
+    const providerIds = await this.providerIdsForUser(user.id);
     if (!providerIds.length) {
       throw new ForbiddenException('No provider profile attached to current user');
     }
+
+    const scopedProviderIds = this.scopeProviderIds(providerIds, user);
 
     const ticket = await this.prisma.unifiedRequest.findUnique({ where: { id: ticketId } });
     if (!ticket) {
       throw new NotFoundException('Ticket not found');
     }
 
-    if (!ticket.vendorId || !providerIds.includes(ticket.vendorId)) {
+    if (!ticket.vendorId || !scopedProviderIds.includes(ticket.vendorId)) {
       throw new ForbiddenException('Ticket is not assigned to your provider account');
     }
 
-    const updated = await this.orchestratorService.updateRequestStatusFromVendor(ticket.id, userId, status, note);
+    const updated = await this.orchestratorService.updateRequestStatusFromVendor(ticket.id, user.id, status, note);
 
     if (updated.status === 'COMPLETED') {
       const perkPolicy = this.operatorPolicyService.getPerkPolicy(ticket.country);
