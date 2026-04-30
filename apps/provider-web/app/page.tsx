@@ -10,7 +10,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (getAccessToken()) {
-      router.replace('/jobs');
+      router.replace('/select-provider');
     } else {
       router.replace('/login');
     }

@@ -53,7 +53,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (getAccessToken()) {
-      router.replace('/jobs');
+      router.replace('/select-provider');
     }
   }, [router]);
 
@@ -76,7 +76,7 @@ export default function LoginPage() {
         throw new Error('Login response missing tokens');
       }
       persistSession(tokens);
-      router.replace('/jobs');
+      router.replace('/select-provider');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
