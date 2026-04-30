@@ -50,6 +50,7 @@ node_modules
 **/.next/
 **/dist/
 apps/mobile/.expo/
+*.tsbuildinfo
 
 # Local environment secrets (never commit)
 .env
