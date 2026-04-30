@@ -33,6 +33,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       activeRole: sessionContext.activeRole,
       providerContextId: sessionContext.providerContextId,
       tenantContextId: sessionContext.tenantContextId,
+      sessionId: sessionContext.sessionId,
     };
   }
 
@@ -40,11 +41,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     payload: { sub: string; sid?: string | null },
     authorityRoles: UserRole[],
     fallbackRole: UserRole,
-  ): Promise<{ activeRole: UserRole; providerContextId?: string; tenantContextId?: string }> {
+  ): Promise<{
+    activeRole: UserRole;
+    providerContextId?: string;
+    tenantContextId?: string;
+    sessionId?: string | null;
+  }> {
     const sid = typeof payload.sid === 'string' && payload.sid.trim() ? payload.sid.trim() : null;
     if (!sid) {
       // Legacy access tokens without sid remain valid during migration.
-      return { activeRole: fallbackRole };
+      return { activeRole: fallbackRole, sessionId: null };
     }
 
     const session = await this.prisma.session.findFirst({
@@ -142,6 +148,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       activeRole: normalizedActiveRole,
       providerContextId: session.providerContextId ?? undefined,
       tenantContextId: session.tenantContextId ?? undefined,
+      sessionId: sid,
     };
   }
 

@@ -7,6 +7,7 @@ export interface AuthenticatedUser {
   activeRole?: string;
   providerContextId?: string | null;
   tenantContextId?: string | null;
+  sessionId?: string | null;
 }
 
 export const CurrentUser = createParamDecorator(
