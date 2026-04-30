@@ -198,7 +198,15 @@ export class UnifiedRequestsService {
     }
     if (isProvider) {
       const providerIds = await this.providerIdsForUser(user.id);
-      if (ticket.vendorId && providerIds.includes(ticket.vendorId)) {
+      const providerContextId = typeof user.providerContextId === 'string' ? user.providerContextId : null;
+      const scopedProviderIds = providerContextId
+        ? providerIds.includes(providerContextId)
+          ? [providerContextId]
+          : (() => {
+              throw new ForbiddenException('Provider session context is invalid for current user');
+            })()
+        : providerIds;
+      if (ticket.vendorId && scopedProviderIds.includes(ticket.vendorId)) {
         return this.ticketActionsService.listHistoryByTicketId(requestId);
       }
     }
