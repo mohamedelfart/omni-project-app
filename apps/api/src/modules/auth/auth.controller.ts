@@ -1,8 +1,10 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentUser, type AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
 import {
   CompleteProfileDto,
   ForgotPasswordDto,
@@ -13,6 +15,7 @@ import {
   RefreshTokenDto,
   RegisterDto,
   ResetPasswordDto,
+  SwitchProviderContextDto,
   VerifyAccountDto,
 } from './dto/auth.dto';
 import { AuthService } from './auth.service';
@@ -79,5 +82,13 @@ export class AuthController {
   @Post('complete-profile')
   completeProfile(@CurrentUser() user: { id: string }, @Body() dto: CompleteProfileDto) {
     return this.authService.completeProfile(user.id, dto);
+  }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('provider')
+  @Post('switch-provider-context')
+  switchProviderContext(@CurrentUser() user: AuthenticatedUser, @Body() dto: SwitchProviderContextDto) {
+    return this.authService.switchProviderContext(user, dto.providerId);
   }
 }

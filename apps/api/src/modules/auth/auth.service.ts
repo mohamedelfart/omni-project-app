@@ -1,4 +1,11 @@
-import { ConflictException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { RoleCode, SessionActiveRole, SessionType } from '@prisma/client';
@@ -6,6 +13,8 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 
 import { AuthTokens, UserRole } from '@quickrent/shared-types';
 
+import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CompleteProfileDto,
@@ -38,6 +47,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly auditTrailService: AuditTrailService,
   ) {}
 
   async register(payload: RegisterDto): Promise<{
@@ -338,6 +348,63 @@ export class AuthService {
     });
 
     return { completed: true };
+  }
+
+  async switchProviderContext(
+    user: AuthenticatedUser,
+    providerId: string,
+  ): Promise<{ success: true; providerContextId: string }> {
+    const effectiveRoles = user.roles?.length ? user.roles : user.role ? [user.role] : [];
+    if (!effectiveRoles.map((r) => String(r).toLowerCase()).includes('provider')) {
+      throw new ForbiddenException('Provider role required');
+    }
+
+    const sessionId = typeof user.sessionId === 'string' && user.sessionId.trim() ? user.sessionId.trim() : null;
+    if (!sessionId) {
+      throw new ForbiddenException('Session-backed access token required');
+    }
+
+    const membership = await this.prisma.providerProfile.findFirst({
+      where: { userId: user.id, providerId },
+      select: { id: true },
+    });
+    if (!membership) {
+      throw new ForbiddenException('Provider is not linked to the current user');
+    }
+
+    const session = await this.prisma.session.findFirst({
+      where: { id: sessionId, userId: user.id, revokedAt: null },
+      select: { id: true, providerContextId: true, expiresAt: true },
+    });
+    if (!session || session.expiresAt.getTime() <= Date.now()) {
+      throw new UnauthorizedException('Session is invalid');
+    }
+
+    const fromProviderContextId = session.providerContextId ?? null;
+
+    await this.prisma.session.update({
+      where: { id: sessionId },
+      data: { providerContextId: providerId },
+    });
+
+    const actor = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { countryCode: true },
+    });
+
+    await this.auditTrailService.write({
+      actorUserId: user.id,
+      action: 'PROVIDER_CONTEXT_SWITCHED',
+      entity: 'Session',
+      entityId: sessionId,
+      countryCode: actor?.countryCode ?? undefined,
+      metadata: {
+        fromProviderContextId,
+        toProviderContextId: providerId,
+      },
+    });
+
+    return { success: true, providerContextId: providerId };
   }
 
   private async issueTokens(

@@ -1,4 +1,4 @@
-import { IsEmail, IsOptional, IsString, Length, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, Length, MinLength } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -86,4 +86,10 @@ export class CompleteProfileDto {
   @IsOptional()
   @IsString()
   preferredCity?: string;
+}
+
+export class SwitchProviderContextDto {
+  @IsString()
+  @IsNotEmpty()
+  providerId!: string;
 }
