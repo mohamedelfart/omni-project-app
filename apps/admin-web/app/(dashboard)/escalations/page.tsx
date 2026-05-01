@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiFetch } from '../../lib/auth';
+import { apiFetch, getAccessToken } from '../../lib/auth';
 
 type CommandCenterRequest = {
   id: string;
@@ -48,6 +48,8 @@ export default function EscalationsPage() {
   const [loading, setLoading] = useState(true);
   const [actionRequestId, setActionRequestId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Session-local only: last manual intervene reason per request (not from API). */
+  const [localInterventionByRequestId, setLocalInterventionByRequestId] = useState<Record<string, string>>({});
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -154,21 +156,45 @@ export default function EscalationsPage() {
 
   const onIntervene = useCallback(
     async (requestId: string) => {
-      const reason = window.prompt('Intervention reason', 'Manual command-center intervention');
+      const reasonRaw = window.prompt('Intervention reason', 'Manual command-center intervention');
+      const interventionReason = reasonRaw?.trim() || 'Manual command-center intervention';
       setActionRequestId(requestId);
       setError(null);
       try {
-        const escalateUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
-        const body = { reason: reason?.trim() || 'Manual command-center intervention' };
-        await postAction(escalateUrl, body);
+        const token = getAccessToken();
+        if (!token) {
+          throw new Error('Not signed in');
+        }
+        console.log('[intervene-call]', requestId);
+        const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            reason: interventionReason,
+          }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          const msg =
+            (payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string' && (payload as { error: string }).error)
+            || (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string' && (payload as { message: string }).message)
+            || 'Intervention failed';
+          throw new Error(msg);
+        }
+        console.log('[intervene-success]', requestId);
+        setLocalInterventionByRequestId((prev) => ({ ...prev, [requestId]: interventionReason }));
         await loadData();
       } catch (e) {
+        console.log('[intervene-error]', e);
         setError(e instanceof Error ? e.message : 'Intervention failed');
       } finally {
         setActionRequestId(null);
       }
     },
-    [apiBase, loadData, postAction],
+    [apiBase, loadData],
   );
 
   const onResolve = useCallback(
@@ -251,6 +277,9 @@ export default function EscalationsPage() {
         {escalations.map((e) => {
           const sev = severityConfig[e.severity] ?? { bg: '#F9FAFB', color: '#374151', border: '#E5E7EB' };
           const sta = statusConfig[e.status] ?? { bg: '#F3F4F6', color: '#374151' };
+          const interventionNote = localInterventionByRequestId[e.requestId];
+          const interventionNoteShort =
+            interventionNote && interventionNote.length > 80 ? `${interventionNote.slice(0, 80)}…` : interventionNote;
           return (
             <article
               key={e.id}
@@ -271,8 +300,28 @@ export default function EscalationsPage() {
                   <span style={{ fontFamily: 'monospace', fontSize: 12, color: sev.color, fontWeight: 700 }}>{e.id}</span>
                   <span style={{ padding: '2px 10px', borderRadius: 20, background: sev.color, color: '#FFFFFF', fontSize: 11, fontWeight: 800 }}>{e.severity}</span>
                   <span style={{ padding: '2px 10px', borderRadius: 20, background: sta.bg, color: sta.color, fontSize: 11, fontWeight: 700, border: `1px solid ${sta.color}20` }}>{e.status}</span>
+                  {interventionNote ? (
+                    <span
+                      style={{
+                        padding: '2px 8px',
+                        borderRadius: 20,
+                        background: '#312E81',
+                        color: '#EEF2FF',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        letterSpacing: 0.2,
+                      }}
+                    >
+                      Intervened
+                    </span>
+                  ) : null}
                   <span style={{ fontSize: 12, color: '#6B7280', marginLeft: 'auto' }}>📍 {e.market}</span>
                 </div>
+                {interventionNoteShort ? (
+                  <div style={{ fontSize: 11, color: '#4F46E5', marginBottom: 8, lineHeight: 1.35 }} title={interventionNote}>
+                    Last intervention: {interventionNoteShort}
+                  </div>
+                ) : null}
 
                 {/* Main */}
                 <div style={{ fontWeight: 700, color: '#111827', fontSize: 15, marginBottom: 4 }}>
@@ -295,7 +344,10 @@ export default function EscalationsPage() {
                   <>
                     <button
                       disabled={actionRequestId === e.requestId}
-                      onClick={() => void onIntervene(e.requestId)}
+                      onClick={() => {
+                        console.log('[ui-click-intervene]', e.requestId);
+                        void onIntervene(e.requestId);
+                      }}
                       style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: '#1E3A5F', color: '#FFFFFF', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
                     >
                       Intervene
