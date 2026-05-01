@@ -166,15 +166,11 @@ export default function EscalationsPage() {
           throw new Error('Not signed in');
         }
         console.log('[intervene-call]', requestId);
-        const response = await fetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+        const escalateUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
+        const response = await apiFetch(escalateUrl, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            reason: interventionReason,
-          }),
+          cache: 'no-store',
+          body: JSON.stringify({ reason: interventionReason }),
         });
         const payload = await response.json().catch(() => null);
         if (!response.ok) {

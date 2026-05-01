@@ -93,8 +93,15 @@ async function refreshSession(): Promise<AuthSession | null> {
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload || typeof payload !== 'object') return null;
-      const accessToken = normalizeJwt((payload as { accessToken?: string }).accessToken ?? null);
-      const refreshToken = normalizeJwt((payload as { refreshToken?: string }).refreshToken ?? null);
+      const root = payload as Record<string, unknown>;
+      const data = root.data;
+      const fromData = data && typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : null;
+      const accessFromData = fromData && typeof fromData.accessToken === 'string' ? fromData.accessToken : undefined;
+      const refreshFromData = fromData && typeof fromData.refreshToken === 'string' ? fromData.refreshToken : undefined;
+      const accessFromRoot = typeof root.accessToken === 'string' ? root.accessToken : undefined;
+      const refreshFromRoot = typeof root.refreshToken === 'string' ? root.refreshToken : undefined;
+      const accessToken = normalizeJwt((accessFromData ?? accessFromRoot) ?? null);
+      const refreshToken = normalizeJwt((refreshFromData ?? refreshFromRoot) ?? null);
       if (!accessToken || !refreshToken) return null;
       const nextSession: AuthSession = { accessToken, refreshToken };
       setAuthSession(nextSession);
