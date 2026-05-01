@@ -215,8 +215,8 @@ export class UnifiedRequestsService {
   }
 
   /**
-   * Records `ESCALATE` on the ticket (append-only action row) and raises `UnifiedRequest.escalationLevel`
-   * to at least 1 so command-center / escalations read models stay aligned with manual escalation.
+   * Records `ESCALATE` on the ticket (append-only action row) and bumps `UnifiedRequest.escalationLevel`
+   * by one (capped at 5) so repeated manual escalations progress command-center severity.
    */
   async appendEscalationAction(
     ticketId: string,
@@ -266,7 +266,8 @@ export class UnifiedRequestsService {
       });
 
       const priorLevel = existing.escalationLevel ?? 0;
-      const nextLevel = Math.max(priorLevel, 1);
+      let nextLevel = priorLevel + 1;
+      nextLevel = Math.min(nextLevel, 5);
       if (nextLevel > priorLevel) {
         await tx.unifiedRequest.update({
           where: { id: ticketId },
