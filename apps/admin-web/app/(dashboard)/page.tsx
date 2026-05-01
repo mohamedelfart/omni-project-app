@@ -716,13 +716,17 @@ export default function AdminOverviewPage() {
     const body: Record<string, unknown> = { reason: escalateReason.trim() };
     if (escalateLevel.trim()) body.level = escalateLevel.trim();
     if (escalateTarget.trim()) body.target = escalateTarget.trim();
+    const escalateUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
     try {
-      const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+      // Temporary wiring diagnostics (remove after escalation QA sign-off)
+      console.log('[admin-escalation] POST', escalateUrl, { payload: body });
+      const response = await apiFetch(escalateUrl, {
         method: 'POST',
         cache: 'no-store',
         body: JSON.stringify(body),
       });
       const payload = await response.json().catch(() => null);
+      console.log('[admin-escalation] response', response.status, payload);
       if (!response.ok) {
         throw new Error(getLoadErrorMessage(payload));
       }
@@ -730,6 +734,7 @@ export default function AdminOverviewPage() {
       setEscalateReason('');
       setEscalateLevel('');
       setEscalateTarget('');
+      await refreshRequestList();
       if (timelineForId === requestId) {
         await loadTimeline(requestId);
       }
@@ -744,13 +749,17 @@ export default function AdminOverviewPage() {
     setEscalateSubmitting(true);
     setEscalateError(null);
     setError(null);
+    const quickUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
+    const quickBody = { reason: SLA_QUICK_ESCALATE_REASON };
     try {
-      const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+      console.log('[admin-escalation] POST', quickUrl, { payload: quickBody });
+      const response = await apiFetch(quickUrl, {
         method: 'POST',
         cache: 'no-store',
-        body: JSON.stringify({ reason: SLA_QUICK_ESCALATE_REASON }),
+        body: JSON.stringify(quickBody),
       });
       const payload = await response.json().catch(() => null);
+      console.log('[admin-escalation] response', response.status, payload);
       if (!response.ok) {
         throw new Error(getLoadErrorMessage(payload));
       }
@@ -758,6 +767,7 @@ export default function AdminOverviewPage() {
       setEscalateReason('');
       setEscalateLevel('');
       setEscalateTarget('');
+      await refreshRequestList();
       if (timelineForId === requestId) {
         await loadTimeline(requestId);
       }
@@ -791,18 +801,27 @@ export default function AdminOverviewPage() {
     try {
       for (const requestId of ids) {
         try {
-          const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`, {
+          const bulkUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
+          const bulkBody = { reason: SLA_QUICK_ESCALATE_REASON };
+          console.log('[admin-escalation] POST', bulkUrl, { payload: bulkBody });
+          const response = await apiFetch(bulkUrl, {
             method: 'POST',
             cache: 'no-store',
-            body: JSON.stringify({ reason: SLA_QUICK_ESCALATE_REASON }),
+            body: JSON.stringify(bulkBody),
           });
           const payload = await response.json().catch(() => null);
+          console.log('[admin-escalation] response', response.status, payload);
           if (!response.ok) {
             throw new Error(getLoadErrorMessage(payload));
           }
         } catch {
           failures += 1;
         }
+      }
+      try {
+        await refreshRequestList();
+      } catch {
+        /* list refresh failure is non-fatal for bulk feedback */
       }
       if (failures === 0) {
         setSelectedRequestIds((prev) => prev.filter((id) => !ids.includes(id)));

@@ -132,12 +132,15 @@ export default function EscalationsPage() {
 
   const postAction = useCallback(
     async (url: string, body: Record<string, unknown>) => {
+      // Temporary wiring diagnostics (remove after escalation QA sign-off)
+      console.log('[admin-cc-action] POST', url, { payload: body });
       const response = await apiFetch(url, {
         method: 'POST',
         cache: 'no-store',
         body: JSON.stringify(body),
       });
       const payload = await response.json().catch(() => null);
+      console.log('[admin-cc-action] response', response.status, payload);
       if (!response.ok) {
         const msg =
           (payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string' && (payload as { error: string }).error)
@@ -155,9 +158,9 @@ export default function EscalationsPage() {
       setActionRequestId(requestId);
       setError(null);
       try {
-        await postAction(`${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/intervene`, {
-          reason: reason?.trim() || 'Manual command-center intervention',
-        });
+        const escalateUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
+        const body = { reason: reason?.trim() || 'Manual command-center intervention' };
+        await postAction(escalateUrl, body);
         await loadData();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Intervention failed');
