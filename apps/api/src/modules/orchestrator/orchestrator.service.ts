@@ -93,6 +93,29 @@ export class OrchestratorService {
     return currentStatus as never;
   }
 
+  /**
+   * Sets `firstResponseAt` / `completedAt` once when entering response-satisfied or completed states.
+   * Does not overwrite existing timestamps.
+   */
+  private buildUnifiedRequestSlaTruthFields(
+    nextStatus: UnifiedRequestStatus,
+    existing: { firstResponseAt: Date | null; completedAt: Date | null },
+  ): Pick<Prisma.UnifiedRequestUpdateInput, 'firstResponseAt' | 'completedAt'> {
+    const now = new Date();
+    const patch: Pick<Prisma.UnifiedRequestUpdateInput, 'firstResponseAt' | 'completedAt'> = {};
+    const responseSatisfied =
+      nextStatus === UnifiedRequestStatus.IN_PROGRESS
+      || nextStatus === UnifiedRequestStatus.EN_ROUTE
+      || nextStatus === UnifiedRequestStatus.COMPLETED;
+    if (responseSatisfied && existing.firstResponseAt == null) {
+      patch.firstResponseAt = now;
+    }
+    if (nextStatus === UnifiedRequestStatus.COMPLETED && existing.completedAt == null) {
+      patch.completedAt = now;
+    }
+    return patch;
+  }
+
   private buildSmartLiteScore(params: {
     serviceTypeMatch: boolean;
     cityMatch: boolean;
@@ -367,11 +390,19 @@ export class OrchestratorService {
 
     const existing = await this.prisma.unifiedRequest.findUnique({
       where: { id: requestId },
-      select: { metadata: true },
+      select: { metadata: true, firstResponseAt: true, completedAt: true },
     });
     const existingMetadata = existing?.metadata && typeof existing.metadata === 'object'
       ? (existing.metadata as Record<string, unknown>)
       : {};
+
+    const slaTruth =
+      existing && (Object.values(UnifiedRequestStatus) as string[]).includes(status)
+        ? this.buildUnifiedRequestSlaTruthFields(status as UnifiedRequestStatus, {
+            firstResponseAt: existing.firstResponseAt,
+            completedAt: existing.completedAt,
+          })
+        : {};
 
     await this.prisma.unifiedRequest.update({
       where: { id: requestId },
@@ -382,6 +413,7 @@ export class OrchestratorService {
           commandInstruction: instructionType,
           commandInstructionPayload: payload,
         }),
+        ...slaTruth,
       },
     });
 
@@ -637,11 +669,17 @@ export class OrchestratorService {
       throw new BadRequestException('Request not found');
     }
 
+    const slaTruth = this.buildUnifiedRequestSlaTruthFields(normalizedStatus, {
+      firstResponseAt: existingRequest.firstResponseAt,
+      completedAt: existingRequest.completedAt,
+    });
+
     const request = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
         status: normalizedStatus as never,
         commandCenterStatus: this.toCommandCenterStatus(mappedStatus.commandCenterStatus),
+        ...slaTruth,
       },
     });
 
@@ -743,12 +781,17 @@ export class OrchestratorService {
     description?: string;
     metadata?: Record<string, unknown>;
   }) {
+    const priorTs = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: params.requestId },
+      select: { firstResponseAt: true, completedAt: true },
+    });
     const request = await this.prisma.unifiedRequest.update({
       where: { id: params.requestId },
       data: {
         status: 'COMPLETED',
         commandCenterStatus: 'RESOLVED',
         propertyIds: params.propertyIds,
+        ...this.buildUnifiedRequestSlaTruthFields(UnifiedRequestStatus.COMPLETED, priorTs),
       },
     });
 
@@ -789,7 +832,7 @@ export class OrchestratorService {
   }) {
     const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
       where: { id: params.requestId },
-      select: { metadata: true, country: true },
+      select: { metadata: true, country: true, firstResponseAt: true, completedAt: true },
     });
 
     const existingMetadata = existing.metadata && typeof existing.metadata === 'object'
@@ -808,6 +851,10 @@ export class OrchestratorService {
           approvalStatus: params.approvalStatus,
           adapter: params.adapterKey,
           dispatchResult: params.dispatchResult,
+        }),
+        ...this.buildUnifiedRequestSlaTruthFields(status as UnifiedRequestStatus, {
+          firstResponseAt: existing.firstResponseAt,
+          completedAt: existing.completedAt,
         }),
       },
     });
@@ -858,6 +905,8 @@ export class OrchestratorService {
         vendorId: true,
         country: true,
         serviceType: true,
+        firstResponseAt: true,
+        completedAt: true,
       },
     });
 
@@ -879,6 +928,10 @@ export class OrchestratorService {
         paymentStatus: params.paymentStatus,
         status: nextStatus,
         commandCenterStatus,
+        ...this.buildUnifiedRequestSlaTruthFields(nextStatus, {
+          firstResponseAt: request.firstResponseAt,
+          completedAt: request.completedAt,
+        }),
       },
     });
 

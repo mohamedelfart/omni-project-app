@@ -568,6 +568,8 @@ export class UnifiedRequestsService {
         propertyIds: true,
         createdAt: true,
         updatedAt: true,
+        firstResponseAt: true,
+        completedAt: true,
       },
     });
 
@@ -580,10 +582,15 @@ export class UnifiedRequestsService {
       throw new BadRequestException(`Invalid status transition: ${current} -> ${dto.status}`);
     }
 
+    const nextStatus = this.fromMinimalStatus(dto.status);
     const updated = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
-        status: this.fromMinimalStatus(dto.status),
+        status: nextStatus,
+        ...this.buildUnifiedRequestSlaTruthFields(nextStatus, {
+          firstResponseAt: existing.firstResponseAt,
+          completedAt: existing.completedAt,
+        }),
       },
     });
 
@@ -643,7 +650,7 @@ export class UnifiedRequestsService {
 
     const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
       where: { id: requestId },
-      select: { id: true, vendorId: true, status: true },
+      select: { id: true, vendorId: true, status: true, firstResponseAt: true, completedAt: true },
     });
 
     if (!existing.vendorId || !scopedProviderIds.includes(existing.vendorId)) {
@@ -659,10 +666,15 @@ export class UnifiedRequestsService {
       throw new BadRequestException(`Invalid status transition: ${current} -> ${dto.status}`);
     }
 
+    const nextStatus = this.fromMinimalStatus(dto.status);
     const updated = await this.prisma.unifiedRequest.update({
       where: { id: requestId },
       data: {
-        status: this.fromMinimalStatus(dto.status),
+        status: nextStatus,
+        ...this.buildUnifiedRequestSlaTruthFields(nextStatus, {
+          firstResponseAt: existing.firstResponseAt,
+          completedAt: existing.completedAt,
+        }),
       },
     });
 
@@ -703,6 +715,29 @@ export class UnifiedRequestsService {
       const message = error instanceof Error ? error.message : 'Unknown logging error';
       console.warn(`TicketAction logging failed: ${message}`);
     });
+  }
+
+  /**
+   * Sets `firstResponseAt` / `completedAt` once when entering response-satisfied or completed states.
+   * Does not overwrite existing timestamps (mirrors orchestrator SLA truth wiring).
+   */
+  private buildUnifiedRequestSlaTruthFields(
+    nextStatus: UnifiedRequestStatus,
+    existing: { firstResponseAt: Date | null; completedAt: Date | null },
+  ): Pick<Prisma.UnifiedRequestUpdateInput, 'firstResponseAt' | 'completedAt'> {
+    const now = new Date();
+    const patch: Pick<Prisma.UnifiedRequestUpdateInput, 'firstResponseAt' | 'completedAt'> = {};
+    const responseSatisfied =
+      nextStatus === UnifiedRequestStatus.IN_PROGRESS
+      || nextStatus === UnifiedRequestStatus.EN_ROUTE
+      || nextStatus === UnifiedRequestStatus.COMPLETED;
+    if (responseSatisfied && existing.firstResponseAt == null) {
+      patch.firstResponseAt = now;
+    }
+    if (nextStatus === UnifiedRequestStatus.COMPLETED && existing.completedAt == null) {
+      patch.completedAt = now;
+    }
+    return patch;
   }
 
   private toMinimalRequest(request: {
