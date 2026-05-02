@@ -13,6 +13,8 @@ import {
   type DashboardRequestStatus,
 } from '../lib/request-status-ui';
 
+type AttentionSeverityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
 type DashboardRequest = {
   id: string;
   tenantId: string;
@@ -27,6 +29,11 @@ type DashboardRequest = {
   primaryPropertyId?: string;
   /** Present when upstream list payload includes `priority` (Prisma `RequestPriority`). */
   priority?: string;
+  /** Command Center vendor-attention read model (`GET .../command-center/requests`). */
+  needsAttention?: boolean;
+  attentionSeverity?: AttentionSeverityLevel;
+  attentionLabel?: string;
+  attentionCodes?: string[];
 };
 
 const DASHBOARD_STATUSES: Exclude<DashboardRequestStatus, 'unknown'>[] = ['pending', 'assigned', 'in_progress', 'completed'];
@@ -118,6 +125,33 @@ function requestSlaAccentColor(aging: AgingTier, priorityTier: PrioritySlaTier):
   return null;
 }
 
+function attentionSeverityBadgeStyle(severity: AttentionSeverityLevel | undefined): {
+  background: string;
+  color: string;
+  border: string;
+} {
+  switch (severity) {
+    case 'CRITICAL':
+      return { background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5' };
+    case 'HIGH':
+      return { background: '#FFEDD5', color: '#C2410C', border: '1px solid #FDBA74' };
+    case 'MEDIUM':
+      return { background: '#FEF9C3', color: '#854D0E', border: '1px solid #FACC15' };
+    case 'LOW':
+    default:
+      return { background: '#F1F5F9', color: '#475569', border: '1px solid #CBD5E1' };
+  }
+}
+
+function vendorAttentionTitle(request: DashboardRequest): string | undefined {
+  const label = typeof request.attentionLabel === 'string' && request.attentionLabel.trim() ? request.attentionLabel.trim() : '';
+  const codes = Array.isArray(request.attentionCodes) ? request.attentionCodes.filter((c) => typeof c === 'string' && c.trim()) : [];
+  if (label && codes.length) return `${label} (${codes.join(', ')})`;
+  if (label) return label;
+  if (codes.length) return codes.join(', ');
+  return undefined;
+}
+
 type RequestSectionGroup = 'attention' | 'in_progress' | 'completed';
 
 /** Uses `status`, `priority`, and SLA helpers on `createdAt` (same rules as row badges). */
@@ -154,12 +188,21 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
           normalizedStatus,
         });
       }
+      const sev = rec.attentionSeverity;
+      const attentionSeverity: AttentionSeverityLevel | undefined =
+        sev === 'LOW' || sev === 'MEDIUM' || sev === 'HIGH' || sev === 'CRITICAL' ? sev : undefined;
       return {
         ...(row as unknown as DashboardRequest),
         id,
         rawStatus,
         status: normalizedStatus,
         priority: typeof row.priority === 'string' ? row.priority : undefined,
+        needsAttention: typeof rec.needsAttention === 'boolean' ? rec.needsAttention : undefined,
+        attentionSeverity,
+        attentionLabel: typeof rec.attentionLabel === 'string' ? rec.attentionLabel : undefined,
+        attentionCodes: Array.isArray(rec.attentionCodes)
+          ? rec.attentionCodes.filter((c): c is string => typeof c === 'string')
+          : undefined,
       };
     })
     .filter((row) => row.id.length > 0);
@@ -1068,7 +1111,7 @@ export default function AdminOverviewPage() {
         <div>
           <strong>{request.id}</strong> - {request.type} - {request.status}
         </div>
-        {slaBadges ? (
+        {slaBadges || request.needsAttention ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {priorityTier === 'critical' ? (
               <span
@@ -1130,6 +1173,20 @@ export default function AdminOverviewPage() {
               >
                 Aging
                 <span style={{ fontWeight: 500, opacity: 0.88 }}> · {hoursOpenHint}</span>
+              </span>
+            ) : null}
+            {request.needsAttention ? (
+              <span
+                title={vendorAttentionTitle(request)}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  ...attentionSeverityBadgeStyle(request.attentionSeverity ?? 'MEDIUM'),
+                }}
+              >
+                ⚠ يحتاج تدخل
               </span>
             ) : null}
           </div>

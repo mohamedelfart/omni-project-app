@@ -79,6 +79,7 @@ type VendorAttentionReadModel = {
 
 const ATTENTION_CODE_SEVERITY: Record<string, AttentionSeverity> = {
   UNASSIGNED_TOO_LONG: 'MEDIUM',
+  ESCALATED: 'MEDIUM',
   VENDOR_NOT_STARTED: 'HIGH',
   RESPONSE_OVERDUE: 'HIGH',
   COMPLETION_OVERDUE: 'CRITICAL',
@@ -86,6 +87,7 @@ const ATTENTION_CODE_SEVERITY: Record<string, AttentionSeverity> = {
 
 const ATTENTION_CODE_LABEL: Record<string, string> = {
   UNASSIGNED_TOO_LONG: 'Unassigned beyond threshold',
+  ESCALATED: 'Escalation active (command center)',
   VENDOR_NOT_STARTED: 'Vendor has not started execution',
   RESPONSE_OVERDUE: 'Response window overdue',
   COMPLETION_OVERDUE: 'Completion window overdue',
@@ -110,7 +112,7 @@ const IS_ACTIVE_UNIFIED_STATUS = new Set([
 
 /**
  * Derived read-model only: no DB writes, no status changes.
- * Signal rules: Step 1A vendor / SLA attention for Command Center payloads.
+ * Signal rules: Step 1A vendor / SLA attention + Step 7B (`escalationLevel` > 0, non-terminal → ESCALATED).
  */
 function computeVendorAttentionReadModel(request: {
   createdAt: Date;
@@ -120,6 +122,7 @@ function computeVendorAttentionReadModel(request: {
   completedAt: Date | null;
   responseDueAt: Date | null;
   completionDueAt: Date | null;
+  escalationLevel?: number | null;
 }): VendorAttentionReadModel {
   const now = Date.now();
   const codeSet = new Set<string>();
@@ -157,6 +160,11 @@ function computeVendorAttentionReadModel(request: {
     if (responseDuePassed || heuristicResponseOverdue) {
       codeSet.add('VENDOR_NOT_STARTED');
     }
+  }
+
+  const escalationLevel = request.escalationLevel ?? 0;
+  if (!isTerminal && escalationLevel > 0) {
+    codeSet.add('ESCALATED');
   }
 
   const attentionCodes = Array.from(codeSet);
@@ -469,6 +477,7 @@ export class CommandCenterService {
             completedAt: request.completedAt,
             responseDueAt: request.responseDueAt,
             completionDueAt: request.completionDueAt,
+            escalationLevel: request.escalationLevel,
           }),
         };
       }),
@@ -975,6 +984,7 @@ export class CommandCenterService {
             completedAt: row.completedAt,
             responseDueAt: row.responseDueAt,
             completionDueAt: row.completionDueAt,
+            escalationLevel: row.escalationLevel,
           }),
         })),
       );
