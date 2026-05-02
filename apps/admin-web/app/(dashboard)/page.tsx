@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ensureAdminRequestsRealtimeSocket,
@@ -477,6 +478,7 @@ async function fetchTimelineHistory(requestId: string): Promise<TimelineAction[]
 }
 
 export default function AdminOverviewPage() {
+  const router = useRouter();
   const [requests, setRequests] = useState<DashboardRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1199,6 +1201,14 @@ export default function AdminOverviewPage() {
 
     const rowStatus = request.status;
     const rawStatus = (request.rawStatus ?? '').toUpperCase();
+    const escalationLevel = request.sla?.escalationLevel ?? 0;
+    const urgentReassignMode = nba === 'URGENT_INTERVENTION' || escalationLevel >= 2;
+    const reassignBlockedTerminal =
+      rowStatus === 'completed'
+      || rawStatus === 'COMPLETED'
+      || rawStatus === 'CANCELLED'
+      || rawStatus === 'REJECTED'
+      || rawStatus === 'FAILED';
     const agingTier = getAgingTier(request.createdAt, request.status);
     const priorityTier = getPrioritySlaTier(request.priority);
     const hoursOpen = hoursSinceCreated(request.createdAt);
@@ -1469,9 +1479,22 @@ export default function AdminOverviewPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
                   <button
                     type="button"
-                    disabled={!request.vendorId}
-                    title={request.vendorId ? undefined : 'Assign a provider before reassign'}
-                    onClick={() => request.vendorId && openReassignVendor(request.id, request.vendorId)}
+                    disabled={reassignBlockedTerminal}
+                    title={
+                      reassignBlockedTerminal
+                        ? 'Request is closed — reassign unavailable'
+                        : !request.vendorId
+                          ? 'No vendor assigned — opens assign provider'
+                          : undefined
+                    }
+                    onClick={() => {
+                      if (reassignBlockedTerminal) return;
+                      if (request.vendorId) {
+                        openReassignVendor(request.id, request.vendorId);
+                      } else {
+                        openAssignVendor(request.id);
+                      }
+                    }}
                     style={{
                       width: 'fit-content',
                       minWidth: 180,
@@ -1480,9 +1503,17 @@ export default function AdminOverviewPage() {
                       fontSize: 12,
                       fontWeight: 700,
                       lineHeight: 1.35,
-                      cursor: request.vendorId ? 'pointer' : 'not-allowed',
-                      opacity: request.vendorId ? 1 : 0.55,
-                      ...(request.vendorId ? DASHBOARD_PRIMARY_ACTION_BTN : { border: '1px solid #E2E8F0', background: '#F1F5F9', color: '#64748B' }),
+                      cursor: reassignBlockedTerminal ? 'not-allowed' : 'pointer',
+                      opacity: reassignBlockedTerminal ? 0.55 : 1,
+                      ...(reassignBlockedTerminal
+                        ? { border: '1px solid #E2E8F0', background: '#F1F5F9', color: '#64748B' }
+                        : urgentReassignMode
+                          ? {
+                              background: '#EA580C',
+                              color: '#FFFFFF',
+                              border: '1px solid #C2410C',
+                            }
+                          : DASHBOARD_PRIMARY_ACTION_BTN),
                     }}
                   >
                     Reassign Provider
@@ -1506,7 +1537,7 @@ export default function AdminOverviewPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => void loadTimeline(request.id)}
+                    onClick={() => router.push(`/requests/${encodeURIComponent(request.id)}/timeline`)}
                     style={{
                       width: 'fit-content',
                       padding: '6px 10px',
@@ -1770,7 +1801,11 @@ export default function AdminOverviewPage() {
           <span>{formatDate(request.createdAt)}</span>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button type="button" onClick={() => void loadTimeline(request.id)} style={{ padding: '6px 10px' }}>
+          <button
+            type="button"
+            onClick={() => router.push(`/requests/${encodeURIComponent(request.id)}/timeline`)}
+            style={{ padding: '6px 10px' }}
+          >
             Timeline
           </button>
           <button type="button" onClick={() => openEscalateForm(request.id)} style={{ padding: '6px 10px' }}>
