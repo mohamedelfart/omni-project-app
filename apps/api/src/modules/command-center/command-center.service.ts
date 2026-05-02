@@ -60,6 +60,131 @@ function normalizeCountryCandidates(countryCode?: string): string[] | undefined 
   return Array.from(candidates);
 }
 
+/** Default: unassigned open requests older than this surface as attention (read-model only). */
+const UNASSIGNED_TOO_LONG_MS = 2 * 60 * 60 * 1000;
+
+/** When `responseDueAt` is null but a vendor is expected, age beyond this implies response risk. */
+const VENDOR_RESPONSE_HEURISTIC_MS = 45 * 60 * 1000;
+
+const TERMINAL_ATTENTION_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED']);
+
+type AttentionSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+type VendorAttentionReadModel = {
+  needsAttention: boolean;
+  attentionCodes: string[];
+  attentionLabel: string;
+  attentionSeverity: AttentionSeverity;
+};
+
+const ATTENTION_CODE_SEVERITY: Record<string, AttentionSeverity> = {
+  UNASSIGNED_TOO_LONG: 'MEDIUM',
+  VENDOR_NOT_STARTED: 'HIGH',
+  RESPONSE_OVERDUE: 'HIGH',
+  COMPLETION_OVERDUE: 'CRITICAL',
+};
+
+const ATTENTION_CODE_LABEL: Record<string, string> = {
+  UNASSIGNED_TOO_LONG: 'Unassigned beyond threshold',
+  VENDOR_NOT_STARTED: 'Vendor has not started execution',
+  RESPONSE_OVERDUE: 'Response window overdue',
+  COMPLETION_OVERDUE: 'Completion window overdue',
+};
+
+function maxAttentionSeverity(a: AttentionSeverity, b: AttentionSeverity): AttentionSeverity {
+  const order: AttentionSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+  return order[Math.max(order.indexOf(a), order.indexOf(b))] ?? 'HIGH';
+}
+
+/** Matches `CommandCenterService.isActiveStatus` — tickets still in operational lifecycle. */
+const IS_ACTIVE_UNIFIED_STATUS = new Set([
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'QUEUED',
+  'ASSIGNED',
+  'EN_ROUTE',
+  'IN_PROGRESS',
+  'AWAITING_PAYMENT',
+  'ESCALATED',
+]);
+
+/**
+ * Derived read-model only: no DB writes, no status changes.
+ * Signal rules: Step 1A vendor / SLA attention for Command Center payloads.
+ */
+function computeVendorAttentionReadModel(request: {
+  createdAt: Date;
+  status: string;
+  vendorId: string | null;
+  firstResponseAt: Date | null;
+  completedAt: Date | null;
+  responseDueAt: Date | null;
+  completionDueAt: Date | null;
+}): VendorAttentionReadModel {
+  const now = Date.now();
+  const codeSet = new Set<string>();
+  const { status } = request;
+  const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
+
+  if (!request.vendorId && !isTerminal) {
+    if (now - request.createdAt.getTime() > UNASSIGNED_TOO_LONG_MS) {
+      codeSet.add('UNASSIGNED_TOO_LONG');
+    }
+  }
+
+  const responseDuePassed =
+    request.responseDueAt != null && request.responseDueAt.getTime() < now;
+  const completionDuePassed =
+    request.completionDueAt != null && request.completionDueAt.getTime() < now;
+
+  if (!isTerminal && responseDuePassed && request.firstResponseAt == null) {
+    codeSet.add('RESPONSE_OVERDUE');
+  }
+
+  if (!isTerminal && completionDuePassed && request.completedAt == null) {
+    codeSet.add('COMPLETION_OVERDUE');
+  }
+
+  if (
+    request.vendorId
+    && request.firstResponseAt == null
+    && status !== 'IN_PROGRESS'
+    && !isTerminal
+    && IS_ACTIVE_UNIFIED_STATUS.has(status)
+  ) {
+    const heuristicResponseOverdue =
+      request.responseDueAt == null && now - request.createdAt.getTime() > VENDOR_RESPONSE_HEURISTIC_MS;
+    if (responseDuePassed || heuristicResponseOverdue) {
+      codeSet.add('VENDOR_NOT_STARTED');
+    }
+  }
+
+  const attentionCodes = Array.from(codeSet);
+  if (!attentionCodes.length) {
+    return {
+      needsAttention: false,
+      attentionCodes: [],
+      attentionLabel: '',
+      attentionSeverity: 'LOW',
+    };
+  }
+
+  let attentionSeverity: AttentionSeverity = 'LOW';
+  for (const code of attentionCodes) {
+    const sev = ATTENTION_CODE_SEVERITY[code] ?? 'MEDIUM';
+    attentionSeverity = maxAttentionSeverity(attentionSeverity, sev);
+  }
+
+  const attentionLabel = attentionCodes.map((c) => ATTENTION_CODE_LABEL[c] ?? c).join(' · ');
+
+  return {
+    needsAttention: true,
+    attentionCodes,
+    attentionLabel,
+    attentionSeverity,
+  };
+}
+
 @Injectable()
 export class CommandCenterService {
   constructor(
@@ -336,6 +461,15 @@ export class CommandCenterService {
             hasLocation: request.pickupLat != null || request.currentLat != null || request.targetLat != null,
           },
           integrationVisibility: this.extractIntegrationVisibility(request.routeData),
+          ...computeVendorAttentionReadModel({
+            createdAt: request.createdAt,
+            status: request.status,
+            vendorId: request.vendorId,
+            firstResponseAt: request.firstResponseAt,
+            completedAt: request.completedAt,
+            responseDueAt: request.responseDueAt,
+            completionDueAt: request.completionDueAt,
+          }),
         };
       }),
     };
@@ -829,7 +963,21 @@ export class CommandCenterService {
         },
         orderBy: { createdAt: 'desc' },
       })
-      .then((rows) => rows.map((row) => ({ ...row, sla: this.pickSlaSnapshot(row) })));
+      .then((rows) =>
+        rows.map((row) => ({
+          ...row,
+          sla: this.pickSlaSnapshot(row),
+          ...computeVendorAttentionReadModel({
+            createdAt: row.createdAt,
+            status: row.status,
+            vendorId: row.vendorId,
+            firstResponseAt: row.firstResponseAt,
+            completedAt: row.completedAt,
+            responseDueAt: row.responseDueAt,
+            completionDueAt: row.completionDueAt,
+          }),
+        })),
+      );
   }
 
   async assignProvider(user: AuthenticatedUser, requestId: string, providerId: string) {
