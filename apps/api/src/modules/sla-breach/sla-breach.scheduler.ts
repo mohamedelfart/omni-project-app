@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { SlaBreachService } from './sla-breach.service';
 
 /**
- * Low-frequency background scan (default 10 minutes). Disable with SLA_BREACH_SCAN_ENABLED=false.
+ * Time-driven SLA breach scan (default every 30s). Disable with SLA_BREACH_SCAN_ENABLED=false.
+ * Interval override: SLA_BREACH_SCAN_INTERVAL_MS (minimum 30_000).
  */
 @Injectable()
 export class SlaBreachScheduler implements OnModuleInit, OnModuleDestroy {
@@ -22,12 +23,12 @@ export class SlaBreachScheduler implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const intervalMs = Number(this.configService.get<string>('SLA_BREACH_SCAN_INTERVAL_MS') ?? 600_000);
-    const safeMs = Number.isFinite(intervalMs) && intervalMs >= 60_000 ? intervalMs : 600_000;
+    const intervalMs = Number(this.configService.get<string>('SLA_BREACH_SCAN_INTERVAL_MS') ?? 30_000);
+    const safeMs = Number.isFinite(intervalMs) && intervalMs >= 30_000 ? intervalMs : 30_000;
 
     this.intervalHandle = setInterval(() => {
       void this.slaBreachService
-        .scanOpenRequests(50)
+        .scanOpenRequests(500)
         .then(({ examined, updated }) => {
           if (examined > 0) {
             this.logger.debug(`SLA breach scan examined=${examined} updated=${updated}`);

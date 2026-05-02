@@ -1,7 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiFetch, getAccessToken } from '../../lib/auth';
+import { apiFetch } from '../../lib/auth';
+
+type CommandCenterLastEscalation = {
+  level: number;
+  reason: string;
+  actor: string;
+  createdAt: string;
+  source: string;
+};
 
 type CommandCenterRequest = {
   id: string;
@@ -16,7 +24,14 @@ type CommandCenterRequest = {
     escalationLevel?: number;
     firstBreachedAt?: string | null;
   };
+  lastEscalation?: CommandCenterLastEscalation | null;
+  escalationHistoryCount?: number;
 };
+
+function formatLastEscalationIntel(le: CommandCenterLastEscalation): string {
+  const at = le.createdAt ? new Date(le.createdAt).toLocaleString() : '—';
+  return `${le.reason || '—'} · ${le.source} · ${at}`;
+}
 
 type ProviderOption = { id: string; name: string };
 
@@ -100,6 +115,14 @@ export default function EscalationsPage() {
           const escalationLevel = r.sla?.escalationLevel ?? 0;
           const severity = getEscalationSeverity(escalationLevel);
           const status = escalationLevel > 0 ? 'OPEN' : 'RESOLVED';
+          const lastEscalation =
+            r.lastEscalation && typeof r.lastEscalation === 'object' && !Array.isArray(r.lastEscalation)
+              ? (r.lastEscalation as CommandCenterLastEscalation)
+              : null;
+          const escalationHistoryCount =
+            typeof r.escalationHistoryCount === 'number' && Number.isFinite(r.escalationHistoryCount) && r.escalationHistoryCount >= 0
+              ? Math.floor(r.escalationHistoryCount)
+              : undefined;
           return {
             id: `ESC-${r.id.slice(-6).toUpperCase()}`,
             requestId: r.id,
@@ -115,6 +138,8 @@ export default function EscalationsPage() {
             opened: new Date(r.sla?.firstBreachedAt ?? r.createdAt).toLocaleString(),
             slaMinutes: escalationLevel > 0 ? 30 : 0,
             escalationLevel,
+            lastEscalation,
+            escalationHistoryCount,
           };
         }),
     [requests],
@@ -161,25 +186,11 @@ export default function EscalationsPage() {
       setActionRequestId(requestId);
       setError(null);
       try {
-        const token = getAccessToken();
-        if (!token) {
-          throw new Error('Not signed in');
-        }
         console.log('[intervene-call]', requestId);
-        const escalateUrl = `${apiBase.replace(/\/$/, '')}/unified-requests/${encodeURIComponent(requestId)}/escalate`;
-        const response = await apiFetch(escalateUrl, {
-          method: 'POST',
-          cache: 'no-store',
-          body: JSON.stringify({ reason: interventionReason }),
-        });
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) {
-          const msg =
-            (payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string' && (payload as { error: string }).error)
-            || (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string' && (payload as { message: string }).message)
-            || 'Intervention failed';
-          throw new Error(msg);
-        }
+        await postAction(
+          `${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/intervene`,
+          { reason: interventionReason },
+        );
         console.log('[intervene-success]', requestId);
         setLocalInterventionByRequestId((prev) => ({ ...prev, [requestId]: interventionReason }));
         await loadData();
@@ -190,7 +201,7 @@ export default function EscalationsPage() {
         setActionRequestId(null);
       }
     },
-    [apiBase, loadData],
+    [apiBase, loadData, postAction],
   );
 
   const onResolve = useCallback(
@@ -316,6 +327,19 @@ export default function EscalationsPage() {
                 {interventionNoteShort ? (
                   <div style={{ fontSize: 11, color: '#4F46E5', marginBottom: 8, lineHeight: 1.35 }} title={interventionNote}>
                     Last intervention: {interventionNoteShort}
+                  </div>
+                ) : null}
+                {e.lastEscalation ? (
+                  <div
+                    style={{ fontSize: 11, color: '#374151', marginBottom: 8, lineHeight: 1.4 }}
+                    title={`${formatLastEscalationIntel(e.lastEscalation)} · ${e.lastEscalation.actor || '—'}`}
+                  >
+                    آخر تصعيد: {formatLastEscalationIntel(e.lastEscalation)}
+                  </div>
+                ) : null}
+                {typeof e.escalationHistoryCount === 'number' && e.escalationHistoryCount > 0 ? (
+                  <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 8 }} title="عدد سجلات TicketAction من نوع ESCALATE">
+                    عدد التصعيدات: {e.escalationHistoryCount}
                   </div>
                 ) : null}
 

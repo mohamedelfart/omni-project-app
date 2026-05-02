@@ -15,6 +15,25 @@ import {
 
 type AttentionSeverityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
+/** Last manual `ESCALATE` snapshot from Command Center list read-model (Step 7C). */
+type DashboardLastEscalation = {
+  level: number;
+  reason: string;
+  actor: string;
+  createdAt: string;
+  source: string;
+};
+
+/** Command Center Brain Level 1 — server-only; ingested from list `brain` field (Step 9). */
+type DashboardBrainPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+type DashboardBrain = {
+  priority: DashboardBrainPriority;
+  alerts: string[];
+  recommendations: string[];
+  reasons: string[];
+};
+
 type DashboardRequest = {
   id: string;
   tenantId: string;
@@ -34,6 +53,16 @@ type DashboardRequest = {
   attentionSeverity?: AttentionSeverityLevel;
   attentionLabel?: string;
   attentionCodes?: string[];
+  /** From `GET .../command-center/requests` (Step 7C). */
+  lastEscalation?: DashboardLastEscalation | null;
+  escalationHistoryCount?: number;
+  sla?: {
+    escalationLevel?: number;
+    slaBreached?: boolean;
+    firstBreachedAt?: string | null;
+  };
+  /** Backend-derived Brain read-model (`GET .../command-center/requests`, Step 9). */
+  brain?: DashboardBrain;
 };
 
 const DASHBOARD_STATUSES: Exclude<DashboardRequestStatus, 'unknown'>[] = ['pending', 'assigned', 'in_progress', 'completed'];
@@ -52,6 +81,9 @@ const DASHBOARD_PRIMARY_ACTION_BTN: Record<string, string | number> = {
 };
 
 const SLA_QUICK_ESCALATE_REASON = 'Auto escalation due to SLA breach';
+
+/** Normalized Brain recommendation text for assign quick action (trim + lowercase; API is "Assign provider now"). */
+const BRAIN_ASSIGN_PROVIDER_RECO_NORMALIZED = 'assign provider now';
 
 type ProviderOption = {
   id: string;
@@ -152,6 +184,74 @@ function vendorAttentionTitle(request: DashboardRequest): string | undefined {
   return undefined;
 }
 
+function parseLastEscalationFromRecord(rec: Record<string, unknown>): DashboardLastEscalation | undefined {
+  const raw = rec.lastEscalation;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const o = raw as Record<string, unknown>;
+  const levelRaw = o.level;
+  const level =
+    typeof levelRaw === 'number' && Number.isFinite(levelRaw)
+      ? Math.floor(levelRaw)
+      : typeof levelRaw === 'string' && Number.isFinite(Number(levelRaw.trim()))
+        ? Math.floor(Number(levelRaw.trim()))
+        : undefined;
+  if (level === undefined || level < 0) {
+    return undefined;
+  }
+  const createdAt = typeof o.createdAt === 'string' ? o.createdAt : '';
+  return {
+    level,
+    reason: typeof o.reason === 'string' ? o.reason : '',
+    actor: typeof o.actor === 'string' ? o.actor : '',
+    createdAt,
+    source: typeof o.source === 'string' ? o.source : '',
+  };
+}
+
+function formatDashboardLastEscalationLine(le: DashboardLastEscalation): string {
+  const at = le.createdAt ? formatDate(le.createdAt) : '—';
+  return `آخر تصعيد: ${le.reason || '—'} / ${le.source} / ${at}`;
+}
+
+function formatDashboardLastEscalationTitle(le: DashboardLastEscalation): string {
+  return `${formatDashboardLastEscalationLine(le)} · ${le.actor || '—'}`;
+}
+
+function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | undefined {
+  const b = rec.brain;
+  if (!b || typeof b !== 'object' || Array.isArray(b)) {
+    return undefined;
+  }
+  const o = b as Record<string, unknown>;
+  const p = o.priority;
+  if (p !== 'LOW' && p !== 'MEDIUM' && p !== 'HIGH' && p !== 'CRITICAL') {
+    return undefined;
+  }
+  const alerts = Array.isArray(o.alerts) ? o.alerts.filter((x): x is string => typeof x === 'string') : [];
+  const recommendations = Array.isArray(o.recommendations)
+    ? o.recommendations.filter((x): x is string => typeof x === 'string')
+    : [];
+  const reasons = Array.isArray(o.reasons) ? o.reasons.filter((x): x is string => typeof x === 'string') : [];
+  return { priority: p, alerts, recommendations, reasons };
+}
+
+/** Enterprise-style priority badge (Brain panel only). */
+function brainPriorityChipStyle(p: DashboardBrainPriority): { background: string; color: string; border: string } {
+  switch (p) {
+    case 'CRITICAL':
+      return { background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5' };
+    case 'HIGH':
+      return { background: '#FFFBEB', color: '#92400E', border: '1px solid #FDE68A' };
+    case 'MEDIUM':
+      return { background: '#E5E7EB', color: '#374151', border: '1px solid #D1D5DB' };
+    case 'LOW':
+    default:
+      return { background: '#ECFDF5', color: '#065F46', border: '1px solid #A7F3D0' };
+  }
+}
+
 type RequestSectionGroup = 'attention' | 'in_progress' | 'completed';
 
 /** Uses `status`, `priority`, and SLA helpers on `createdAt` (same rules as row badges). */
@@ -191,6 +291,11 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
       const sev = rec.attentionSeverity;
       const attentionSeverity: AttentionSeverityLevel | undefined =
         sev === 'LOW' || sev === 'MEDIUM' || sev === 'HIGH' || sev === 'CRITICAL' ? sev : undefined;
+      const lastEscalation = parseLastEscalationFromRecord(rec);
+      const ehRaw = rec.escalationHistoryCount;
+      const escalationHistoryCount =
+        typeof ehRaw === 'number' && Number.isFinite(ehRaw) && ehRaw >= 0 ? Math.floor(ehRaw) : undefined;
+      const brain = parseBrainFromRecord(rec);
       return {
         ...(row as unknown as DashboardRequest),
         id,
@@ -203,6 +308,9 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
         attentionCodes: Array.isArray(rec.attentionCodes)
           ? rec.attentionCodes.filter((c): c is string => typeof c === 'string')
           : undefined,
+        lastEscalation: lastEscalation ?? null,
+        escalationHistoryCount,
+        ...(brain ? { brain } : {}),
       };
     })
     .filter((row) => row.id.length > 0);
@@ -376,6 +484,7 @@ export default function AdminOverviewPage() {
   const [reassignVendorSelection, setReassignVendorSelection] = useState<string>('');
   const [reassignReason, setReassignReason] = useState<string>('');
   const [reassignSubmittingRequestId, setReassignSubmittingRequestId] = useState<string | null>(null);
+  const [resolveEscalationSubmittingRequestId, setResolveEscalationSubmittingRequestId] = useState<string | null>(null);
   const [timelineForId, setTimelineForId] = useState<string | null>(null);
   const [timelineActions, setTimelineActions] = useState<TimelineAction[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -990,6 +1099,36 @@ export default function AdminOverviewPage() {
     setError(null);
   };
 
+  const quickResolveEscalation = async (requestId: string) => {
+    const note = window.prompt('Resolution note', 'Escalation resolved by command-center');
+    if (note === null) {
+      return;
+    }
+    setResolveEscalationSubmittingRequestId(requestId);
+    setEscalateError(null);
+    setError(null);
+    try {
+      const url = `${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/resolve-escalation`;
+      const response = await apiFetch(url, {
+        method: 'POST',
+        cache: 'no-store',
+        body: JSON.stringify({ reason: note.trim() || 'Escalation resolved by command-center' }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getLoadErrorMessage(payload));
+      }
+      await refreshRequestList();
+      if (timelineForId === requestId) {
+        await loadTimeline(requestId);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to resolve escalation');
+    } finally {
+      setResolveEscalationSubmittingRequestId(null);
+    }
+  };
+
   const postCommandCenterStatus = async (requestId: string, nextStatus: 'in_progress' | 'completed') => {
     setStatusActionRequestId(requestId);
     try {
@@ -1030,6 +1169,19 @@ export default function AdminOverviewPage() {
   };
 
   function renderRequestRow(request: DashboardRequest) {
+    const brainRecs = request.brain?.recommendations;
+    const brainHasAssignProviderReco =
+      Array.isArray(brainRecs)
+      && brainRecs.some(
+        (r) => typeof r === 'string' && r.trim().toLowerCase() === BRAIN_ASSIGN_PROVIDER_RECO_NORMALIZED,
+      );
+    const brainOtherRecommendations =
+      Array.isArray(brainRecs)
+        ? brainRecs.filter(
+          (r) => typeof r === 'string' && r.trim().toLowerCase() !== BRAIN_ASSIGN_PROVIDER_RECO_NORMALIZED,
+        )
+        : [];
+
     const rowStatus = request.status;
     const rawStatus = (request.rawStatus ?? '').toUpperCase();
     const agingTier = getAgingTier(request.createdAt, request.status);
@@ -1055,7 +1207,8 @@ export default function AdminOverviewPage() {
       || escalateSubmitting
       || bulkEscalating
       || assignSubmittingRequestId === request.id
-      || reassignSubmittingRequestId === request.id;
+      || reassignSubmittingRequestId === request.id
+      || resolveEscalationSubmittingRequestId === request.id;
 
     const rowCardStyle: CSSProperties = {
       borderRadius: 8,
@@ -1111,6 +1264,152 @@ export default function AdminOverviewPage() {
         <div>
           <strong>{request.id}</strong> - {request.type} - {request.status}
         </div>
+        {request.brain ? (
+          <div
+            role="region"
+            aria-label="Command Center Brain"
+            style={{
+              marginTop: 10,
+              border: '1px solid #E2E8F0',
+              borderRadius: 8,
+              padding: '12px 12px',
+              background: '#F8FAFC',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+            }}
+          >
+            <div style={{ marginBottom: 8 }}>
+              <div
+                title={request.brain.reasons.length ? request.brain.reasons.join(' · ') : 'Operational priority (server)'}
+                style={{
+                  display: 'inline-flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: 2,
+                  width: 'fit-content',
+                  boxSizing: 'border-box',
+                  padding: request.brain.priority === 'HIGH' ? '8px 14px 8px 11px' : '8px 14px',
+                  borderRadius: 6,
+                  lineHeight: 1.2,
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                  ...brainPriorityChipStyle(request.brain.priority),
+                  ...(request.brain.priority === 'HIGH' ? { borderLeft: '3px solid #F59E0B' } : {}),
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    opacity: 0.7,
+                    letterSpacing: '0.5px',
+                  }}
+                >
+                  Priority
+                </span>
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 900,
+                    textTransform: 'uppercase',
+                    letterSpacing: '1px',
+                  }}
+                >
+                  {request.brain.priority}
+                </span>
+              </div>
+            </div>
+
+            {Array.isArray(request.brain.alerts) && request.brain.alerts.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: 0.01 }}>
+                  ⚠ Alerts
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'flex-start',
+                    rowGap: 8,
+                    columnGap: 8,
+                  }}
+                >
+                  {request.brain.alerts.map((a, i) => (
+                    <span
+                      key={`${a}-${i}`}
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        padding: '5px 8px',
+                        borderRadius: 6,
+                        background: '#FFFFFF',
+                        color: '#334155',
+                        border: '1px solid #E2E8F0',
+                        lineHeight: 1.35,
+                        maxWidth: 'min(100%, 220px)',
+                        boxSizing: 'border-box',
+                        wordBreak: 'break-word',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      ⚠ {a}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {Array.isArray(request.brain.recommendations) && request.brain.recommendations.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: 0.01 }}>
+                  💡 Actions
+                </div>
+                {brainHasAssignProviderReco ? (
+                  <>
+                    <button
+                      type="button"
+                      aria-label="Assign provider (same as row Assign Vendor)"
+                      title="Opens the same assign vendor flow as the row Assign Vendor button"
+                      onClick={() => openAssignVendor(request.id)}
+                      style={{
+                        width: 'fit-content',
+                        minWidth: 180,
+                        boxSizing: 'border-box',
+                        marginTop: 4,
+                        padding: '7px 10px',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        lineHeight: 1.35,
+                        cursor: 'pointer',
+                        ...DASHBOARD_PRIMARY_ACTION_BTN,
+                      }}
+                    >
+                      Assign provider now
+                    </button>
+                    {brainOtherRecommendations.length > 0 ? (
+                      <div
+                        style={{ fontSize: 10, color: '#94A3B8', lineHeight: 1.45 }}
+                        title={brainOtherRecommendations.join(' · ')}
+                      >
+                        {brainOtherRecommendations.join(' · ')}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div
+                    style={{ fontSize: 10, color: '#94A3B8', lineHeight: 1.45 }}
+                    title={request.brain.recommendations.join(' · ')}
+                  >
+                    {request.brain.recommendations.join(' · ')}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {slaBadges || request.needsAttention ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
             {priorityTier === 'critical' ? (
@@ -1177,7 +1476,7 @@ export default function AdminOverviewPage() {
             ) : null}
             {request.needsAttention ? (
               <span
-                title={vendorAttentionTitle(request)}
+                title={vendorAttentionTitle(request) || 'يحتاج تدخل — راجع رموز ووصف الاهتمام'}
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
@@ -1189,6 +1488,30 @@ export default function AdminOverviewPage() {
                 ⚠ يحتاج تدخل
               </span>
             ) : null}
+          </div>
+        ) : null}
+        {request.needsAttention && vendorAttentionTitle(request) ? (
+          <div
+            style={{ fontSize: 10, color: '#64748B', lineHeight: 1.45, maxWidth: '100%', wordBreak: 'break-word' }}
+            title={vendorAttentionTitle(request)}
+          >
+            {vendorAttentionTitle(request)}
+          </div>
+        ) : null}
+        {request.lastEscalation ? (
+          <div
+            style={{ fontSize: 10, color: '#475569', lineHeight: 1.45, maxWidth: '100%', wordBreak: 'break-word' }}
+            title={formatDashboardLastEscalationTitle(request.lastEscalation)}
+          >
+            {formatDashboardLastEscalationLine(request.lastEscalation)}
+          </div>
+        ) : null}
+        {typeof request.escalationHistoryCount === 'number' && request.escalationHistoryCount > 0 ? (
+          <div
+            style={{ fontSize: 10, color: '#64748B' }}
+            title={`عدد سجلات TicketAction من نوع ESCALATE لهذا الطلب: ${request.escalationHistoryCount}`}
+          >
+            عدد التصعيدات: {request.escalationHistoryCount}
           </div>
         ) : null}
         <div style={{ color: '#64748B', fontSize: 14 }}>
@@ -1213,6 +1536,17 @@ export default function AdminOverviewPage() {
               style={{ padding: '4px 8px', fontSize: 11 }}
             >
               Quick Escalate
+            </button>
+          ) : null}
+          {(request.sla?.escalationLevel ?? 0) > 0 ? (
+            <button
+              type="button"
+              disabled={resolveEscalationSubmittingRequestId === request.id}
+              title="POST command-center/requests/:id/resolve-escalation — يصفّر escalationLevel دون تغيير حالة الطلب"
+              onClick={() => void quickResolveEscalation(request.id)}
+              style={{ padding: '4px 8px', fontSize: 11 }}
+            >
+              Clear escalation
             </button>
           ) : null}
           {rowStatus === 'pending' && !request.vendorId ? (

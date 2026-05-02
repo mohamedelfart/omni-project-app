@@ -6,6 +6,9 @@ import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 
 const TERMINAL_STATUSES: UnifiedRequestStatus[] = ['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED'];
 
+/** Stored on `UnifiedRequest.breachType` (time-driven SLA loop). */
+export type SlaBreachAxis = 'RESPONSE' | 'COMPLETION' | 'BOTH';
+
 export type SlaBreachEvaluateOutcome = 'skipped' | 'noop' | 'updated';
 
 @Injectable()
@@ -61,17 +64,23 @@ export class SlaBreachService {
         return 'noop' as const;
       }
 
-      const targetBreachType =
-        responseBreached && completionBreached ? 'both' : responseBreached ? 'response' : 'completion';
+      const targetBreachType: SlaBreachAxis =
+        responseBreached && completionBreached ? 'BOTH' : responseBreached ? 'RESPONSE' : 'COMPLETION';
 
       const mergedBreachType = this.mergeBreachType(r.breachType, targetBreachType);
+      const mergedNorm = this.normalizeBreachTypeKey(mergedBreachType);
+      const currentNorm = this.normalizeBreachTypeKey(r.breachType);
 
-      if (r.slaBreached && r.firstBreachedAt && mergedBreachType === r.breachType) {
+      if (r.slaBreached && r.firstBreachedAt && mergedNorm === currentNorm) {
         return 'noop' as const;
       }
 
-      if (r.slaBreached && r.firstBreachedAt && mergedBreachType !== r.breachType) {
-        const nextEscalationLevel = Math.max(r.escalationLevel ?? 0, 1);
+      if (r.slaBreached && r.firstBreachedAt && mergedNorm !== currentNorm) {
+        const nextEscalationLevel = this.computeEscalationLevel(
+          r.escalationLevel ?? 0,
+          responseBreached,
+          completionBreached,
+        );
         await client.unifiedRequest.update({
           where: { id: requestId },
           data: {
@@ -97,7 +106,11 @@ export class SlaBreachService {
       }
 
       const firstBreachedAt = r.firstBreachedAt ?? now;
-      const escalationLevel = Math.max(r.escalationLevel ?? 0, 1);
+      const escalationLevel = this.computeEscalationLevel(
+        r.escalationLevel ?? 0,
+        responseBreached,
+        completionBreached,
+      );
 
       await client.unifiedRequest.update({
         where: { id: requestId },
@@ -134,18 +147,61 @@ export class SlaBreachService {
     return this.prisma.$transaction((inner) => run(inner));
   }
 
+  /** Minimum escalation level implied by which SLA clocks are overdue (response → 1, completion → 2). */
+  private escalationFloorForBreachFlags(responseBreached: boolean, completionBreached: boolean): number {
+    let floor = 0;
+    if (responseBreached) floor = Math.max(floor, 1);
+    if (completionBreached) floor = Math.max(floor, 2);
+    return floor;
+  }
+
+  private computeEscalationLevel(
+    current: number,
+    responseBreached: boolean,
+    completionBreached: boolean,
+  ): number {
+    return Math.max(current, this.escalationFloorForBreachFlags(responseBreached, completionBreached));
+  }
+
+  private normalizeBreachTypeKey(s: string | null | undefined): SlaBreachAxis | null {
+    if (s == null) {
+      return null;
+    }
+    const t = String(s).trim();
+    if (!t) {
+      return null;
+    }
+    const u = t.toUpperCase();
+    if (u === 'BOTH' || u === 'RESPONSE' || u === 'COMPLETION') {
+      return u as SlaBreachAxis;
+    }
+    const l = t.toLowerCase();
+    if (l === 'both') return 'BOTH';
+    if (l === 'response') return 'RESPONSE';
+    if (l === 'completion') return 'COMPLETION';
+    return null;
+  }
+
   /** Widen breach classification without dropping a prior axis (response vs completion). */
-  private mergeBreachType(current: string | null, target: string): string {
-    if (current === 'both' || target === 'both') {
-      return 'both';
+  private mergeBreachType(current: string | null, target: string): SlaBreachAxis {
+    const cur = this.normalizeBreachTypeKey(current);
+    const tgt = this.normalizeBreachTypeKey(target);
+    if (tgt == null) {
+      return 'RESPONSE';
     }
-    if (
-      (current === 'response' && target === 'completion') ||
-      (current === 'completion' && target === 'response')
-    ) {
-      return 'both';
+    if (cur === 'BOTH' || tgt === 'BOTH') {
+      return 'BOTH';
     }
-    return target;
+    if (cur === 'RESPONSE' && tgt === 'COMPLETION') {
+      return 'BOTH';
+    }
+    if (cur === 'COMPLETION' && tgt === 'RESPONSE') {
+      return 'BOTH';
+    }
+    if (cur == null) {
+      return tgt;
+    }
+    return tgt;
   }
 
   private async writeBreachAudit(
@@ -175,7 +231,9 @@ export class SlaBreachService {
     },
   ): Promise<void> {
     const hasEscalationLevelIncrease = input.toEscalationLevel > input.fromEscalationLevel;
-    const hasBreachTypeWidened = input.toBreachType !== (input.fromBreachType ?? null);
+    const fromN = this.normalizeBreachTypeKey(input.fromBreachType);
+    const toN = this.normalizeBreachTypeKey(input.toBreachType);
+    const hasBreachTypeWidened = fromN !== toN;
     if (!hasEscalationLevelIncrease && !hasBreachTypeWidened) {
       return;
     }
@@ -235,7 +293,7 @@ export class SlaBreachService {
    * Bounded scan of non-terminal requests that may have crossed an SLA boundary.
    * Intended for a low-frequency timer or manual / dashboard-triggered refresh.
    */
-  async scanOpenRequests(limit = 50): Promise<{ examined: number; updated: number }> {
+  async scanOpenRequests(limit = 500): Promise<{ examined: number; updated: number }> {
     const now = new Date();
 
     const candidates = await this.prisma.unifiedRequest.findMany({

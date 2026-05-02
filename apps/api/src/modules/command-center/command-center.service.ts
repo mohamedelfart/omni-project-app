@@ -30,6 +30,14 @@ export type CommandCenterLastEscalation = {
   source: string;
 };
 
+/** Command Center Brain Level 1 — derived read-model only (Step 9). */
+export type CommandCenterBrainReadModel = {
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  alerts: string[];
+  recommendations: string[];
+  reasons: string[];
+};
+
 function toDbUnifiedRequestStatus(status?: string): string | undefined {
   if (!status) {
     return undefined;
@@ -200,6 +208,68 @@ function computeVendorAttentionReadModel(request: {
     attentionLabel,
     attentionSeverity,
   };
+}
+
+/**
+ * Brain Level 1 read-model for Command Center list: priority, alerts, recommendations (no DB writes).
+ */
+function computeCommandCenterBrainReadModel(input: {
+  status: string;
+  slaBreached: boolean;
+  escalationLevel: number;
+  needsAttention: boolean;
+  vendorId: string | null;
+  escalationHistoryCount: number;
+}): CommandCenterBrainReadModel {
+  const { status, slaBreached, needsAttention } = input;
+  const escalationLevel = input.escalationLevel ?? 0;
+  const escalationHistoryCount = input.escalationHistoryCount ?? 0;
+  const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
+  const vendorId = input.vendorId?.trim() ?? '';
+  const unassigned = !vendorId && !isTerminal;
+
+  let priority: CommandCenterBrainReadModel['priority'] = 'LOW';
+  if (slaBreached && escalationLevel >= 2) {
+    priority = 'CRITICAL';
+  } else if (slaBreached || needsAttention) {
+    priority = 'HIGH';
+  } else if (unassigned || escalationHistoryCount > 0) {
+    priority = 'MEDIUM';
+  }
+
+  const alerts: string[] = [];
+  const pushAlert = (msg: string) => {
+    if (!alerts.includes(msg)) alerts.push(msg);
+  };
+  if (slaBreached) pushAlert('SLA breached');
+  if (needsAttention) pushAlert('Needs command center attention');
+  if (unassigned) pushAlert('Unassigned request');
+  if (!isTerminal && escalationLevel > 0) pushAlert('Escalation active');
+  if (escalationHistoryCount > 1) pushAlert('Repeated escalations');
+
+  const recommendations: string[] = [];
+  const pushReco = (msg: string) => {
+    if (!recommendations.includes(msg)) recommendations.push(msg);
+  };
+  if (unassigned) pushReco('Assign provider now');
+  if (escalationHistoryCount > 0) pushReco('Review escalation history');
+  if (!isTerminal && escalationLevel > 0) pushReco('Clear escalation after handling');
+  if (slaBreached) pushReco('Monitor SLA');
+
+  const reasons: string[] = [];
+  if (priority === 'CRITICAL') {
+    reasons.push('SLA breached while escalation level is 2 or higher');
+  } else if (priority === 'HIGH') {
+    if (slaBreached) reasons.push('SLA breach flag is active');
+    if (needsAttention) reasons.push('Vendor / SLA attention signals are active');
+  } else if (priority === 'MEDIUM') {
+    if (unassigned) reasons.push('No provider assigned on a non-terminal request');
+    if (escalationHistoryCount > 0) reasons.push('At least one ESCALATE ticket action exists');
+  } else {
+    reasons.push('No Brain Level 1 escalation or SLA urgency signals');
+  }
+
+  return { priority, alerts, recommendations, reasons };
 }
 
 @Injectable()
@@ -1068,21 +1138,31 @@ export class CommandCenterService {
         );
         return rows.map((row) => {
           const escRow = escalationInsights.get(row.id) ?? { lastEscalation: null, escalationHistoryCount: 0 };
+          const attention = computeVendorAttentionReadModel({
+            createdAt: row.createdAt,
+            status: row.status,
+            vendorId: row.vendorId,
+            firstResponseAt: row.firstResponseAt,
+            completedAt: row.completedAt,
+            responseDueAt: row.responseDueAt,
+            completionDueAt: row.completionDueAt,
+            escalationLevel: row.escalationLevel,
+          });
+          const brain = computeCommandCenterBrainReadModel({
+            status: row.status,
+            slaBreached: row.slaBreached,
+            escalationLevel: row.escalationLevel ?? 0,
+            needsAttention: attention.needsAttention,
+            vendorId: row.vendorId,
+            escalationHistoryCount: escRow.escalationHistoryCount,
+          });
           return {
             ...row,
             sla: this.pickSlaSnapshot(row),
             lastEscalation: escRow.lastEscalation,
             escalationHistoryCount: escRow.escalationHistoryCount,
-            ...computeVendorAttentionReadModel({
-              createdAt: row.createdAt,
-              status: row.status,
-              vendorId: row.vendorId,
-              firstResponseAt: row.firstResponseAt,
-              completedAt: row.completedAt,
-              responseDueAt: row.responseDueAt,
-              completionDueAt: row.completionDueAt,
-              escalationLevel: row.escalationLevel,
-            }),
+            ...attention,
+            brain,
           };
         });
       });
@@ -1181,6 +1261,10 @@ export class CommandCenterService {
         select: { id: true, country: true, escalationLevel: true, slaBreached: true },
       });
       const nextEscalationLevel = 0;
+      const previousEscalationLevel = existing.escalationLevel ?? 0;
+      const resolvedAt = new Date().toISOString();
+      const actor = user.id?.trim() ? user.id : 'system';
+      const resolvedReason = reason?.trim() || 'Escalation resolved by command-center';
       await tx.unifiedRequest.update({
         where: { id: requestId },
         data: { escalationLevel: nextEscalationLevel },
@@ -1191,10 +1275,15 @@ export class CommandCenterService {
         actorType: this.toActorType(user),
         actorId: user.id,
         payload: {
-          reason: reason?.trim() || 'Escalation resolved by command-center',
-          fromEscalationLevel: existing.escalationLevel ?? 0,
+          reason: resolvedReason,
+          previousEscalationLevel,
+          fromEscalationLevel: previousEscalationLevel,
           toEscalationLevel: nextEscalationLevel,
+          resolvedAt,
+          actor,
+          /** Snapshot only — `UnifiedRequest.slaBreached` is not modified here. */
           slaBreached: existing.slaBreached,
+          resolutionSource: 'OPERATOR',
         },
       });
       await this.auditTrailService.write({
