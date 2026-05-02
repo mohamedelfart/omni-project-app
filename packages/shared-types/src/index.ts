@@ -12,3 +12,14 @@ export type {
   TicketId,
 } from './ticket-action';
 
+export type {
+  CommandCenterBrainNextBestAction,
+  CommandCenterBrainPriority,
+  CommandCenterBrainReadModel,
+} from './command-center-brain';
+
+export {
+  COMMAND_CENTER_BRAIN_NEXT_BEST_ACTIONS,
+  isCommandCenterBrainNextBestAction,
+} from './command-center-brain';
+

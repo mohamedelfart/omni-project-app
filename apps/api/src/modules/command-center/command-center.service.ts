@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { BookingStatus, PaymentStatus, Prisma, PropertyStatus } from '@prisma/client';
+import type { CommandCenterBrainReadModel } from '@quickrent/shared-types';
 import type { CommandCenterRequestSlaSnapshot } from './dto/command-center-request-sla.dto';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { LocationService } from '../location/location.service';
@@ -30,13 +31,7 @@ export type CommandCenterLastEscalation = {
   source: string;
 };
 
-/** Command Center Brain Level 1 — derived read-model only (Step 9). */
-export type CommandCenterBrainReadModel = {
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  alerts: string[];
-  recommendations: string[];
-  reasons: string[];
-};
+export type { CommandCenterBrainReadModel } from '@quickrent/shared-types';
 
 function toDbUnifiedRequestStatus(status?: string): string | undefined {
   if (!status) {
@@ -211,7 +206,7 @@ function computeVendorAttentionReadModel(request: {
 }
 
 /**
- * Brain Level 1 read-model for Command Center list: priority, alerts, recommendations (no DB writes).
+ * Brain read-model for Command Center list (no DB writes): Level 1 signals + Level 2 next action / risk.
  */
 function computeCommandCenterBrainReadModel(input: {
   status: string;
@@ -220,6 +215,7 @@ function computeCommandCenterBrainReadModel(input: {
   needsAttention: boolean;
   vendorId: string | null;
   escalationHistoryCount: number;
+  attentionCodes: string[];
 }): CommandCenterBrainReadModel {
   const { status, slaBreached, needsAttention } = input;
   const escalationLevel = input.escalationLevel ?? 0;
@@ -227,6 +223,7 @@ function computeCommandCenterBrainReadModel(input: {
   const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
   const vendorId = input.vendorId?.trim() ?? '';
   const unassigned = !vendorId && !isTerminal;
+  const attentionCodes = input.attentionCodes ?? [];
 
   let priority: CommandCenterBrainReadModel['priority'] = 'LOW';
   if (slaBreached && escalationLevel >= 2) {
@@ -269,7 +266,49 @@ function computeCommandCenterBrainReadModel(input: {
     reasons.push('No Brain Level 1 escalation or SLA urgency signals');
   }
 
-  return { priority, alerts, recommendations, reasons };
+  let nextBestAction: CommandCenterBrainReadModel['nextBestAction'] = 'MONITOR_SLA';
+  if (escalationLevel >= 2) {
+    nextBestAction = 'URGENT_INTERVENTION';
+  } else if (escalationLevel > 0 && (slaBreached || needsAttention)) {
+    nextBestAction = 'REVIEW_ESCALATION';
+  } else if (vendorId && attentionCodes.includes('VENDOR_NOT_STARTED')) {
+    nextBestAction = 'REASSIGN_PROVIDER';
+  } else if (escalationLevel > 0 && !slaBreached && !needsAttention) {
+    nextBestAction = 'CLEAR_ESCALATION';
+  } else if (unassigned) {
+    nextBestAction = 'ASSIGN_PROVIDER';
+  } else if (slaBreached) {
+    nextBestAction = 'MONITOR_SLA';
+  }
+
+  let riskScore = 14;
+  if (priority === 'CRITICAL') {
+    riskScore = 90;
+  } else if (priority === 'HIGH') {
+    riskScore = 68;
+  } else if (priority === 'MEDIUM') {
+    riskScore = 38;
+  } else {
+    riskScore = 14;
+  }
+  riskScore += Math.min(12, escalationHistoryCount * 4);
+  if (slaBreached) riskScore += 8;
+  if (needsAttention) riskScore += 6;
+  if (unassigned) riskScore += 5;
+  riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
+
+  const riskReasons = [...reasons];
+  if (slaBreached) {
+    riskReasons.push('SLA breach flag');
+  }
+  if (escalationLevel > 0) {
+    riskReasons.push(`Escalation level ${escalationLevel}`);
+  }
+  if (attentionCodes.length) {
+    riskReasons.push(`Attention codes: ${attentionCodes.join(', ')}`);
+  }
+
+  return { priority, alerts, recommendations, reasons, nextBestAction, riskScore, riskReasons };
 }
 
 @Injectable()
@@ -436,7 +475,7 @@ export class CommandCenterService {
 
   private mapEscalateTicketActionToLastEscalation(
     action: {
-      actorId: string;
+      actorId: string | null;
       actorType: string;
       createdAt: Date;
       payload: Prisma.JsonValue | null;
@@ -446,7 +485,8 @@ export class CommandCenterService {
     const p = this.toRecord(action.payload);
     const reason = typeof p.reason === 'string' ? p.reason : '';
     let level = fallbackLevel;
-    const raw = p.level;
+    const raw =
+      p.newEscalationLevel ?? p.toEscalationLevel ?? p.level;
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       level = Math.floor(raw);
     } else if (typeof raw === 'string') {
@@ -1155,6 +1195,7 @@ export class CommandCenterService {
             needsAttention: attention.needsAttention,
             vendorId: row.vendorId,
             escalationHistoryCount: escRow.escalationHistoryCount,
+            attentionCodes: attention.attentionCodes,
           });
           return {
             ...row,

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Prisma, UnifiedRequestStatus } from '@prisma/client';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,6 +20,7 @@ export class SlaBreachService {
     private readonly prisma: PrismaService,
     private readonly auditTrailService: AuditTrailService,
     private readonly ticketActionsService: TicketActionsService,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -54,6 +56,11 @@ export class SlaBreachService {
 
       const now = new Date();
 
+      const didAutoL2 = await this.tryAutoEscalateBreachedLevelOneToTwo(client, r, now);
+      if (didAutoL2) {
+        return 'updated' as const;
+      }
+
       const responseBreached =
         r.responseDueAt != null && now.getTime() > r.responseDueAt.getTime() && r.firstResponseAt == null;
 
@@ -88,19 +95,21 @@ export class SlaBreachService {
             escalationLevel: nextEscalationLevel,
           },
         });
-        await this.writeBreachAudit(r.country, requestId, {
+        await this.writeSlaBreachAuditOnce(r.country, requestId, {
           breachType: mergedBreachType,
           responseBreached,
           completionBreached,
           phase: 'upgrade',
+          previousEscalationLevel: r.escalationLevel ?? 0,
+          newEscalationLevel: nextEscalationLevel,
+          fromBreachKey: currentNorm,
+          toBreachKey: mergedBreachType,
         });
-        await this.writeEscalationActionIfMaterialTransition(client, {
+        await this.writeEscalationTicketActionForSlaEscalation(client, {
           requestId,
           fromEscalationLevel: r.escalationLevel ?? 0,
           toEscalationLevel: nextEscalationLevel,
-          fromBreachType: r.breachType,
-          toBreachType: mergedBreachType,
-          reason: 'sla_breach_type_widened',
+          breachType: mergedBreachType,
         });
         return 'updated' as const;
       }
@@ -122,19 +131,21 @@ export class SlaBreachService {
         },
       });
 
-      await this.writeBreachAudit(r.country, requestId, {
+      await this.writeSlaBreachAuditOnce(r.country, requestId, {
         breachType: mergedBreachType,
         responseBreached,
         completionBreached,
         phase: 'initial',
+        previousEscalationLevel: r.escalationLevel ?? 0,
+        newEscalationLevel: escalationLevel,
+        fromBreachKey: currentNorm,
+        toBreachKey: mergedBreachType,
       });
-      await this.writeEscalationActionIfMaterialTransition(client, {
+      await this.writeEscalationTicketActionForSlaEscalation(client, {
         requestId,
         fromEscalationLevel: r.escalationLevel ?? 0,
         toEscalationLevel: escalationLevel,
-        fromBreachType: r.breachType,
-        toBreachType: mergedBreachType,
-        reason: 'sla_breach_detected',
+        breachType: mergedBreachType,
       });
 
       return 'updated' as const;
@@ -199,52 +210,173 @@ export class SlaBreachService {
       return 'BOTH';
     }
     if (cur == null) {
-      return tgt;
+      return tgt ?? 'RESPONSE';
     }
-    return tgt;
+    return tgt ?? 'RESPONSE';
   }
 
-  private async writeBreachAudit(
+  /** Default 5m; override with `ESCALATION_LEVEL_2_DELAY_MS` (minimum 30_000 ms). */
+  private getEscalationLevel2DelayMs(): number {
+    const raw = this.configService.get<string>('ESCALATION_LEVEL_2_DELAY_MS');
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 30_000) {
+      return Math.floor(n);
+    }
+    return 5 * 60 * 1000;
+  }
+
+  /**
+   * After dwell at breach + escalation 1, bump to level 2 (time-driven; does not touch status or SLA breach flags).
+   */
+  private async tryAutoEscalateBreachedLevelOneToTwo(
+    client: Prisma.TransactionClient | PrismaService,
+    r: {
+      id: string;
+      country: string;
+      slaBreached: boolean;
+      firstBreachedAt: Date | null;
+      escalationLevel: number | null;
+    },
+    now: Date,
+  ): Promise<boolean> {
+    const esc = r.escalationLevel ?? 0;
+    if (!r.slaBreached || esc !== 1 || !r.firstBreachedAt) {
+      return false;
+    }
+    const delayMs = this.getEscalationLevel2DelayMs();
+    if (now.getTime() - r.firstBreachedAt.getTime() <= delayMs) {
+      return false;
+    }
+    const dedupeKey = `auto-l2|${r.id}|1->2`;
+    const exists = await client.ticketAction.findFirst({
+      where: {
+        ticketId: r.id,
+        actionType: 'ESCALATE',
+        payload: { path: ['autoEscalationDedupeKey'], equals: dedupeKey },
+      },
+      select: { id: true },
+    });
+    if (exists) {
+      return false;
+    }
+    await client.unifiedRequest.update({
+      where: { id: r.id },
+      data: { escalationLevel: 2 },
+    });
+    await this.ticketActionsService.createAction({
+      ticketId: r.id,
+      actionType: 'ESCALATE',
+      actorType: 'system',
+      actorId: 'system',
+      payload: {
+        reason: 'AUTO_LEVEL_2_ESCALATION',
+        previousEscalationLevel: 1,
+        newEscalationLevel: 2,
+        autoEscalationDedupeKey: dedupeKey,
+      },
+    });
+    await this.auditTrailService.write({
+      action: 'ESCALATION_LEVEL_2_TRIGGERED',
+      entity: 'UnifiedRequest',
+      entityId: r.id,
+      countryCode: r.country,
+      severity: 'WARNING',
+      metadata: {
+        requestId: r.id,
+        fromEscalationLevel: 1,
+        toEscalationLevel: 2,
+        firstBreachedAt: r.firstBreachedAt.toISOString(),
+        dedupeKey,
+      },
+    });
+    return true;
+  }
+
+  private async writeSlaBreachAuditOnce(
     country: string,
     requestId: string,
-    metadata: Record<string, unknown>,
+    ctx: {
+      breachType: string;
+      responseBreached: boolean;
+      completionBreached: boolean;
+      phase: 'initial' | 'upgrade';
+      previousEscalationLevel: number;
+      newEscalationLevel: number;
+      fromBreachKey: SlaBreachAxis | null;
+      toBreachKey: SlaBreachAxis;
+    },
   ): Promise<void> {
+    const detectedAt = new Date().toISOString();
+    const fromKey = ctx.fromBreachKey ?? 'none';
+    const slaBreachDedupeKey = [
+      'SLA_BREACH_DETECTED',
+      requestId,
+      ctx.phase,
+      `${String(fromKey)}->${String(ctx.toBreachKey)}`,
+      `e${ctx.previousEscalationLevel}->${ctx.newEscalationLevel}`,
+    ].join('|');
+
+    if (await this.auditTrailService.hasSlaBreachDetectedWithDedupeKey(requestId, slaBreachDedupeKey)) {
+      return;
+    }
+
     await this.auditTrailService.write({
       action: 'SLA_BREACH_DETECTED',
       entity: 'UnifiedRequest',
       entityId: requestId,
       countryCode: country,
       severity: 'WARNING',
-      metadata,
+      metadata: {
+        requestId,
+        breachType: ctx.breachType,
+        previousEscalationLevel: ctx.previousEscalationLevel,
+        newEscalationLevel: ctx.newEscalationLevel,
+        detectedAt,
+        slaBreachDedupeKey,
+        responseBreached: ctx.responseBreached,
+        completionBreached: ctx.completionBreached,
+        phase: ctx.phase,
+      },
     });
   }
 
-  private async writeEscalationActionIfMaterialTransition(
+  /**
+   * When SLA evaluation raises `escalationLevel`, append a single system ESCALATE TicketAction.
+   * Duplicate prevention: stable `slaBreachTransitionKey` on the JSON payload (unique per breach-level jump).
+   */
+  private async writeEscalationTicketActionForSlaEscalation(
     client: Prisma.TransactionClient | PrismaService,
     input: {
       requestId: string;
       fromEscalationLevel: number;
       toEscalationLevel: number;
-      fromBreachType: string | null;
-      toBreachType: string;
-      reason: string;
+      breachType: string;
     },
   ): Promise<void> {
-    const hasEscalationLevelIncrease = input.toEscalationLevel > input.fromEscalationLevel;
-    const fromN = this.normalizeBreachTypeKey(input.fromBreachType);
-    const toN = this.normalizeBreachTypeKey(input.toBreachType);
-    const hasBreachTypeWidened = fromN !== toN;
-    if (!hasEscalationLevelIncrease && !hasBreachTypeWidened) {
+    if (input.toEscalationLevel <= input.fromEscalationLevel) {
       return;
     }
 
-    const transitionKey = this.buildEscalationTransitionKey(input);
-    const latestEscalate = await client.ticketAction.findFirst({
-      where: { ticketId: input.requestId, actionType: 'ESCALATE' },
-      orderBy: { createdAt: 'desc' },
-      select: { payload: true },
+    const detectedAt = new Date().toISOString();
+    const slaBreachTransitionKey = [
+      'sla-breach-escalate',
+      input.requestId,
+      `${input.fromEscalationLevel}->${input.toEscalationLevel}`,
+      input.breachType,
+    ].join('|');
+
+    const exists = await client.ticketAction.findFirst({
+      where: {
+        ticketId: input.requestId,
+        actionType: 'ESCALATE',
+        payload: {
+          path: ['slaBreachTransitionKey'],
+          equals: slaBreachTransitionKey,
+        },
+      },
+      select: { id: true },
     });
-    if (this.payloadHasTransitionKey(latestEscalate?.payload, transitionKey)) {
+    if (exists) {
       return;
     }
 
@@ -252,41 +384,16 @@ export class SlaBreachService {
       ticketId: input.requestId,
       actionType: 'ESCALATE',
       actorType: 'system',
-      actorId: 'sla-engine',
+      actorId: 'system',
       payload: {
-        source: 'sla-breach',
-        reason: input.reason,
-        fromEscalationLevel: input.fromEscalationLevel,
-        toEscalationLevel: input.toEscalationLevel,
-        fromBreachType: input.fromBreachType,
-        toBreachType: input.toBreachType,
-        transitionKey,
+        reason: 'SLA breach',
+        breachType: input.breachType,
+        previousEscalationLevel: input.fromEscalationLevel,
+        newEscalationLevel: input.toEscalationLevel,
+        detectedAt,
+        slaBreachTransitionKey,
       },
     });
-  }
-
-  private buildEscalationTransitionKey(input: {
-    requestId: string;
-    fromEscalationLevel: number;
-    toEscalationLevel: number;
-    fromBreachType: string | null;
-    toBreachType: string;
-    reason: string;
-  }): string {
-    return [
-      input.requestId,
-      input.reason,
-      `lvl:${input.fromEscalationLevel}->${input.toEscalationLevel}`,
-      `breach:${input.fromBreachType ?? 'none'}->${input.toBreachType}`,
-    ].join('|');
-  }
-
-  private payloadHasTransitionKey(payload: Prisma.JsonValue | null | undefined, key: string): boolean {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      return false;
-    }
-    const transitionKey = (payload as Record<string, unknown>).transitionKey;
-    return typeof transitionKey === 'string' && transitionKey === key;
   }
 
   /**

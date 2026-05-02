@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ensureAdminRequestsRealtimeSocket,
@@ -12,6 +13,8 @@ import {
   normalizeDashboardRequestStatus,
   type DashboardRequestStatus,
 } from '../lib/request-status-ui';
+import type { CommandCenterBrainReadModel } from '@quickrent/shared-types';
+import { isCommandCenterBrainNextBestAction } from '@quickrent/shared-types';
 
 type AttentionSeverityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
@@ -24,15 +27,9 @@ type DashboardLastEscalation = {
   source: string;
 };
 
-/** Command Center Brain Level 1 — server-only; ingested from list `brain` field (Step 9). */
-type DashboardBrainPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-
-type DashboardBrain = {
-  priority: DashboardBrainPriority;
-  alerts: string[];
-  recommendations: string[];
-  reasons: string[];
-};
+/** Command Center Brain — same contract as API list read-model (`CommandCenterBrainReadModel`). */
+type DashboardBrain = CommandCenterBrainReadModel;
+type DashboardBrainPriority = CommandCenterBrainReadModel['priority'];
 
 type DashboardRequest = {
   id: string;
@@ -234,7 +231,14 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
     ? o.recommendations.filter((x): x is string => typeof x === 'string')
     : [];
   const reasons = Array.isArray(o.reasons) ? o.reasons.filter((x): x is string => typeof x === 'string') : [];
-  return { priority: p, alerts, recommendations, reasons };
+  const nextBestAction = isCommandCenterBrainNextBestAction(o.nextBestAction) ? o.nextBestAction : 'MONITOR_SLA';
+  const rawRisk = o.riskScore;
+  const riskScore =
+    typeof rawRisk === 'number' && Number.isFinite(rawRisk) ? Math.max(0, Math.min(100, Math.round(rawRisk))) : 0;
+  const riskReasons = Array.isArray(o.riskReasons)
+    ? o.riskReasons.filter((x): x is string => typeof x === 'string')
+    : [];
+  return { priority: p, alerts, recommendations, reasons, nextBestAction, riskScore, riskReasons };
 }
 
 /** Enterprise-style priority badge (Brain panel only). */
@@ -1030,6 +1034,15 @@ export default function AdminOverviewPage() {
     });
   };
 
+  const copyProviderContactRef = async (request: DashboardRequest) => {
+    const line = `tenant:${request.tenantId} · request:${request.id}${request.vendorId ? ` · vendor:${request.vendorId}` : ''}`;
+    try {
+      await navigator.clipboard?.writeText(line);
+    } catch {
+      window.prompt('Copy reference', line);
+    }
+  };
+
   const assignVendor = async (requestId: string, selectedVendorId: string) => {
     if (!selectedVendorId.trim()) {
       setError('Select a vendor to assign');
@@ -1182,6 +1195,8 @@ export default function AdminOverviewPage() {
         )
         : [];
 
+    const nba = request.brain?.nextBestAction;
+
     const rowStatus = request.status;
     const rawStatus = (request.rawStatus ?? '').toUpperCase();
     const agingTier = getAgingTier(request.createdAt, request.status);
@@ -1235,6 +1250,13 @@ export default function AdminOverviewPage() {
       ...(accent ? { borderLeft: `4px solid ${accent}` } : {}),
     };
 
+    if (nba === 'URGENT_INTERVENTION' && !isTopSlaRow) {
+      rowCardStyle.border = '1px solid #FDE68A';
+      rowCardStyle.background = isRowSelected ? '#FFFBEB' : '#FFFCF0';
+      const u = typeof rowCardStyle.boxShadow === 'string' ? rowCardStyle.boxShadow : '';
+      rowCardStyle.boxShadow = u ? `${u}, 0 0 0 1px rgba(245, 158, 11, 0.12)` : '0 0 0 1px rgba(245, 158, 11, 0.12)';
+    }
+
     if (isArrivalFlash) {
       const arrivalGlow = '0 0 0 2px rgba(52, 211, 153, 0.55), 0 0 22px rgba(16, 185, 129, 0.22)';
       const existingShadow = typeof rowCardStyle.boxShadow === 'string' ? rowCardStyle.boxShadow : '';
@@ -1270,11 +1292,14 @@ export default function AdminOverviewPage() {
             aria-label="Command Center Brain"
             style={{
               marginTop: 10,
-              border: '1px solid #E2E8F0',
+              border: nba === 'URGENT_INTERVENTION' ? '1px solid #FCD34D' : '1px solid #E2E8F0',
               borderRadius: 8,
               padding: '12px 12px',
-              background: '#F8FAFC',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+              background: nba === 'URGENT_INTERVENTION' ? '#FFFBEB' : '#F8FAFC',
+              boxShadow:
+                nba === 'URGENT_INTERVENTION'
+                  ? '0 1px 2px rgba(245, 158, 11, 0.08)'
+                  : '0 1px 2px rgba(0,0,0,0.04)',
               display: 'flex',
               flexDirection: 'column',
               gap: 14,
@@ -1321,6 +1346,23 @@ export default function AdminOverviewPage() {
                 </span>
               </div>
             </div>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#475569',
+                lineHeight: 1.35,
+              }}
+              title={request.brain.riskReasons.length ? request.brain.riskReasons.join(' · ') : undefined}
+            >
+              Risk {request.brain.riskScore} · {request.brain.nextBestAction.replace(/_/g, ' ')}
+            </div>
+
+            {nba === 'URGENT_INTERVENTION' ? (
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', lineHeight: 1.45 }}>
+                ⚠ تدخل فوري مطلوب
+              </div>
+            ) : null}
 
             {Array.isArray(request.brain.alerts) && request.brain.alerts.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1361,12 +1403,219 @@ export default function AdminOverviewPage() {
               </div>
             ) : null}
 
-            {Array.isArray(request.brain.recommendations) && request.brain.recommendations.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: 0.01 }}>
-                  💡 Actions
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: 0.01 }}>
+                💡 Actions
+              </div>
+              {nba === 'REVIEW_ESCALATION' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+                  <Link
+                    href="/escalations"
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      lineHeight: 1.35,
+                      textDecoration: 'none',
+                      display: 'inline-block',
+                      border: '1px solid #CBD5E1',
+                      background: '#FFFFFF',
+                      color: '#0F172A',
+                    }}
+                  >
+                    Open Escalation Panel
+                  </Link>
+                  <button
+                    type="button"
+                    disabled={!request.vendorId}
+                    title={request.vendorId ? undefined : 'Assign a provider before reassign'}
+                    onClick={() => request.vendorId && openReassignVendor(request.id, request.vendorId)}
+                    style={{
+                      width: 'fit-content',
+                      minWidth: 180,
+                      padding: '7px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      lineHeight: 1.35,
+                      cursor: request.vendorId ? 'pointer' : 'not-allowed',
+                      opacity: request.vendorId ? 1 : 0.55,
+                      ...(request.vendorId ? DASHBOARD_PRIMARY_ACTION_BTN : { border: '1px solid #E2E8F0', background: '#F1F5F9', color: '#64748B' }),
+                    }}
+                  >
+                    Reassign Provider
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void copyProviderContactRef(request)}
+                    style={{
+                      width: 'fit-content',
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: '1px solid #CBD5E1',
+                      background: '#FFFFFF',
+                      color: '#334155',
+                    }}
+                  >
+                    Contact Provider
+                  </button>
                 </div>
-                {brainHasAssignProviderReco ? (
+              ) : null}
+              {nba === 'URGENT_INTERVENTION' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
+                  <button
+                    type="button"
+                    disabled={!request.vendorId}
+                    title={request.vendorId ? undefined : 'Assign a provider before reassign'}
+                    onClick={() => request.vendorId && openReassignVendor(request.id, request.vendorId)}
+                    style={{
+                      width: 'fit-content',
+                      minWidth: 180,
+                      padding: '7px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      lineHeight: 1.35,
+                      cursor: request.vendorId ? 'pointer' : 'not-allowed',
+                      opacity: request.vendorId ? 1 : 0.55,
+                      ...(request.vendorId ? DASHBOARD_PRIMARY_ACTION_BTN : { border: '1px solid #E2E8F0', background: '#F1F5F9', color: '#64748B' }),
+                    }}
+                  >
+                    Reassign Provider
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openEscalateForm(request.id)}
+                    style={{
+                      width: 'fit-content',
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: '1px solid #CBD5E1',
+                      background: '#FFFFFF',
+                      color: '#334155',
+                    }}
+                  >
+                    Escalate further (manual)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void loadTimeline(request.id)}
+                    style={{
+                      width: 'fit-content',
+                      padding: '6px 10px',
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: '1px solid #CBD5E1',
+                      background: '#FFFFFF',
+                      color: '#334155',
+                    }}
+                  >
+                    Open timeline
+                  </button>
+                </div>
+              ) : null}
+              {nba === 'ASSIGN_PROVIDER' ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Assign provider (same as row Assign Vendor)"
+                    title="Opens the same assign vendor flow as the row Assign Vendor button"
+                    onClick={() => openAssignVendor(request.id)}
+                    style={{
+                      width: 'fit-content',
+                      minWidth: 180,
+                      boxSizing: 'border-box',
+                      marginTop: 4,
+                      padding: '7px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      lineHeight: 1.35,
+                      cursor: 'pointer',
+                      ...DASHBOARD_PRIMARY_ACTION_BTN,
+                    }}
+                  >
+                    Assign provider now
+                  </button>
+                  {brainOtherRecommendations.length > 0 ? (
+                    <div
+                      style={{ fontSize: 10, color: '#94A3B8', lineHeight: 1.45 }}
+                      title={brainOtherRecommendations.join(' · ')}
+                    >
+                      {brainOtherRecommendations.join(' · ')}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              {nba === 'REASSIGN_PROVIDER' ? (
+                <button
+                  type="button"
+                  onClick={() => (request.vendorId ? openReassignVendor(request.id, request.vendorId) : openAssignVendor(request.id))}
+                  style={{
+                    width: 'fit-content',
+                    minWidth: 180,
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    lineHeight: 1.35,
+                    cursor: 'pointer',
+                    ...DASHBOARD_PRIMARY_ACTION_BTN,
+                  }}
+                >
+                  {request.vendorId ? 'Reassign provider' : 'Assign provider now'}
+                </button>
+              ) : null}
+              {nba === 'CLEAR_ESCALATION' ? (
+                <button
+                  type="button"
+                  disabled={resolveEscalationSubmittingRequestId === request.id}
+                  onClick={() => void quickResolveEscalation(request.id)}
+                  style={{
+                    width: 'fit-content',
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    lineHeight: 1.35,
+                    cursor: 'pointer',
+                    ...DASHBOARD_PRIMARY_ACTION_BTN,
+                  }}
+                >
+                  Clear escalation
+                </button>
+              ) : null}
+              {nba === 'MONITOR_SLA' ? (
+                <>
+                  <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.45, fontWeight: 500 }}>Monitor SLA</div>
+                  {Array.isArray(request.brain.recommendations) && request.brain.recommendations.length > 0 ? (
+                    <div
+                      style={{ fontSize: 10, color: '#94A3B8', lineHeight: 1.45 }}
+                      title={request.brain.recommendations.join(' · ')}
+                    >
+                      {request.brain.recommendations.join(' · ')}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              {nba !== 'REVIEW_ESCALATION'
+              && nba !== 'URGENT_INTERVENTION'
+              && nba !== 'ASSIGN_PROVIDER'
+              && nba !== 'REASSIGN_PROVIDER'
+              && nba !== 'CLEAR_ESCALATION'
+              && nba !== 'MONITOR_SLA'
+              && Array.isArray(request.brain.recommendations)
+              && request.brain.recommendations.length > 0 ? (
+                brainHasAssignProviderReco ? (
                   <>
                     <button
                       type="button"
@@ -1405,9 +1654,9 @@ export default function AdminOverviewPage() {
                   >
                     {request.brain.recommendations.join(' · ')}
                   </div>
-                )}
-              </div>
-            ) : null}
+                )
+              ) : null}
+            </div>
           </div>
         ) : null}
         {slaBadges || request.needsAttention ? (
@@ -1549,7 +1798,10 @@ export default function AdminOverviewPage() {
               Clear escalation
             </button>
           ) : null}
-          {rowStatus === 'pending' && !request.vendorId ? (
+          {rowStatus === 'pending'
+          && !request.vendorId
+          && nba !== 'REVIEW_ESCALATION'
+          && nba !== 'URGENT_INTERVENTION' ? (
             <button
               type="button"
               disabled={assignSubmittingRequestId === request.id}
