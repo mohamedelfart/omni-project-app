@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { BookingStatus, PaymentStatus, PropertyStatus } from '@prisma/client';
+import { BookingStatus, PaymentStatus, Prisma, PropertyStatus } from '@prisma/client';
 import type { CommandCenterRequestSlaSnapshot } from './dto/command-center-request-sla.dto';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { LocationService } from '../location/location.service';
@@ -19,6 +19,15 @@ type DashboardFilters = {
   serviceType?: string;
   status?: string;
   vendorId?: string;
+};
+
+/** Last `TicketAction` ESCALATE snapshot for Command Center list / operations read-model (Step 7C). */
+export type CommandCenterLastEscalation = {
+  level: number;
+  reason: string;
+  actor: string;
+  createdAt: string;
+  source: string;
 };
 
 function toDbUnifiedRequestStatus(status?: string): string | undefined {
@@ -355,6 +364,75 @@ export class CommandCenterService {
     });
   }
 
+  private mapEscalateTicketActionToLastEscalation(
+    action: {
+      actorId: string;
+      actorType: string;
+      createdAt: Date;
+      payload: Prisma.JsonValue | null;
+    },
+    fallbackLevel: number,
+  ): CommandCenterLastEscalation {
+    const p = this.toRecord(action.payload);
+    const reason = typeof p.reason === 'string' ? p.reason : '';
+    let level = fallbackLevel;
+    const raw = p.level;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      level = Math.floor(raw);
+    } else if (typeof raw === 'string') {
+      const n = Number(String(raw).trim());
+      if (Number.isFinite(n) && n >= 1) level = Math.floor(n);
+    }
+    const actor = action.actorId?.trim() ? action.actorId : 'system';
+    const isManualActor =
+      actor !== 'system' && (action.actorType === 'admin' || action.actorType === 'command-center');
+    return {
+      level,
+      reason,
+      actor,
+      createdAt: action.createdAt.toISOString(),
+      source: isManualActor ? 'MANUAL' : 'SYSTEM',
+    };
+  }
+
+  /**
+   * TicketAction `ESCALATE` rows only — counts + last event for Command Center intelligence (read-model).
+   */
+  private async collectEscalationTicketInsights(
+    requestIds: string[],
+    escalationLevelByRequestId: Map<string, number>,
+  ): Promise<Map<string, { lastEscalation: CommandCenterLastEscalation | null; escalationHistoryCount: number }>> {
+    const out = new Map<string, { lastEscalation: CommandCenterLastEscalation | null; escalationHistoryCount: number }>();
+    for (const id of requestIds) {
+      out.set(id, { lastEscalation: null, escalationHistoryCount: 0 });
+    }
+    if (!requestIds.length) {
+      return out;
+    }
+    const actions = await this.prisma.ticketAction.findMany({
+      where: { ticketId: { in: requestIds }, actionType: 'ESCALATE' },
+      select: { ticketId: true, actorId: true, actorType: true, createdAt: true, payload: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const byTicket = new Map<string, typeof actions>();
+    for (const a of actions) {
+      const arr = byTicket.get(a.ticketId) ?? [];
+      arr.push(a);
+      byTicket.set(a.ticketId, arr);
+    }
+    for (const [ticketId, arr] of byTicket) {
+      arr.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      const latest = arr[0];
+      if (!latest) {
+        continue;
+      }
+      const fallback = escalationLevelByRequestId.get(ticketId) ?? 0;
+      const last = this.mapEscalateTicketActionToLastEscalation(latest, fallback);
+      out.set(ticketId, { lastEscalation: last, escalationHistoryCount: arr.length });
+    }
+    return out;
+  }
+
   private includeForOperations() {
     return {
       trackingEvents: { orderBy: { createdAt: 'asc' as const } },
@@ -403,6 +481,12 @@ export class CommandCenterService {
       orderBy: { createdAt: 'desc' },
     });
 
+    const escalationLevelById = new Map(requests.map((r) => [r.id, r.escalationLevel ?? 0]));
+    const escalationInsights = await this.collectEscalationTicketInsights(
+      requests.map((r) => r.id),
+      escalationLevelById,
+    );
+
     return {
       filters: filters ?? {},
       policyContext,
@@ -420,6 +504,8 @@ export class CommandCenterService {
           request.cleaningRequest ||
           request.airportTransfer,
         );
+
+        const escRow = escalationInsights.get(request.id) ?? { lastEscalation: null, escalationHistoryCount: 0 };
 
         return {
           ticketId: request.id,
@@ -469,6 +555,8 @@ export class CommandCenterService {
             hasLocation: request.pickupLat != null || request.currentLat != null || request.targetLat != null,
           },
           integrationVisibility: this.extractIntegrationVisibility(request.routeData),
+          lastEscalation: escRow.lastEscalation,
+          escalationHistoryCount: escRow.escalationHistoryCount,
           ...computeVendorAttentionReadModel({
             createdAt: request.createdAt,
             status: request.status,
@@ -972,22 +1060,32 @@ export class CommandCenterService {
         },
         orderBy: { createdAt: 'desc' },
       })
-      .then((rows) =>
-        rows.map((row) => ({
-          ...row,
-          sla: this.pickSlaSnapshot(row),
-          ...computeVendorAttentionReadModel({
-            createdAt: row.createdAt,
-            status: row.status,
-            vendorId: row.vendorId,
-            firstResponseAt: row.firstResponseAt,
-            completedAt: row.completedAt,
-            responseDueAt: row.responseDueAt,
-            completionDueAt: row.completionDueAt,
-            escalationLevel: row.escalationLevel,
-          }),
-        })),
-      );
+      .then(async (rows) => {
+        const escalationLevelById = new Map(rows.map((r) => [r.id, r.escalationLevel ?? 0]));
+        const escalationInsights = await this.collectEscalationTicketInsights(
+          rows.map((r) => r.id),
+          escalationLevelById,
+        );
+        return rows.map((row) => {
+          const escRow = escalationInsights.get(row.id) ?? { lastEscalation: null, escalationHistoryCount: 0 };
+          return {
+            ...row,
+            sla: this.pickSlaSnapshot(row),
+            lastEscalation: escRow.lastEscalation,
+            escalationHistoryCount: escRow.escalationHistoryCount,
+            ...computeVendorAttentionReadModel({
+              createdAt: row.createdAt,
+              status: row.status,
+              vendorId: row.vendorId,
+              firstResponseAt: row.firstResponseAt,
+              completedAt: row.completedAt,
+              responseDueAt: row.responseDueAt,
+              completionDueAt: row.completionDueAt,
+              escalationLevel: row.escalationLevel,
+            }),
+          };
+        });
+      });
   }
 
   async assignProvider(user: AuthenticatedUser, requestId: string, providerId: string) {

@@ -242,10 +242,6 @@ export class UnifiedRequestsService {
         : user.role;
 
     const payloadJson = this.toJson(payload);
-    const auditMetadata: Record<string, unknown> = { reason: dto.reason };
-    if (dto.level !== undefined && dto.level !== '') auditMetadata.level = dto.level;
-    if (dto.target !== undefined && dto.target !== '') auditMetadata.target = dto.target;
-    if (dto.references && dto.references.length > 0) auditMetadata.referencesCount = dto.references.length;
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.unifiedRequest.findUnique({
@@ -281,16 +277,40 @@ export class UnifiedRequestsService {
         });
       }
 
-      await tx.auditLog.create({
-        data: {
-          actorUserId: user.id || undefined,
-          action: 'manual_escalation',
+      const finalEscalationLevel = nextLevel > priorLevel ? nextLevel : priorLevel;
+      const actorForAudit = user.id?.trim() ? user.id : 'system';
+      const duplicateEscalationAudit = await tx.auditLog.findFirst({
+        where: {
           entity: 'UnifiedRequest',
           entityId: ticketId,
-          countryCode: existing.country,
-          metadata: this.toJson(auditMetadata),
+          action: 'ESCALATION_TRIGGERED',
+          metadata: { path: ['ticketActionId'], equals: created.id },
         },
+        select: { id: true },
       });
+      if (!duplicateEscalationAudit) {
+        await tx.auditLog.create({
+          data: {
+            actorUserId: user.id || undefined,
+            action: 'ESCALATION_TRIGGERED',
+            entity: 'UnifiedRequest',
+            entityId: ticketId,
+            countryCode: existing.country,
+            metadata: this.toJson({
+              type: 'ESCALATION_TRIGGERED',
+              requestId: ticketId,
+              escalationLevel: finalEscalationLevel,
+              reason: dto.reason,
+              actor: actorForAudit,
+              source: 'MANUAL',
+              ticketActionId: created.id,
+              level: dto.level !== undefined && dto.level !== '' ? dto.level : undefined,
+              target: dto.target !== undefined && dto.target !== '' ? dto.target : undefined,
+              referencesCount: dto.references?.length ?? 0,
+            }),
+          },
+        });
+      }
 
       return mapPersistedTicketActionToDomain(created);
     });
