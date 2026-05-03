@@ -215,14 +215,14 @@ export class SlaBreachService {
     return tgt ?? 'RESPONSE';
   }
 
-  /** TEMP TEST: default 10s; override with `ESCALATION_LEVEL_2_DELAY_MS` (minimum 30_000 ms). */
+  /** Default 5m; override with `ESCALATION_LEVEL_2_DELAY_MS` (minimum 30_000 ms). */
   private getEscalationLevel2DelayMs(): number {
     const raw = this.configService.get<string>('ESCALATION_LEVEL_2_DELAY_MS');
     const n = Number(raw);
     if (Number.isFinite(n) && n >= 30_000) {
       return Math.floor(n);
     }
-    return 10_000;
+    return 5 * 60 * 1000;
   }
 
   /**

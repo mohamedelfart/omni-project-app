@@ -36,9 +36,6 @@ importers:
 
   apps/admin-web:
     dependencies:
-      '@quickrent/shared-types':
-        specifier: workspace:*
-        version: link:../../packages/shared-types
       next:
         specifier: 15.0.4
         version: 15.0.4(@babel/core@7.29.0)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
@@ -261,19 +258,11 @@ importers:
         specifier: ^4.8.1
         version: 4.8.3
 
-  packages/config:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
+  packages/config: {}
 
   packages/design-system: {}
 
-  packages/shared-types:
-    devDependencies:
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
+  packages/shared-types: {}
 
 packages:
 

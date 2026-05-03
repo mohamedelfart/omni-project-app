@@ -10,7 +10,7 @@ export type PersistedTicketActionRow = {
   ticketId: string;
   actionType: string;
   actorType: string;
-  actorId: string | null;
+  actorId: string;
   payload: Prisma.JsonValue | null;
   createdAt: Date;
 };
@@ -29,7 +29,7 @@ export function mapPersistedTicketActionToDomain(row: PersistedTicketActionRow):
     ticketId: row.ticketId as TicketId,
     type: row.actionType as TicketActionType,
     payload: prismaPayloadToRecord(row.payload),
-    createdBy: { type: row.actorType, id: row.actorId ?? '' },
+    createdBy: { type: row.actorType, id: row.actorId },
     createdAt: row.createdAt,
   };
   return action;

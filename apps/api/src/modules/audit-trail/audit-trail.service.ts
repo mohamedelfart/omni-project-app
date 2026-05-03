@@ -34,32 +34,6 @@ export class AuditTrailService {
     });
   }
 
-  /**
-   * Idempotency guard for SLA breach audit rows: same material transition must not double-insert.
-   */
-  async hasSlaBreachDetectedWithDedupeKey(requestId: string, slaBreachDedupeKey: string): Promise<boolean> {
-    const recent = await this.prisma.auditLog.findMany({
-      where: {
-        action: 'SLA_BREACH_DETECTED',
-        entity: 'UnifiedRequest',
-        entityId: requestId,
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 48,
-      select: { metadata: true },
-    });
-    for (const row of recent) {
-      const meta = row.metadata;
-      if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
-        const k = (meta as Record<string, unknown>).slaBreachDedupeKey;
-        if (typeof k === 'string' && k === slaBreachDedupeKey) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   search(query: {
     action?: string;
     entity?: string;
