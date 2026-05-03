@@ -14,7 +14,7 @@ import {
   normalizeDashboardRequestStatus,
   type DashboardRequestStatus,
 } from '../lib/request-status-ui';
-import type { CommandCenterBrainReadModel } from '@quickrent/shared-types';
+import type { CommandCenterBrainProviderSuitability, CommandCenterBrainReadModel } from '@quickrent/shared-types';
 import { isCommandCenterBrainNextBestAction } from '@quickrent/shared-types';
 
 type AttentionSeverityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
@@ -255,7 +255,62 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
       reasons: Array.isArray(pi.reasons) ? pi.reasons.filter((x): x is string => typeof x === 'string') : [],
     };
   }
-  return { priority: p, alerts, recommendations, reasons, nextBestAction, riskScore, riskReasons, providerIntelligence };
+
+  const psRaw = o.providerSuitability;
+  let providerSuitability: DashboardBrain['providerSuitability'] | undefined;
+  if (psRaw && typeof psRaw === 'object' && !Array.isArray(psRaw)) {
+    const ps = psRaw as Record<string, unknown>;
+    const parseCand = (x: unknown): { providerId: string; score: number; reasons: string[] } | null => {
+      if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+      const c = x as Record<string, unknown>;
+      const providerId = typeof c.providerId === 'string' ? c.providerId.trim() : '';
+      const score =
+        typeof c.score === 'number' && Number.isFinite(c.score) ? Math.max(0, Math.min(100, Math.round(c.score))) : 0;
+      const reasons = Array.isArray(c.reasons) ? c.reasons.filter((r): r is string => typeof r === 'string') : [];
+      if (!providerId) return null;
+      return { providerId, score, reasons };
+    };
+    const candidates = (Array.isArray(ps.candidates) ? ps.candidates : [])
+      .map(parseCand)
+      .filter((x): x is { providerId: string; score: number; reasons: string[] } => x != null);
+    let currentProvider: CommandCenterBrainProviderSuitability['currentProvider'] = null;
+    const cur = ps.currentProvider;
+    if (cur && typeof cur === 'object' && !Array.isArray(cur)) {
+      const c = cur as Record<string, unknown>;
+      const providerId = typeof c.providerId === 'string' ? c.providerId.trim() : '';
+      if (providerId) {
+        const score =
+          typeof c.score === 'number' && Number.isFinite(c.score) ? Math.max(0, Math.min(100, Math.round(c.score))) : 0;
+        const reasons = Array.isArray(c.reasons) ? c.reasons.filter((r): r is string => typeof r === 'string') : [];
+        currentProvider = { providerId, score, reasons };
+      }
+    }
+    const rec = ps.recommendedProviderId;
+    const recommendedProviderId =
+      rec === null || rec === undefined
+        ? null
+        : typeof rec === 'string' && rec.trim()
+          ? rec.trim()
+          : null;
+    providerSuitability = { currentProvider, candidates, recommendedProviderId };
+  }
+
+  const base: DashboardBrain = {
+    priority: p,
+    alerts,
+    recommendations,
+    reasons,
+    nextBestAction,
+    riskScore,
+    riskReasons,
+    providerIntelligence,
+  };
+  return providerSuitability !== undefined ? { ...base, providerSuitability } : base;
+}
+
+function formatProviderSuitabilityReasonSummary(reasons: string[]): string {
+  const parts = reasons.filter(Boolean).slice(0, 2);
+  return parts.join(', ') || '—';
 }
 
 /** Enterprise-style priority badge (Brain panel only). */
@@ -1485,6 +1540,66 @@ export default function AdminOverviewPage() {
                         ))}
                       </ul>
                     </div>
+                  ) : null}
+                </div>
+              );
+            })()}
+
+            {(() => {
+              const ps = request.brain.providerSuitability;
+              const hasPs =
+                ps && (ps.candidates.length > 0 || ps.currentProvider != null);
+              if (!hasPs) return null;
+              const listStylePs: CSSProperties = {
+                margin: 0,
+                paddingLeft: 0,
+                listStyle: 'none',
+                fontSize: 10,
+                color: '#475569',
+                lineHeight: 1.5,
+                fontWeight: 500,
+              };
+              const recId = ps.recommendedProviderId ?? '';
+              return (
+                <div
+                  style={{
+                    borderTop: '1px solid #E2E8F0',
+                    paddingTop: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#334155', letterSpacing: 0.01 }}>
+                    Provider Suitability
+                  </div>
+                  {ps.currentProvider?.providerId ? (
+                    <div style={{ fontSize: 10, color: '#334155' }}>
+                      Current: {ps.currentProvider.providerId} — {ps.currentProvider.score}
+                    </div>
+                  ) : null}
+                  {ps.candidates.length > 0 ? (
+                    <ul style={listStylePs}>
+                      {ps.candidates.map((c, rank) => {
+                        const n = rank + 1;
+                        const isRec = Boolean(recId && c.providerId === recId);
+                        const summary = formatProviderSuitabilityReasonSummary(c.reasons);
+                        return (
+                          <li
+                            key={`${c.providerId}-${n}`}
+                            style={{
+                              padding: '4px 0',
+                              fontWeight: isRec ? 800 : 500,
+                              color: isRec ? '#0F172A' : '#475569',
+                              borderLeft: isRec ? '3px solid #22C55E' : undefined,
+                              paddingLeft: isRec ? 8 : 0,
+                            }}
+                          >
+                            {n}) {c.providerId} — {c.score} — {summary}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   ) : null}
                 </div>
               );

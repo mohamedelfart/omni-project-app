@@ -16,6 +16,9 @@ export type {
   CommandCenterBrainNextBestAction,
   CommandCenterBrainPriority,
   CommandCenterBrainProviderIntelligence,
+  CommandCenterBrainProviderSuitability,
+  CommandCenterBrainProviderSuitabilityCandidate,
+  CommandCenterBrainProviderSuitabilityCurrent,
   CommandCenterBrainReadModel,
 } from './command-center-brain';
 

@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { BookingStatus, PaymentStatus, Prisma, PropertyStatus } from '@prisma/client';
-import type { CommandCenterBrainProviderIntelligence, CommandCenterBrainReadModel } from '@quickrent/shared-types';
+import { BookingStatus, PaymentStatus, Prisma, PropertyStatus, UnifiedRequestStatus } from '@prisma/client';
+import type {
+  CommandCenterBrainProviderIntelligence,
+  CommandCenterBrainProviderSuitability,
+  CommandCenterBrainReadModel,
+} from '@quickrent/shared-types';
 import type { CommandCenterRequestSlaSnapshot } from './dto/command-center-request-sla.dto';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { LocationService } from '../location/location.service';
@@ -31,7 +35,11 @@ export type CommandCenterLastEscalation = {
   source: string;
 };
 
-export type { CommandCenterBrainProviderIntelligence, CommandCenterBrainReadModel } from '@quickrent/shared-types';
+export type {
+  CommandCenterBrainProviderIntelligence,
+  CommandCenterBrainProviderSuitability,
+  CommandCenterBrainReadModel,
+} from '@quickrent/shared-types';
 
 function toDbUnifiedRequestStatus(status?: string): string | undefined {
   if (!status) {
@@ -80,6 +88,20 @@ const VENDOR_RESPONSE_HEURISTIC_MS = 45 * 60 * 1000;
 
 /** Brain v3.1: min age before assigned/in-progress can count as stuck execution (read-model only). */
 const EXECUTION_STUCK_DELAY_MS = 2 * 60 * 1000;
+
+/** Brain v5: rolling window for provider aggregates (read-only queries). */
+const PROVIDER_SUITABILITY_WINDOW_MS = 72 * 60 * 60 * 1000;
+const PROVIDER_SUITABILITY_POOL_MAX = 20;
+const PROVIDER_SUITABILITY_RECENT_ROWS_CAP = 3000;
+
+const UNIFIED_OPEN_STATUS_FILTER = {
+  notIn: [
+    UnifiedRequestStatus.COMPLETED,
+    UnifiedRequestStatus.CANCELLED,
+    UnifiedRequestStatus.REJECTED,
+    UnifiedRequestStatus.FAILED,
+  ],
+};
 
 const TERMINAL_ATTENTION_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED']);
 
@@ -208,6 +230,33 @@ function computeVendorAttentionReadModel(request: {
   };
 }
 
+/** V3.1 stuck execution (shared with suitability current-provider context). */
+function computeCommandCenterStuckExecution(input: {
+  status: string;
+  vendorId: string | null | undefined;
+  attentionCodes: string[];
+  createdAt?: Date | string | null;
+  firstResponseAt?: Date | string | null;
+}): boolean {
+  const isTerminal = TERMINAL_ATTENTION_STATUSES.has(input.status);
+  const vendorId = (input.vendorId ?? '').trim();
+  const attentionCodes = input.attentionCodes ?? [];
+  const now = Date.now();
+  const createdTs = input.createdAt ? new Date(input.createdAt).getTime() : null;
+  const firstResponseTs = input.firstResponseAt ? new Date(input.firstResponseAt).getTime() : null;
+  const executionStartTs = firstResponseTs ?? createdTs;
+  const hasExceededExecutionDelay =
+    executionStartTs != null && now - executionStartTs > EXECUTION_STUCK_DELAY_MS;
+  const isAssignedOrInProgress = input.status === 'ASSIGNED' || input.status === 'IN_PROGRESS';
+  return (
+    !isTerminal
+    && isAssignedOrInProgress
+    && !!vendorId
+    && hasExceededExecutionDelay
+    && (attentionCodes.includes('VENDOR_NOT_STARTED') || input.firstResponseAt == null)
+  );
+}
+
 /** Brain v4 — qualitative provider read-model only (no scores, ranks, or auto-selection). */
 function buildCommandCenterProviderIntelligence(params: {
   isTerminal: boolean;
@@ -297,6 +346,124 @@ function buildCommandCenterProviderIntelligence(params: {
   return { signals, recommendations, reasons };
 }
 
+type ProviderSuitabilityMetricsInternal = {
+  activeOpenCount: number;
+  avgFirstResponseMs: number | null;
+  recentSlaBreachCount: number;
+  recentEscalatedCount: number;
+  recentCompletedCount: number;
+};
+
+/** Brain v5 — additive 0–100 score from UnifiedRequest aggregates only (read-model). */
+function scoreProviderSuitabilityFromMetrics(m: ProviderSuitabilityMetricsInternal): { score: number; reasons: string[] } {
+  let score = 0;
+  const reasons: string[] = [];
+  const push = (r: string) => {
+    if (!reasons.includes(r)) reasons.push(r);
+  };
+
+  if (m.activeOpenCount <= 2) {
+    score += 25;
+    push('Lower active load');
+  } else if (m.activeOpenCount <= 5) {
+    score += 15;
+    push('Moderate active load');
+  } else {
+    score += 5;
+    push('High active load');
+  }
+
+  if (m.avgFirstResponseMs != null && Number.isFinite(m.avgFirstResponseMs)) {
+    if (m.avgFirstResponseMs <= 5 * 60 * 1000) {
+      score += 20;
+      push('Fast initial response');
+    } else if (m.avgFirstResponseMs <= 15 * 60 * 1000) {
+      score += 10;
+      push('Moderate initial response');
+    } else {
+      push('Slow initial response');
+    }
+  } else {
+    push('No recent first-response samples');
+  }
+
+  if (m.recentSlaBreachCount === 0) {
+    score += 20;
+    push('Strong SLA adherence');
+  } else if (m.recentSlaBreachCount <= 2) {
+    score += 10;
+    push('Some SLA pressure');
+  } else {
+    push('Frequent SLA breaches');
+  }
+
+  if (m.recentEscalatedCount <= 1) {
+    score += 15;
+    push('Low escalation rate');
+  } else if (m.recentEscalatedCount <= 3) {
+    score += 8;
+    push('Elevated escalation rate');
+  } else {
+    push('High escalation rate');
+  }
+
+  if (m.recentCompletedCount >= 5) {
+    score += 20;
+    push('Proven completion record');
+  } else if (m.recentCompletedCount >= 2) {
+    score += 10;
+    push('Limited completion history');
+  } else {
+    score += 5;
+    push('Limited completion history');
+  }
+
+  return { score: Math.max(0, Math.min(100, Math.round(score))), reasons };
+}
+
+function buildProviderSuitabilityReadModel(
+  metricsByProvider: Map<string, ProviderSuitabilityMetricsInternal>,
+  poolIds: readonly string[],
+  currentVendorId: string | null,
+  stuckExecution: boolean,
+): CommandCenterBrainProviderSuitability | undefined {
+  if (poolIds.length === 0 && !(currentVendorId?.trim())) {
+    return undefined;
+  }
+
+  const scoreOne = (id: string) => {
+    const m = metricsByProvider.get(id) ?? {
+      activeOpenCount: 0,
+      avgFirstResponseMs: null,
+      recentSlaBreachCount: 0,
+      recentEscalatedCount: 0,
+      recentCompletedCount: 0,
+    };
+    return { id, ...scoreProviderSuitabilityFromMetrics(m) };
+  };
+
+  const ranked = [...poolIds].map((id) => scoreOne(id)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  const candidates = ranked.slice(0, 3).map((r) => ({
+    providerId: r.id,
+    score: r.score,
+    reasons: r.reasons,
+  }));
+  const recommendedProviderId = candidates[0]?.providerId ?? null;
+
+  const vid = currentVendorId?.trim() ?? '';
+  let currentProvider: CommandCenterBrainProviderSuitability['currentProvider'] = null;
+  if (vid) {
+    const base = scoreOne(vid);
+    const cr = [...base.reasons];
+    if (stuckExecution && !cr.includes('Provider not responding after delay window')) {
+      cr.push('Provider not responding after delay window');
+    }
+    currentProvider = { providerId: vid, score: base.score, reasons: cr };
+  }
+
+  return { currentProvider, candidates, recommendedProviderId };
+}
+
 /**
  * Brain read-model for Command Center list (no DB writes): v3.2 escalation + v3.1 execution + v4 provider intelligence.
  */
@@ -324,24 +491,13 @@ function computeCommandCenterBrainReadModel(input: {
   const unassigned = !vendorId && !isTerminal;
   const attentionCodes = input.attentionCodes ?? [];
 
-  const now = Date.now();
-
-  const createdTs = input.createdAt ? new Date(input.createdAt).getTime() : null;
-  const firstResponseTs = input.firstResponseAt ? new Date(input.firstResponseAt).getTime() : null;
-
-  const executionStartTs = firstResponseTs ?? createdTs;
-
-  const hasExceededExecutionDelay =
-    executionStartTs != null && now - executionStartTs > EXECUTION_STUCK_DELAY_MS;
-
-  const isAssignedOrInProgress = status === 'ASSIGNED' || status === 'IN_PROGRESS';
-
-  const stuckExecution =
-    !isTerminal &&
-    isAssignedOrInProgress &&
-    !!vendorId &&
-    hasExceededExecutionDelay &&
-    (attentionCodes.includes('VENDOR_NOT_STARTED') || input.firstResponseAt == null);
+  const stuckExecution = computeCommandCenterStuckExecution({
+    status,
+    vendorId: input.vendorId,
+    attentionCodes,
+    createdAt: input.createdAt,
+    firstResponseAt: input.firstResponseAt,
+  });
 
   const shouldReassignProvider = stuckExecution;
 
@@ -1323,6 +1479,108 @@ export class CommandCenterService {
     };
   }
 
+  /** Brain v5 — read-only aggregates for provider suitability (no writes). */
+  private async buildProviderSuitabilityMetricsMap(
+    providerIds: string[],
+  ): Promise<Map<string, ProviderSuitabilityMetricsInternal>> {
+    const out = new Map<string, ProviderSuitabilityMetricsInternal>();
+    if (providerIds.length === 0) return out;
+    const since = new Date(Date.now() - PROVIDER_SUITABILITY_WINDOW_MS);
+
+    const [openGroups, recentRows] = await Promise.all([
+      this.prisma.unifiedRequest.groupBy({
+        by: ['vendorId'],
+        where: {
+          vendorId: { in: providerIds },
+          status: UNIFIED_OPEN_STATUS_FILTER,
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.unifiedRequest.findMany({
+        where: {
+          createdAt: { gte: since },
+          vendorId: { in: providerIds },
+        },
+        select: {
+          vendorId: true,
+          createdAt: true,
+          firstResponseAt: true,
+          status: true,
+          slaBreached: true,
+          escalationLevel: true,
+        },
+        take: PROVIDER_SUITABILITY_RECENT_ROWS_CAP,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    const openMap = new Map<string, number>();
+    for (const g of openGroups) {
+      if (g.vendorId) openMap.set(g.vendorId, g._count._all);
+    }
+
+    type Agg = { deltas: number[]; sla: number; esc: number; done: number };
+    const aggs = new Map<string, Agg>();
+    for (const id of providerIds) {
+      aggs.set(id, { deltas: [], sla: 0, esc: 0, done: 0 });
+    }
+    for (const row of recentRows) {
+      const vid = row.vendorId;
+      if (!vid || !aggs.has(vid)) continue;
+      const a = aggs.get(vid)!;
+      if (row.firstResponseAt) {
+        const ms = row.firstResponseAt.getTime() - row.createdAt.getTime();
+        if (Number.isFinite(ms) && ms >= 0) a.deltas.push(ms);
+      }
+      if (row.slaBreached) a.sla += 1;
+      if ((row.escalationLevel ?? 0) >= 1) a.esc += 1;
+      if (row.status === UnifiedRequestStatus.COMPLETED) a.done += 1;
+    }
+
+    for (const id of providerIds) {
+      const open = openMap.get(id) ?? 0;
+      const a = aggs.get(id)!;
+      const avg = a.deltas.length ? a.deltas.reduce((x, y) => x + y, 0) / a.deltas.length : null;
+      out.set(id, {
+        activeOpenCount: open,
+        avgFirstResponseMs: avg,
+        recentSlaBreachCount: a.sla,
+        recentEscalatedCount: a.esc,
+        recentCompletedCount: a.done,
+      });
+    }
+    return out;
+  }
+
+  /** Brain v5 — capped candidate pool from list rows + recent UnifiedRequest vendorIds. */
+  private async buildCommandCenterProviderSuitabilityPool(
+    rows: Array<{ vendorId: string | null }>,
+  ): Promise<string[]> {
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    for (const r of rows) {
+      const v = r.vendorId?.trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      ordered.push(v);
+    }
+    const pool = new Set<string>(ordered.slice(0, PROVIDER_SUITABILITY_POOL_MAX));
+    const since = new Date(Date.now() - PROVIDER_SUITABILITY_WINDOW_MS);
+    const recentVendorRows = await this.prisma.unifiedRequest.findMany({
+      where: {
+        createdAt: { gte: since },
+        vendorId: { not: null },
+      },
+      select: { vendorId: true },
+      take: PROVIDER_SUITABILITY_RECENT_ROWS_CAP,
+      orderBy: { createdAt: 'desc' },
+    });
+    for (const r of recentVendorRows) {
+      if (r.vendorId && pool.size < PROVIDER_SUITABILITY_POOL_MAX) pool.add(r.vendorId);
+    }
+    return [...pool];
+  }
+
   listRequests(filters?: DashboardFilters) {
     return this.prisma.unifiedRequest
       .findMany({
@@ -1353,6 +1611,11 @@ export class CommandCenterService {
           rows.map((r) => r.id),
           escalationLevelById,
         );
+        const poolIds = await this.buildCommandCenterProviderSuitabilityPool(rows);
+        const rowVendorIds = [...new Set(rows.map((r) => r.vendorId?.trim()).filter(Boolean))] as string[];
+        const metricsIds = [...new Set([...poolIds, ...rowVendorIds])];
+        const metricsMap = await this.buildProviderSuitabilityMetricsMap(metricsIds);
+
         return rows.map((row) => {
           const escRow = escalationInsights.get(row.id) ?? { lastEscalation: null, escalationHistoryCount: 0 };
           const attention = computeVendorAttentionReadModel({
@@ -1365,7 +1628,14 @@ export class CommandCenterService {
             completionDueAt: row.completionDueAt,
             escalationLevel: row.escalationLevel,
           });
-          const brain = computeCommandCenterBrainReadModel({
+          const stuckExecution = computeCommandCenterStuckExecution({
+            status: row.status,
+            vendorId: row.vendorId,
+            attentionCodes: attention.attentionCodes,
+            createdAt: row.createdAt,
+            firstResponseAt: row.firstResponseAt,
+          });
+          const brainBase = computeCommandCenterBrainReadModel({
             status: row.status,
             slaBreached: row.slaBreached,
             escalationLevel: row.escalationLevel ?? 0,
@@ -1376,6 +1646,15 @@ export class CommandCenterService {
             createdAt: row.createdAt,
             firstResponseAt: row.firstResponseAt,
           });
+          const providerSuitability = buildProviderSuitabilityReadModel(
+            metricsMap,
+            poolIds,
+            row.vendorId,
+            stuckExecution,
+          );
+          const brain: CommandCenterBrainReadModel = providerSuitability
+            ? { ...brainBase, providerSuitability }
+            : brainBase;
           return {
             ...row,
             sla: this.pickSlaSnapshot(row),

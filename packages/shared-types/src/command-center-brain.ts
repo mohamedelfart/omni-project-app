@@ -27,6 +27,25 @@ export type CommandCenterBrainProviderIntelligence = {
   reasons: string[];
 };
 
+/** Brain v5 — suitability from aggregated UnifiedRequest read-model only (no auto-assign). */
+export type CommandCenterBrainProviderSuitabilityCurrent = {
+  providerId: string;
+  score: number;
+  reasons: string[];
+};
+
+export type CommandCenterBrainProviderSuitabilityCandidate = {
+  providerId: string;
+  score: number;
+  reasons: string[];
+};
+
+export type CommandCenterBrainProviderSuitability = {
+  currentProvider: CommandCenterBrainProviderSuitabilityCurrent | null;
+  candidates: CommandCenterBrainProviderSuitabilityCandidate[];
+  recommendedProviderId: string | null;
+};
+
 export type CommandCenterBrainReadModel = {
   priority: CommandCenterBrainPriority;
   alerts: string[];
@@ -36,4 +55,5 @@ export type CommandCenterBrainReadModel = {
   riskScore: number;
   riskReasons: string[];
   providerIntelligence: CommandCenterBrainProviderIntelligence;
+  providerSuitability?: CommandCenterBrainProviderSuitability;
 };
