@@ -78,6 +78,9 @@ const UNASSIGNED_TOO_LONG_MS = 2 * 60 * 60 * 1000;
 /** When `responseDueAt` is null but a vendor is expected, age beyond this implies response risk. */
 const VENDOR_RESPONSE_HEURISTIC_MS = 45 * 60 * 1000;
 
+/** Brain v3.1: min age before assigned/in-progress can count as stuck execution (read-model only). */
+const EXECUTION_STUCK_DELAY_MS = 2 * 60 * 1000;
+
 const TERMINAL_ATTENTION_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED']);
 
 type AttentionSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
@@ -206,7 +209,7 @@ function computeVendorAttentionReadModel(request: {
 }
 
 /**
- * Brain read-model for Command Center list (no DB writes): Brain v2 decision order + additive risk score.
+ * Brain read-model for Command Center list (no DB writes): Brain v3.1 time-aware execution + additive risk score.
  */
 function computeCommandCenterBrainReadModel(input: {
   status: string;
@@ -216,7 +219,8 @@ function computeCommandCenterBrainReadModel(input: {
   vendorId: string | null;
   escalationHistoryCount: number;
   attentionCodes: string[];
-  createdAt?: Date | null;
+  createdAt?: Date | string | null;
+  firstResponseAt?: Date | string | null;
 }): CommandCenterBrainReadModel {
   const { status, slaBreached, needsAttention } = input;
   const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
@@ -229,6 +233,27 @@ function computeCommandCenterBrainReadModel(input: {
   const unassigned = !vendorId && !isTerminal;
   const attentionCodes = input.attentionCodes ?? [];
 
+  const now = Date.now();
+
+  const createdTs = input.createdAt ? new Date(input.createdAt).getTime() : null;
+  const firstResponseTs = input.firstResponseAt ? new Date(input.firstResponseAt).getTime() : null;
+
+  const executionStartTs = firstResponseTs ?? createdTs;
+
+  const hasExceededExecutionDelay =
+    executionStartTs != null && now - executionStartTs > EXECUTION_STUCK_DELAY_MS;
+
+  const isAssignedOrInProgress = status === 'ASSIGNED' || status === 'IN_PROGRESS';
+
+  const stuckExecution =
+    !isTerminal &&
+    isAssignedOrInProgress &&
+    !!vendorId &&
+    hasExceededExecutionDelay &&
+    (attentionCodes.includes('VENDOR_NOT_STARTED') || input.firstResponseAt == null);
+
+  const shouldReassignProvider = stuckExecution;
+
   let nextBestAction: CommandCenterBrainReadModel['nextBestAction'] = 'MONITOR_SLA';
   if (isTerminal) {
     nextBestAction = 'MONITOR_SLA';
@@ -236,10 +261,10 @@ function computeCommandCenterBrainReadModel(input: {
     nextBestAction = 'URGENT_INTERVENTION';
   } else if (escDb > 0 && (slaBreached || needsAttention)) {
     nextBestAction = 'REVIEW_ESCALATION';
-  } else if (vendorId && attentionCodes.includes('VENDOR_NOT_STARTED')) {
-    nextBestAction = 'REASSIGN_PROVIDER';
   } else if (escDb > 0 && !slaBreached && !needsAttention) {
     nextBestAction = 'CLEAR_ESCALATION';
+  } else if (shouldReassignProvider) {
+    nextBestAction = 'REASSIGN_PROVIDER';
   } else if (!vendorId) {
     nextBestAction = 'ASSIGN_PROVIDER';
   } else if (status === 'ASSIGNED' || status === 'IN_PROGRESS') {
@@ -264,6 +289,9 @@ function computeCommandCenterBrainReadModel(input: {
       riskScore += 10;
     }
   }
+  if (!isTerminal && stuckExecution) {
+    riskScore += 25;
+  }
   riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
 
   let priority: CommandCenterBrainReadModel['priority'] = 'LOW';
@@ -286,6 +314,7 @@ function computeCommandCenterBrainReadModel(input: {
     if (slaBreached) pushAlert('SLA breached');
     if (escalationLevel > 0) pushAlert('Escalation active');
     if (histDb > 1) pushAlert('Repeated escalations');
+    if (stuckExecution) pushAlert('Vendor has not started execution');
   }
 
   const recommendations: string[] = [];
@@ -296,6 +325,13 @@ function computeCommandCenterBrainReadModel(input: {
   if (!isTerminal && histDb > 0) pushReco('Review escalation history');
   if (!isTerminal && escDb > 0) pushReco('Clear escalation after handling');
   if (!isTerminal && slaBreached) pushReco('Monitor SLA');
+  if (!isTerminal && shouldReassignProvider) {
+    pushReco('Reassign to faster provider');
+    pushReco('Contact provider before reassignment');
+  }
+  if (!isTerminal && stuckExecution) {
+    pushReco('Investigate execution delay before reassignment');
+  }
 
   const reasons: string[] = [];
   if (isTerminal) {
@@ -1213,6 +1249,7 @@ export class CommandCenterService {
             escalationHistoryCount: escRow.escalationHistoryCount,
             attentionCodes: attention.attentionCodes,
             createdAt: row.createdAt,
+            firstResponseAt: row.firstResponseAt,
           });
           return {
             ...row,
