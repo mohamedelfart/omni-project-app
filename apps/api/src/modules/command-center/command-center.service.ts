@@ -206,7 +206,7 @@ function computeVendorAttentionReadModel(request: {
 }
 
 /**
- * Brain read-model for Command Center list (no DB writes): Level 1 signals + Level 2 next action / risk.
+ * Brain read-model for Command Center list (no DB writes): Brain v2 decision order + additive risk score.
  */
 function computeCommandCenterBrainReadModel(input: {
   status: string;
@@ -216,94 +216,107 @@ function computeCommandCenterBrainReadModel(input: {
   vendorId: string | null;
   escalationHistoryCount: number;
   attentionCodes: string[];
+  createdAt?: Date | null;
 }): CommandCenterBrainReadModel {
   const { status, slaBreached, needsAttention } = input;
   const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
-  /** Operational escalation is closed for terminal requests (DB may still hold history). */
-  const escalationLevel = isTerminal ? 0 : input.escalationLevel ?? 0;
-  const escalationHistoryCount = isTerminal ? 0 : input.escalationHistoryCount ?? 0;
+  const escDb = input.escalationLevel ?? 0;
+  const histDb = input.escalationHistoryCount ?? 0;
+  /** Operational escalation counts (terminal → inactive for alerts that mirror live ops). */
+  const escalationLevel = isTerminal ? 0 : escDb;
+  const escalationHistoryCount = isTerminal ? 0 : histDb;
   const vendorId = input.vendorId?.trim() ?? '';
   const unassigned = !vendorId && !isTerminal;
   const attentionCodes = input.attentionCodes ?? [];
 
+  let nextBestAction: CommandCenterBrainReadModel['nextBestAction'] = 'MONITOR_SLA';
+  if (isTerminal) {
+    nextBestAction = 'MONITOR_SLA';
+  } else if (escDb >= 2) {
+    nextBestAction = 'URGENT_INTERVENTION';
+  } else if (escDb > 0 && (slaBreached || needsAttention)) {
+    nextBestAction = 'REVIEW_ESCALATION';
+  } else if (vendorId && attentionCodes.includes('VENDOR_NOT_STARTED')) {
+    nextBestAction = 'REASSIGN_PROVIDER';
+  } else if (escDb > 0 && !slaBreached && !needsAttention) {
+    nextBestAction = 'CLEAR_ESCALATION';
+  } else if (!vendorId) {
+    nextBestAction = 'ASSIGN_PROVIDER';
+  } else if (status === 'ASSIGNED' || status === 'IN_PROGRESS') {
+    nextBestAction = 'MONITOR_EXECUTION';
+  } else {
+    nextBestAction = 'MONITOR_SLA';
+  }
+
+  let riskScore = 0;
+  if (!isTerminal && slaBreached) {
+    riskScore += 50;
+  }
+  if (!isTerminal && escDb >= 1) {
+    riskScore += 30;
+  }
+  if (!isTerminal && !vendorId) {
+    riskScore += 20;
+  }
+  if (!isTerminal && status === 'SUBMITTED' && input.createdAt) {
+    const ageMs = Date.now() - new Date(input.createdAt).getTime();
+    if (Number.isFinite(ageMs) && ageMs > 5 * 60 * 1000) {
+      riskScore += 10;
+    }
+  }
+  riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
+
   let priority: CommandCenterBrainReadModel['priority'] = 'LOW';
-  if (slaBreached && escalationLevel >= 2) {
+  if (riskScore >= 81) {
     priority = 'CRITICAL';
-  } else if (!isTerminal && (slaBreached || needsAttention)) {
+  } else if (riskScore >= 51) {
     priority = 'HIGH';
-  } else if (unassigned || escalationHistoryCount > 0) {
+  } else if (riskScore >= 21) {
     priority = 'MEDIUM';
+  } else {
+    priority = 'LOW';
   }
 
   const alerts: string[] = [];
   const pushAlert = (msg: string) => {
     if (!alerts.includes(msg)) alerts.push(msg);
   };
-  if (!isTerminal && slaBreached) pushAlert('SLA breached');
-  if (!isTerminal && needsAttention) pushAlert('Needs command center attention');
-  if (unassigned) pushAlert('Unassigned request');
-  if (!isTerminal && escalationLevel > 0) pushAlert('Escalation active');
-  if (!isTerminal && escalationHistoryCount > 1) pushAlert('Repeated escalations');
+  if (!isTerminal) {
+    if (unassigned) pushAlert('Unassigned request');
+    if (slaBreached) pushAlert('SLA breached');
+    if (escalationLevel > 0) pushAlert('Escalation active');
+    if (histDb > 1) pushAlert('Repeated escalations');
+  }
 
   const recommendations: string[] = [];
   const pushReco = (msg: string) => {
     if (!recommendations.includes(msg)) recommendations.push(msg);
   };
-  if (unassigned) pushReco('Assign provider now');
-  if (!isTerminal && escalationHistoryCount > 0) pushReco('Review escalation history');
-  if (!isTerminal && escalationLevel > 0) pushReco('Clear escalation after handling');
+  if (!isTerminal && unassigned) pushReco('Assign provider now');
+  if (!isTerminal && histDb > 0) pushReco('Review escalation history');
+  if (!isTerminal && escDb > 0) pushReco('Clear escalation after handling');
   if (!isTerminal && slaBreached) pushReco('Monitor SLA');
 
   const reasons: string[] = [];
-  if (priority === 'CRITICAL') {
-    reasons.push('SLA breached while escalation level is 2 or higher');
-  } else if (priority === 'HIGH') {
+  if (isTerminal) {
+    reasons.push('Request is terminal — Brain v2 monitoring posture only');
+  } else if (riskScore === 0) {
+    reasons.push('No additive risk signals in Brain v2 read model');
+  } else {
+    reasons.push(`Brain v2 risk score ${riskScore} → priority ${priority}`);
     if (slaBreached) reasons.push('SLA breach flag is active');
-    if (needsAttention) reasons.push('Vendor / SLA attention signals are active');
-  } else if (priority === 'MEDIUM') {
-    if (unassigned) reasons.push('No provider assigned on a non-terminal request');
-    if (escalationHistoryCount > 0) reasons.push('At least one ESCALATE ticket action exists');
-  } else {
-    reasons.push('No Brain Level 1 escalation or SLA urgency signals');
+    if (escDb >= 2) reasons.push('Escalation level 2 or higher');
+    else if (escDb === 1) reasons.push('Escalation level 1');
+    if (!vendorId) reasons.push('No provider assigned');
+    if (status === 'SUBMITTED') reasons.push('Request is SUBMITTED');
   }
-
-  let nextBestAction: CommandCenterBrainReadModel['nextBestAction'] = 'MONITOR_SLA';
-  if (escalationLevel >= 2) {
-    nextBestAction = 'URGENT_INTERVENTION';
-  } else if (escalationLevel > 0 && (slaBreached || needsAttention)) {
-    nextBestAction = 'REVIEW_ESCALATION';
-  } else if (vendorId && attentionCodes.includes('VENDOR_NOT_STARTED')) {
-    nextBestAction = 'REASSIGN_PROVIDER';
-  } else if (escalationLevel > 0 && !slaBreached && !needsAttention) {
-    nextBestAction = 'CLEAR_ESCALATION';
-  } else if (unassigned) {
-    nextBestAction = 'ASSIGN_PROVIDER';
-  } else if (slaBreached) {
-    nextBestAction = 'MONITOR_SLA';
-  }
-
-  let riskScore = 14;
-  if (priority === 'CRITICAL') {
-    riskScore = 90;
-  } else if (priority === 'HIGH') {
-    riskScore = 68;
-  } else if (priority === 'MEDIUM') {
-    riskScore = 38;
-  } else {
-    riskScore = 14;
-  }
-  riskScore += Math.min(12, escalationHistoryCount * 4);
-  if (!isTerminal && slaBreached) riskScore += 8;
-  if (!isTerminal && needsAttention) riskScore += 6;
-  if (unassigned) riskScore += 5;
-  riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
 
   const riskReasons = [...reasons];
   if (!isTerminal && slaBreached) {
     riskReasons.push('SLA breach flag');
   }
-  if (!isTerminal && escalationLevel > 0) {
-    riskReasons.push(`Escalation level ${escalationLevel}`);
+  if (!isTerminal && escDb > 0) {
+    riskReasons.push(`Escalation level ${escDb}`);
   }
   if (!isTerminal && attentionCodes.length) {
     riskReasons.push(`Attention codes: ${attentionCodes.join(', ')}`);
@@ -1199,6 +1212,7 @@ export class CommandCenterService {
             vendorId: row.vendorId,
             escalationHistoryCount: escRow.escalationHistoryCount,
             attentionCodes: attention.attentionCodes,
+            createdAt: row.createdAt,
           });
           return {
             ...row,

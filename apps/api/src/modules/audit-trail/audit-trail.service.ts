@@ -34,6 +34,20 @@ export class AuditTrailService {
     });
   }
 
+  /** Dedupe for SLA breach audit rows (`metadata.slaBreachDedupeKey`). */
+  async hasSlaBreachDetectedWithDedupeKey(requestId: string, slaBreachDedupeKey: string): Promise<boolean> {
+    const row = await this.prisma.auditLog.findFirst({
+      where: {
+        action: 'SLA_BREACH_DETECTED',
+        entity: 'UnifiedRequest',
+        entityId: requestId,
+        metadata: { path: ['slaBreachDedupeKey'], equals: slaBreachDedupeKey },
+      },
+      select: { id: true },
+    });
+    return row != null;
+  }
+
   search(query: {
     action?: string;
     entity?: string;
