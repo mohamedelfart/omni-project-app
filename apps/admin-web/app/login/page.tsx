@@ -4,7 +4,8 @@ import { FormEvent, useMemo, useState } from 'react';
 
 const ACCESS_TOKEN_STORAGE_KEY = 'quickrent_access_token';
 const REFRESH_TOKEN_STORAGE_KEY = 'quickrent_refresh_token';
-const AUTH_LOGIN_URL = 'http://localhost:4000/api/v1/auth/login';
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+const AUTH_LOGIN_URL = `${apiBaseUrl.replace(/\/$/, '')}/auth/login`;
 
 export default function AdminLoginPage() {
   const [email, setEmail] = useState('');

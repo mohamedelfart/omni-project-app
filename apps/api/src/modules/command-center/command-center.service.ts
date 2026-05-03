@@ -218,9 +218,10 @@ function computeCommandCenterBrainReadModel(input: {
   attentionCodes: string[];
 }): CommandCenterBrainReadModel {
   const { status, slaBreached, needsAttention } = input;
-  const escalationLevel = input.escalationLevel ?? 0;
-  const escalationHistoryCount = input.escalationHistoryCount ?? 0;
   const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
+  /** Operational escalation is closed for terminal requests (DB may still hold history). */
+  const escalationLevel = isTerminal ? 0 : input.escalationLevel ?? 0;
+  const escalationHistoryCount = isTerminal ? 0 : input.escalationHistoryCount ?? 0;
   const vendorId = input.vendorId?.trim() ?? '';
   const unassigned = !vendorId && !isTerminal;
   const attentionCodes = input.attentionCodes ?? [];
@@ -228,7 +229,7 @@ function computeCommandCenterBrainReadModel(input: {
   let priority: CommandCenterBrainReadModel['priority'] = 'LOW';
   if (slaBreached && escalationLevel >= 2) {
     priority = 'CRITICAL';
-  } else if (slaBreached || needsAttention) {
+  } else if (!isTerminal && (slaBreached || needsAttention)) {
     priority = 'HIGH';
   } else if (unassigned || escalationHistoryCount > 0) {
     priority = 'MEDIUM';
@@ -238,20 +239,20 @@ function computeCommandCenterBrainReadModel(input: {
   const pushAlert = (msg: string) => {
     if (!alerts.includes(msg)) alerts.push(msg);
   };
-  if (slaBreached) pushAlert('SLA breached');
-  if (needsAttention) pushAlert('Needs command center attention');
+  if (!isTerminal && slaBreached) pushAlert('SLA breached');
+  if (!isTerminal && needsAttention) pushAlert('Needs command center attention');
   if (unassigned) pushAlert('Unassigned request');
   if (!isTerminal && escalationLevel > 0) pushAlert('Escalation active');
-  if (escalationHistoryCount > 1) pushAlert('Repeated escalations');
+  if (!isTerminal && escalationHistoryCount > 1) pushAlert('Repeated escalations');
 
   const recommendations: string[] = [];
   const pushReco = (msg: string) => {
     if (!recommendations.includes(msg)) recommendations.push(msg);
   };
   if (unassigned) pushReco('Assign provider now');
-  if (escalationHistoryCount > 0) pushReco('Review escalation history');
+  if (!isTerminal && escalationHistoryCount > 0) pushReco('Review escalation history');
   if (!isTerminal && escalationLevel > 0) pushReco('Clear escalation after handling');
-  if (slaBreached) pushReco('Monitor SLA');
+  if (!isTerminal && slaBreached) pushReco('Monitor SLA');
 
   const reasons: string[] = [];
   if (priority === 'CRITICAL') {
@@ -292,19 +293,19 @@ function computeCommandCenterBrainReadModel(input: {
     riskScore = 14;
   }
   riskScore += Math.min(12, escalationHistoryCount * 4);
-  if (slaBreached) riskScore += 8;
-  if (needsAttention) riskScore += 6;
+  if (!isTerminal && slaBreached) riskScore += 8;
+  if (!isTerminal && needsAttention) riskScore += 6;
   if (unassigned) riskScore += 5;
   riskScore = Math.max(0, Math.min(100, Math.round(riskScore)));
 
   const riskReasons = [...reasons];
-  if (slaBreached) {
+  if (!isTerminal && slaBreached) {
     riskReasons.push('SLA breach flag');
   }
-  if (escalationLevel > 0) {
+  if (!isTerminal && escalationLevel > 0) {
     riskReasons.push(`Escalation level ${escalationLevel}`);
   }
-  if (attentionCodes.length) {
+  if (!isTerminal && attentionCodes.length) {
     riskReasons.push(`Attention codes: ${attentionCodes.join(', ')}`);
   }
 
@@ -426,6 +427,7 @@ export class CommandCenterService {
 
   /** DB-backed SLA slice for command-center payloads (no derived urgency labels). */
   private pickSlaSnapshot(request: {
+    status: string;
     responseDueAt: Date | null;
     completionDueAt: Date | null;
     slaBreached: boolean;
@@ -433,12 +435,13 @@ export class CommandCenterService {
     escalationLevel: number;
     firstBreachedAt: Date | null;
   }): CommandCenterRequestSlaSnapshot {
+    const terminal = TERMINAL_ATTENTION_STATUSES.has(request.status);
     return {
       responseDueAt: request.responseDueAt,
       completionDueAt: request.completionDueAt,
       slaBreached: request.slaBreached,
       breachType: request.breachType,
-      escalationLevel: request.escalationLevel,
+      escalationLevel: terminal ? 0 : request.escalationLevel,
       firstBreachedAt: request.firstBreachedAt,
     };
   }

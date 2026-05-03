@@ -8,7 +8,8 @@ type CreateTicketActionInput = {
   ticketId: string;
   actionType: string;
   actorType: string;
-  actorId: string;
+  /** Null when a system job records the action (e.g. SLA breach escalation). */
+  actorId?: string | null;
   payload?: Prisma.InputJsonValue;
 };
 
@@ -39,7 +40,7 @@ export class TicketActionsService {
         ticketId: input.ticketId,
         actionType: input.actionType,
         actorType: input.actorType,
-        actorId: input.actorId,
+        actorId: input.actorId ?? null,
         payload: input.payload,
       },
     });

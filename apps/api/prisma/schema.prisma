@@ -512,7 +512,7 @@ model TicketAction {
   ticketId   String
   actionType String
   actorType  String
-  actorId    String
+  actorId    String?
   payload    Json?
   createdAt  DateTime       @default(now())
   ticket     UnifiedRequest @relation(fields: [ticketId], references: [id], onDelete: Cascade)
