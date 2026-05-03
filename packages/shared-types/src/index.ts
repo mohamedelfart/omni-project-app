@@ -15,6 +15,7 @@ export type {
 export type {
   CommandCenterBrainNextBestAction,
   CommandCenterBrainPriority,
+  CommandCenterBrainProviderIntelligence,
   CommandCenterBrainReadModel,
 } from './command-center-brain';
 

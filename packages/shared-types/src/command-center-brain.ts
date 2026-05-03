@@ -20,6 +20,13 @@ export function isCommandCenterBrainNextBestAction(value: unknown): value is Com
 
 export type CommandCenterBrainPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
+/** Qualitative provider read-model only — no scores, ranks, or auto-selection (Brain v4). */
+export type CommandCenterBrainProviderIntelligence = {
+  signals: string[];
+  recommendations: string[];
+  reasons: string[];
+};
+
 export type CommandCenterBrainReadModel = {
   priority: CommandCenterBrainPriority;
   alerts: string[];
@@ -28,4 +35,5 @@ export type CommandCenterBrainReadModel = {
   nextBestAction: CommandCenterBrainNextBestAction;
   riskScore: number;
   riskReasons: string[];
+  providerIntelligence: CommandCenterBrainProviderIntelligence;
 };

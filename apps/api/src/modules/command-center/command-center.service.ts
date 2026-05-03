@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { BookingStatus, PaymentStatus, Prisma, PropertyStatus } from '@prisma/client';
-import type { CommandCenterBrainReadModel } from '@quickrent/shared-types';
+import type { CommandCenterBrainProviderIntelligence, CommandCenterBrainReadModel } from '@quickrent/shared-types';
 import type { CommandCenterRequestSlaSnapshot } from './dto/command-center-request-sla.dto';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { LocationService } from '../location/location.service';
@@ -31,7 +31,7 @@ export type CommandCenterLastEscalation = {
   source: string;
 };
 
-export type { CommandCenterBrainReadModel } from '@quickrent/shared-types';
+export type { CommandCenterBrainProviderIntelligence, CommandCenterBrainReadModel } from '@quickrent/shared-types';
 
 function toDbUnifiedRequestStatus(status?: string): string | undefined {
   if (!status) {
@@ -208,24 +208,115 @@ function computeVendorAttentionReadModel(request: {
   };
 }
 
+/** Brain v4 — qualitative provider read-model only (no scores, ranks, or auto-selection). */
+function buildCommandCenterProviderIntelligence(params: {
+  isTerminal: boolean;
+  vendorId: string;
+  stuckExecution: boolean;
+  slaBreached: boolean;
+  escDb: number;
+  status: string;
+}): CommandCenterBrainProviderIntelligence {
+  const { isTerminal, vendorId, stuckExecution, slaBreached, escDb, status } = params;
+  const signals: string[] = [];
+  const pushSignal = (s: string) => {
+    if (!signals.includes(s)) signals.push(s);
+  };
+  const recommendations: string[] = [];
+  const pushReco = (s: string) => {
+    if (!recommendations.includes(s)) recommendations.push(s);
+  };
+  const reasons: string[] = [];
+  const pushReason = (s: string) => {
+    if (!reasons.includes(s)) reasons.push(s);
+  };
+
+  if (isTerminal) {
+    return { signals: [], recommendations: [], reasons: [] };
+  }
+
+  if (!vendorId) pushSignal('UNASSIGNED');
+  if (stuckExecution) pushSignal('PROVIDER_NOT_RESPONDING');
+  if (slaBreached) pushSignal('SLA_RISK');
+  if (escDb >= 1) pushSignal('ESCALATED');
+  if (escDb >= 2) pushSignal('HIGH_ESCALATION');
+
+  const hasPriorSignalBlock =
+    !vendorId || stuckExecution || slaBreached || escDb >= 1;
+  if (!hasPriorSignalBlock && vendorId) {
+    pushSignal('PROVIDER_ACTIVE_MONITORING');
+  }
+
+  if (!vendorId) {
+    pushReco('Assign an available provider');
+    pushReco('Use provider assignment before SLA pressure builds');
+  }
+  if (stuckExecution) {
+    pushReco('Contact provider before reassignment');
+    pushReco('Reassign if provider cannot start immediately');
+    pushReco('Prefer a provider with lower active load when available');
+  }
+  if (slaBreached) {
+    pushReco('Review SLA breach reason');
+    pushReco('Prioritize provider follow-up');
+  }
+  if (escDb === 1) {
+    pushReco('Review escalation reason');
+    pushReco('Confirm provider commitment');
+  }
+  if (escDb >= 2) {
+    pushReco('Escalate to supervisor');
+    pushReco('Reassign to a trusted provider if execution is blocked');
+    pushReco('Contact tenant with status update');
+  }
+
+  const isAssignedOrInProgress = status === 'ASSIGNED' || status === 'IN_PROGRESS';
+  if (vendorId && isAssignedOrInProgress && !stuckExecution && !slaBreached && escDb < 1) {
+    pushReco('Continue monitoring provider execution');
+  }
+
+  if (!vendorId) {
+    pushReason('No provider is assigned to this request.');
+  }
+  if (stuckExecution) {
+    pushReason('Provider has not started after the execution delay window.');
+  }
+  if (slaBreached) {
+    pushReason('SLA breach is active for this request.');
+  }
+  if (escDb >= 1) {
+    pushReason('Escalation level indicates command center intervention is needed.');
+  }
+  if (escDb >= 2) {
+    pushReason('Escalation is at level 2 or higher — command center should treat this as urgent.');
+  }
+  if (vendorId && isAssignedOrInProgress && !stuckExecution && !slaBreached && escDb < 1) {
+    pushReason('Request is assigned and execution monitoring is active.');
+  }
+
+  return { signals, recommendations, reasons };
+}
+
 /**
- * Brain read-model for Command Center list (no DB writes): Brain v3.1 time-aware execution + additive risk score.
+ * Brain read-model for Command Center list (no DB writes): v3.2 escalation + v3.1 execution + v4 provider intelligence.
  */
 function computeCommandCenterBrainReadModel(input: {
   status: string;
-  slaBreached: boolean;
-  escalationLevel: number;
+  slaBreached?: boolean;
+  escalationLevel?: number;
   needsAttention: boolean;
   vendorId: string | null;
-  escalationHistoryCount: number;
+  escalationHistoryCount?: number;
   attentionCodes: string[];
   createdAt?: Date | string | null;
   firstResponseAt?: Date | string | null;
 }): CommandCenterBrainReadModel {
-  const { status, slaBreached, needsAttention } = input;
+  const { status, needsAttention } = input;
+  const slaBreached = input.slaBreached ?? false;
   const isTerminal = TERMINAL_ATTENTION_STATUSES.has(status);
   const escDb = input.escalationLevel ?? 0;
   const histDb = input.escalationHistoryCount ?? 0;
+  const isRepeatedEscalation = histDb > 1;
   /** Operational escalation counts (terminal → inactive for alerts that mirror live ops). */
   const escalationLevel = isTerminal ? 0 : escDb;
   const escalationHistoryCount = isTerminal ? 0 : histDb;
@@ -257,9 +348,9 @@ function computeCommandCenterBrainReadModel(input: {
   let nextBestAction: CommandCenterBrainReadModel['nextBestAction'] = 'MONITOR_SLA';
   if (isTerminal) {
     nextBestAction = 'MONITOR_SLA';
-  } else if (escDb >= 2) {
+  } else if (!isTerminal && escDb >= 2) {
     nextBestAction = 'URGENT_INTERVENTION';
-  } else if (escDb > 0 && (slaBreached || needsAttention)) {
+  } else if (!isTerminal && escDb === 1 && (slaBreached || needsAttention)) {
     nextBestAction = 'REVIEW_ESCALATION';
   } else if (escDb > 0 && !slaBreached && !needsAttention) {
     nextBestAction = 'CLEAR_ESCALATION';
@@ -279,6 +370,12 @@ function computeCommandCenterBrainReadModel(input: {
   }
   if (!isTerminal && escDb >= 1) {
     riskScore += 30;
+  }
+  if (!isTerminal && escDb >= 2) {
+    riskScore += 20;
+  }
+  if (!isTerminal && isRepeatedEscalation) {
+    riskScore += 10;
   }
   if (!isTerminal && !vendorId) {
     riskScore += 20;
@@ -312,7 +409,8 @@ function computeCommandCenterBrainReadModel(input: {
   if (!isTerminal) {
     if (unassigned) pushAlert('Unassigned request');
     if (slaBreached) pushAlert('SLA breached');
-    if (escalationLevel > 0) pushAlert('Escalation active');
+    if (escDb >= 1) pushAlert('Escalation active');
+    if (escDb >= 2) pushAlert('High escalation level');
     if (histDb > 1) pushAlert('Repeated escalations');
     if (stuckExecution) pushAlert('Vendor has not started execution');
   }
@@ -324,6 +422,15 @@ function computeCommandCenterBrainReadModel(input: {
   if (!isTerminal && unassigned) pushReco('Assign provider now');
   if (!isTerminal && histDb > 0) pushReco('Review escalation history');
   if (!isTerminal && escDb > 0) pushReco('Clear escalation after handling');
+  if (!isTerminal && escDb === 1) {
+    pushReco('Review escalation reason');
+    pushReco('Contact provider');
+  }
+  if (!isTerminal && escDb >= 2) {
+    pushReco('Escalate to supervisor');
+    pushReco('Reassign immediately');
+    pushReco('Contact tenant');
+  }
   if (!isTerminal && slaBreached) pushReco('Monitor SLA');
   if (!isTerminal && shouldReassignProvider) {
     pushReco('Reassign to faster provider');
@@ -358,7 +465,25 @@ function computeCommandCenterBrainReadModel(input: {
     riskReasons.push(`Attention codes: ${attentionCodes.join(', ')}`);
   }
 
-  return { priority, alerts, recommendations, reasons, nextBestAction, riskScore, riskReasons };
+  const providerIntelligence = buildCommandCenterProviderIntelligence({
+    isTerminal,
+    vendorId,
+    stuckExecution,
+    slaBreached,
+    escDb,
+    status,
+  });
+
+  return {
+    priority,
+    alerts,
+    recommendations,
+    reasons,
+    nextBestAction,
+    riskScore,
+    riskReasons,
+    providerIntelligence,
+  };
 }
 
 @Injectable()

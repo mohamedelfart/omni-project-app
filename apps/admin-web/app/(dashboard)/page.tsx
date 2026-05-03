@@ -239,7 +239,23 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
   const riskReasons = Array.isArray(o.riskReasons)
     ? o.riskReasons.filter((x): x is string => typeof x === 'string')
     : [];
-  return { priority: p, alerts, recommendations, reasons, nextBestAction, riskScore, riskReasons };
+  const piRaw = o.providerIntelligence;
+  let providerIntelligence: DashboardBrain['providerIntelligence'] = {
+    signals: [],
+    recommendations: [],
+    reasons: [],
+  };
+  if (piRaw && typeof piRaw === 'object' && !Array.isArray(piRaw)) {
+    const pi = piRaw as Record<string, unknown>;
+    providerIntelligence = {
+      signals: Array.isArray(pi.signals) ? pi.signals.filter((x): x is string => typeof x === 'string') : [],
+      recommendations: Array.isArray(pi.recommendations)
+        ? pi.recommendations.filter((x): x is string => typeof x === 'string')
+        : [],
+      reasons: Array.isArray(pi.reasons) ? pi.reasons.filter((x): x is string => typeof x === 'string') : [],
+    };
+  }
+  return { priority: p, alerts, recommendations, reasons, nextBestAction, riskScore, riskReasons, providerIntelligence };
 }
 
 /** Enterprise-style priority badge (Brain panel only). */
@@ -1412,6 +1428,67 @@ export default function AdminOverviewPage() {
                 </div>
               </div>
             ) : null}
+
+            {(() => {
+              const pi = request.brain.providerIntelligence;
+              const hasPi =
+                pi
+                && (pi.signals.length > 0 || pi.recommendations.length > 0 || pi.reasons.length > 0);
+              if (!hasPi) return null;
+              const listStyle: CSSProperties = {
+                margin: 0,
+                paddingLeft: 18,
+                fontSize: 10,
+                color: '#475569',
+                lineHeight: 1.45,
+                fontWeight: 500,
+              };
+              return (
+                <div
+                  style={{
+                    borderTop: '1px solid #E2E8F0',
+                    paddingTop: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#334155', letterSpacing: 0.01 }}>
+                    Provider Intelligence
+                  </div>
+                  {pi.signals.length > 0 ? (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', marginBottom: 4 }}>Signals</div>
+                      <ul style={listStyle}>
+                        {pi.signals.map((s, i) => (
+                          <li key={`${s}-${i}`}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {pi.recommendations.length > 0 ? (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', marginBottom: 4 }}>Recommendations</div>
+                      <ul style={listStyle}>
+                        {pi.recommendations.map((s, i) => (
+                          <li key={`${s}-${i}`}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {pi.reasons.length > 0 ? (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', marginBottom: 4 }}>Reasons</div>
+                      <ul style={listStyle}>
+                        {pi.reasons.map((s, i) => (
+                          <li key={`${s}-${i}`}>{s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: 0.01 }}>
