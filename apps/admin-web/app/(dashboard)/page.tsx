@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   ensureAdminRequestsRealtimeSocket,
   setAdminRequestsRealtimeGetAccessToken,
@@ -311,6 +311,101 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
 function formatProviderSuitabilityReasonSummary(reasons: string[]): string {
   const parts = reasons.filter(Boolean).slice(0, 2);
   return parts.join(', ') || '—';
+}
+
+const BRAIN_V51_REASSIGN_TOOLTIP_BASE = 'Recommended based on provider suitability';
+
+const BRAIN_V51_REASSIGN_ID_MAX_DISPLAY = 28;
+
+/**
+ * Brain V5.1 — actionable reassignment label (read-model only). No provider auto-selection.
+ * Uses `recommendedProviderId` + `candidates[0]?.score` per list contract; reasons from
+ * matching candidate when available, else first candidate.
+ */
+function getBrainActionableReassignDisplay(
+  brain: DashboardBrain | undefined,
+  fallbackLabel: string,
+): { tooltip: string | undefined; children: ReactNode } {
+  const ps = brain?.providerSuitability;
+  if (!ps) {
+    return { tooltip: undefined, children: fallbackLabel };
+  }
+  const recRaw = ps.recommendedProviderId;
+  const recId = typeof recRaw === 'string' && recRaw.trim() ? recRaw.trim() : '';
+  if (!recId) {
+    return { tooltip: undefined, children: fallbackLabel };
+  }
+  const cand0 = ps.candidates?.[0];
+  const hasScore =
+    cand0 !== undefined && typeof cand0.score === 'number' && Number.isFinite(cand0.score);
+  const scoreVal = hasScore ? Math.round(cand0.score) : null;
+  const truncated =
+    recId.length > BRAIN_V51_REASSIGN_ID_MAX_DISPLAY
+      ? `${recId.slice(0, BRAIN_V51_REASSIGN_ID_MAX_DISPLAY - 1)}…`
+      : recId;
+  const matched = ps.candidates?.find((c) => c.providerId === recId);
+  const reasonPool =
+    matched?.reasons?.filter((r) => typeof r === 'string' && r.trim()).length
+      ? matched.reasons
+      : cand0?.reasons?.filter((r) => typeof r === 'string' && r.trim()) ?? [];
+  const reasonLines = reasonPool.filter(Boolean).slice(0, 2);
+  const tooltip =
+    reasonLines.length > 0
+      ? `${BRAIN_V51_REASSIGN_TOOLTIP_BASE}\n${reasonLines.join('\n')}`
+      : BRAIN_V51_REASSIGN_TOOLTIP_BASE;
+  return {
+    tooltip,
+    children: (
+      <>
+        Reassign →{' '}
+        <span style={{ fontWeight: 800 }} title={recId}>
+          {truncated}
+        </span>
+        {scoreVal !== null ? (
+          <>
+            {' '}
+            (<span style={{ fontWeight: 800 }}>{scoreVal}</span>)
+          </>
+        ) : null}
+      </>
+    ),
+  };
+}
+
+const BRAIN_V7_ASSIGN_TOOLTIP_BASE = 'Suggested provider based on suitability score';
+
+/** Brain V7 — smart assign label / tooltip from suitability top candidate only (UI; same onClick as before). */
+function getBrainSuggestedAssignVendorUi(brain: DashboardBrain | undefined): {
+  assignVendorTooltip: string | undefined;
+  assignVendorLabel: ReactNode;
+} {
+  const top = brain?.providerSuitability?.candidates?.[0];
+  const providerId =
+    top && typeof top.providerId === 'string' && top.providerId.trim() ? top.providerId.trim() : '';
+  if (!top || !providerId) {
+    return { assignVendorTooltip: undefined, assignVendorLabel: 'Assign provider now' };
+  }
+  const score = Number.isFinite(top.score) ? Math.round(top.score) : null;
+  const reasonLines = Array.isArray(top.reasons)
+    ? top.reasons
+        .filter((r): r is string => typeof r === 'string')
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0)
+        .slice(0, 2)
+    : [];
+  const assignVendorTooltip =
+    reasonLines.length > 0
+      ? `${BRAIN_V7_ASSIGN_TOOLTIP_BASE}\n${reasonLines.join('\n')}`
+      : BRAIN_V7_ASSIGN_TOOLTIP_BASE;
+  return {
+    assignVendorTooltip,
+    assignVendorLabel: (
+      <>
+        Assign → <span style={{ fontWeight: 800 }}>{providerId}</span>
+        {score != null ? ` (${score}%)` : ''}
+      </>
+    ),
+  };
 }
 
 /** Enterprise-style priority badge (Brain panel only). */
@@ -1269,6 +1364,9 @@ export default function AdminOverviewPage() {
         : [];
 
     const nba = request.brain?.nextBestAction;
+    const brainReassignGuidancePascal = getBrainActionableReassignDisplay(request.brain, 'Reassign Provider');
+    const brainReassignGuidanceLower = getBrainActionableReassignDisplay(request.brain, 'Reassign provider');
+    const brainSuggestedAssignVendor = getBrainSuggestedAssignVendorUi(request.brain);
 
     const rowStatus = request.status;
     const rawStatus = (request.rawStatus ?? '').toUpperCase();
@@ -1605,6 +1703,50 @@ export default function AdminOverviewPage() {
               );
             })()}
 
+            {(() => {
+              const top = request.brain?.providerSuitability?.candidates?.[0];
+              if (!top || !top.providerId) return null;
+              const providerId =
+                typeof top.providerId === 'string' && top.providerId.trim()
+                  ? top.providerId.trim()
+                  : '';
+              if (!providerId) return null;
+              const score = Number.isFinite(top.score) ? Math.round(top.score) : null;
+              const reasons = Array.isArray(top.reasons) ? top.reasons.slice(0, 2) : [];
+              const confidence =
+                score == null ? null : score >= 80 ? 'High' : score >= 60 ? 'Medium' : 'Low';
+              return (
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: '#0F172A', lineHeight: 1.45 }}>
+                    ⭐ Suggested: <span style={{ fontWeight: 700 }}>{providerId}</span>
+                    {score != null ? ` (${score}%)` : ''}
+                    {confidence != null ? ` • ${confidence} confidence` : ''}
+                  </div>
+                  {reasons.length > 0 ? (
+                    <ul
+                      style={{
+                        margin: '6px 0 0',
+                        paddingLeft: 18,
+                        fontSize: 11,
+                        color: '#64748B',
+                        fontWeight: 500,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {reasons.map((r, i) => (
+                        <li key={`${i}-${r}`}>{r}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {confidence === 'High' ? (
+                    <div style={{ fontSize: 10, color: '#64748B', marginTop: 6, fontStyle: 'italic' }}>
+                      Safe to reassign if issue persists
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: 0.01 }}>
                 💡 Actions
@@ -1631,7 +1773,11 @@ export default function AdminOverviewPage() {
                   <button
                     type="button"
                     disabled={!request.vendorId}
-                    title={request.vendorId ? undefined : 'Assign a provider before reassign'}
+                    title={
+                      !request.vendorId
+                        ? 'Assign a provider before reassign'
+                        : brainReassignGuidancePascal.tooltip
+                    }
                     onClick={() => request.vendorId && openReassignVendor(request.id, request.vendorId)}
                     style={{
                       width: 'fit-content',
@@ -1646,7 +1792,7 @@ export default function AdminOverviewPage() {
                       ...(request.vendorId ? DASHBOARD_PRIMARY_ACTION_BTN : { border: '1px solid #E2E8F0', background: '#F1F5F9', color: '#64748B' }),
                     }}
                   >
-                    Reassign Provider
+                    {brainReassignGuidancePascal.children}
                   </button>
                   <button
                     type="button"
@@ -1677,7 +1823,7 @@ export default function AdminOverviewPage() {
                         ? 'Request is closed — reassign unavailable'
                         : !request.vendorId
                           ? 'No vendor assigned — opens assign provider'
-                          : undefined
+                          : brainReassignGuidancePascal.tooltip
                     }
                     onClick={() => {
                       if (reassignBlockedTerminal) return;
@@ -1708,7 +1854,7 @@ export default function AdminOverviewPage() {
                           : DASHBOARD_PRIMARY_ACTION_BTN),
                     }}
                   >
-                    Reassign Provider
+                    {brainReassignGuidancePascal.children}
                   </button>
                   <button
                     type="button"
@@ -1751,7 +1897,10 @@ export default function AdminOverviewPage() {
                   <button
                     type="button"
                     aria-label="Assign provider (same as row Assign Vendor)"
-                    title="Opens the same assign vendor flow as the row Assign Vendor button"
+                    title={
+                      brainSuggestedAssignVendor.assignVendorTooltip
+                        ?? 'Opens the same assign vendor flow as the row Assign Vendor button'
+                    }
                     onClick={() => openAssignVendor(request.id)}
                     style={{
                       width: 'fit-content',
@@ -1767,7 +1916,7 @@ export default function AdminOverviewPage() {
                       ...DASHBOARD_PRIMARY_ACTION_BTN,
                     }}
                   >
-                    Assign provider now
+                    {brainSuggestedAssignVendor.assignVendorLabel}
                   </button>
                   {brainOtherRecommendations.length > 0 ? (
                     <div
@@ -1782,6 +1931,11 @@ export default function AdminOverviewPage() {
               {nba === 'REASSIGN_PROVIDER' ? (
                 <button
                   type="button"
+                  title={
+                    request.vendorId
+                      ? brainReassignGuidanceLower.tooltip
+                      : brainSuggestedAssignVendor.assignVendorTooltip
+                  }
                   onClick={() => (request.vendorId ? openReassignVendor(request.id, request.vendorId) : openAssignVendor(request.id))}
                   style={{
                     width: 'fit-content',
@@ -1795,7 +1949,7 @@ export default function AdminOverviewPage() {
                     ...DASHBOARD_PRIMARY_ACTION_BTN,
                   }}
                 >
-                  {request.vendorId ? 'Reassign provider' : 'Assign provider now'}
+                  {request.vendorId ? brainReassignGuidanceLower.children : brainSuggestedAssignVendor.assignVendorLabel}
                 </button>
               ) : null}
               {nba === 'CLEAR_ESCALATION' ? (
@@ -1843,7 +1997,10 @@ export default function AdminOverviewPage() {
                     <button
                       type="button"
                       aria-label="Assign provider (same as row Assign Vendor)"
-                      title="Opens the same assign vendor flow as the row Assign Vendor button"
+                      title={
+                        brainSuggestedAssignVendor.assignVendorTooltip
+                          ?? 'Opens the same assign vendor flow as the row Assign Vendor button'
+                      }
                       onClick={() => openAssignVendor(request.id)}
                       style={{
                         width: 'fit-content',
@@ -1859,7 +2016,7 @@ export default function AdminOverviewPage() {
                         ...DASHBOARD_PRIMARY_ACTION_BTN,
                       }}
                     >
-                      Assign provider now
+                      {brainSuggestedAssignVendor.assignVendorLabel}
                     </button>
                     {brainOtherRecommendations.length > 0 ? (
                       <div
@@ -2045,10 +2202,11 @@ export default function AdminOverviewPage() {
             <button
               type="button"
               disabled={reassignSubmittingRequestId === request.id}
+              title={reassignForId === request.id ? undefined : brainReassignGuidancePascal.tooltip}
               onClick={() => openReassignVendor(request.id, request.vendorId)}
               style={{ width: 160, padding: 8, ...DASHBOARD_PRIMARY_ACTION_BTN }}
             >
-              {reassignForId === request.id ? 'Cancel Reassign' : 'Reassign Provider'}
+              {reassignForId === request.id ? 'Cancel Reassign' : brainReassignGuidancePascal.children}
             </button>
           ) : null}
           {rowStatus === 'assigned' && rawStatus === 'ASSIGNED' ? (
