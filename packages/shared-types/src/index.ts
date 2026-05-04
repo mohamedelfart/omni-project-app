@@ -13,6 +13,7 @@ export type {
 } from './ticket-action';
 
 export type {
+  CommandCenterBrainAutoAssignReadiness,
   CommandCenterBrainNextBestAction,
   CommandCenterBrainPriority,
   CommandCenterBrainProviderIntelligence,

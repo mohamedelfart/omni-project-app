@@ -194,7 +194,7 @@ async function main(): Promise<void> {
     },
   });
 
-  await prisma.provider.upsert({
+  const movingProvider2 = await prisma.provider.upsert({
     where: { id: 'provider_moving_qr_2' },
     update: {},
     create: {
@@ -210,24 +210,82 @@ async function main(): Promise<void> {
     },
   });
 
+  const maintenanceProvider = await prisma.provider.upsert({
+    where: { id: 'provider_maintenance_qr' },
+    update: {},
+    create: {
+      id: 'provider_maintenance_qr',
+      name: 'QuickFix Maintenance',
+      legalName: 'QuickFix Maintenance WLL',
+      countryCode: 'QA',
+      city: 'Doha',
+      providerType: ProviderType.MAINTENANCE,
+      serviceTypes: ['maintenance'],
+      supportEmail: 'ops@quickfix.qa',
+      supportPhone: '+97440003333',
+    },
+  });
+
+  /** DEV: fixed coords for V8.2 distance-based suitability (West Bay–style). */
   await prisma.providerProfile.upsert({
     where: { userId_providerId: { userId: providerUser.id, providerId: movingProvider.id } },
-    update: {},
+    update: {
+      currentLat: 25.322,
+      currentLng: 51.522,
+    },
     create: {
       userId: providerUser.id,
       providerId: movingProvider.id,
       title: 'Dispatch Manager',
       isPrimaryContact: true,
       availabilityStatus: 'online',
-      currentLat: 25.2865,
-      currentLng: 51.533,
+      currentLat: 25.322,
+      currentLng: 51.522,
+    },
+  });
+
+  await prisma.providerProfile.upsert({
+    where: { userId_providerId: { userId: providerUser.id, providerId: maintenanceProvider.id } },
+    update: {
+      currentLat: 25.3,
+      currentLng: 51.5,
+    },
+    create: {
+      userId: providerUser.id,
+      providerId: maintenanceProvider.id,
+      title: 'Maintenance coordinator',
+      isPrimaryContact: true,
+      availabilityStatus: 'online',
+      currentLat: 25.3,
+      currentLng: 51.5,
+    },
+  });
+
+  await prisma.providerProfile.upsert({
+    where: { userId_providerId: { userId: providerUser.id, providerId: movingProvider2.id } },
+    update: {
+      currentLat: 25.28,
+      currentLng: 51.48,
+    },
+    create: {
+      userId: providerUser.id,
+      providerId: movingProvider2.id,
+      title: 'Move coordinator',
+      isPrimaryContact: true,
+      availabilityStatus: 'online',
+      currentLat: 25.28,
+      currentLng: 51.48,
     },
   });
 
   const properties = await Promise.all([
     prisma.property.upsert({
       where: { slug: 'doha-marina-residence' },
-      update: {},
+      update: {
+        /** DEV: West Bay–approx anchor for distance suitability demos. */
+        lat: 25.32,
+        lng: 51.52,
+      },
       create: {
         landlordProfileId: landlordProfile.id,
         ownerUserId: landlordUser.id,
@@ -239,8 +297,8 @@ async function main(): Promise<void> {
         description: 'Premium marina-facing residence with concierge and gym access.',
         propertyType: 'apartment',
         addressLine1: 'Marina District Tower 3',
-        lat: 25.3251,
-        lng: 51.5338,
+        lat: 25.32,
+        lng: 51.52,
         monthlyRentMinor: 850000,
         securityDepositMinor: 850000,
         serviceFeeMinor: 25000,
@@ -365,6 +423,39 @@ async function main(): Promise<void> {
       },
     },
   });
+
+  /** DEV: geo dispatch test — tie a known UnifiedRequest to seeded Doha Marina (lat/lng in Property row). */
+  const GEO_TEST_UNIFIED_REQUEST_ID = 'cmoqgiw2t0001tw701fst3b3a';
+  const marinaProperty = properties[0];
+  const beforeGeoLinkage = await prisma.unifiedRequest.findUnique({
+    where: { id: GEO_TEST_UNIFIED_REQUEST_ID },
+    select: { id: true, propertyIds: true, city: true },
+  });
+  const geoLinkageUpdate = await prisma.unifiedRequest.updateMany({
+    where: { id: GEO_TEST_UNIFIED_REQUEST_ID },
+    data: {
+      propertyIds: [marinaProperty.id],
+      city: marinaProperty.city,
+    },
+  });
+  const afterGeoLinkage =
+    geoLinkageUpdate.count > 0
+      ? await prisma.unifiedRequest.findUnique({
+          where: { id: GEO_TEST_UNIFIED_REQUEST_ID },
+          select: { id: true, propertyIds: true, city: true },
+        })
+      : beforeGeoLinkage;
+  console.log(
+    JSON.stringify({
+      devGeoDispatchLinkage: {
+        unifiedRequestId: GEO_TEST_UNIFIED_REQUEST_ID,
+        propertyIdUsed: marinaProperty.id,
+        updatedRowCount: geoLinkageUpdate.count,
+        before: beforeGeoLinkage,
+        after: afterGeoLinkage,
+      },
+    }),
+  );
 }
 
 main()

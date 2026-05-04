@@ -14,7 +14,11 @@ import {
   normalizeDashboardRequestStatus,
   type DashboardRequestStatus,
 } from '../lib/request-status-ui';
-import type { CommandCenterBrainProviderSuitability, CommandCenterBrainReadModel } from '@quickrent/shared-types';
+import type {
+  CommandCenterBrainProviderSuitability,
+  CommandCenterBrainProviderSuitabilityCandidate,
+  CommandCenterBrainReadModel,
+} from '@quickrent/shared-types';
 import { isCommandCenterBrainNextBestAction } from '@quickrent/shared-types';
 
 type AttentionSeverityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
@@ -260,7 +264,7 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
   let providerSuitability: DashboardBrain['providerSuitability'] | undefined;
   if (psRaw && typeof psRaw === 'object' && !Array.isArray(psRaw)) {
     const ps = psRaw as Record<string, unknown>;
-    const parseCand = (x: unknown): { providerId: string; score: number; reasons: string[] } | null => {
+    const parseCand = (x: unknown): CommandCenterBrainProviderSuitabilityCandidate | null => {
       if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
       const c = x as Record<string, unknown>;
       const providerId = typeof c.providerId === 'string' ? c.providerId.trim() : '';
@@ -268,11 +272,18 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
         typeof c.score === 'number' && Number.isFinite(c.score) ? Math.max(0, Math.min(100, Math.round(c.score))) : 0;
       const reasons = Array.isArray(c.reasons) ? c.reasons.filter((r): r is string => typeof r === 'string') : [];
       if (!providerId) return null;
-      return { providerId, score, reasons };
+      const cand: CommandCenterBrainProviderSuitabilityCandidate = { providerId, score, reasons };
+      const fs = c.finalScore;
+      if (typeof fs === 'number' && Number.isFinite(fs)) cand.finalScore = Math.round(fs);
+      const dk = c.distanceKm;
+      if (typeof dk === 'number' && Number.isFinite(dk)) cand.distanceKm = dk;
+      const dscore = c.distanceScore;
+      if (typeof dscore === 'number' && Number.isFinite(dscore)) cand.distanceScore = dscore;
+      return cand;
     };
     const candidates = (Array.isArray(ps.candidates) ? ps.candidates : [])
       .map(parseCand)
-      .filter((x): x is { providerId: string; score: number; reasons: string[] } => x != null);
+      .filter((x): x is CommandCenterBrainProviderSuitabilityCandidate => x != null);
     let currentProvider: CommandCenterBrainProviderSuitability['currentProvider'] = null;
     const cur = ps.currentProvider;
     if (cur && typeof cur === 'object' && !Array.isArray(cur)) {
@@ -292,7 +303,19 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
         : typeof rec === 'string' && rec.trim()
           ? rec.trim()
           : null;
-    providerSuitability = { currentProvider, candidates, recommendedProviderId };
+    const aarRaw = ps.autoAssignReadiness;
+    let autoAssignReadiness: CommandCenterBrainProviderSuitability['autoAssignReadiness'] = {
+      ready: false,
+      reason: 'No recommended provider',
+    };
+    if (aarRaw && typeof aarRaw === 'object' && !Array.isArray(aarRaw)) {
+      const ar = aarRaw as Record<string, unknown>;
+      autoAssignReadiness = {
+        ready: Boolean(ar.ready),
+        reason: typeof ar.reason === 'string' ? ar.reason : '',
+      };
+    }
+    providerSuitability = { currentProvider, candidates, recommendedProviderId, autoAssignReadiness };
   }
 
   const base: DashboardBrain = {
@@ -1743,6 +1766,29 @@ export default function AdminOverviewPage() {
                       Safe to reassign if issue persists
                     </div>
                   ) : null}
+                  {(() => {
+                    const aar = request.brain?.providerSuitability?.autoAssignReadiness;
+                    if (!aar) return null;
+                    return (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          marginTop: 8,
+                          color: aar.ready ? '#15803D' : '#92400E',
+                          lineHeight: 1.45,
+                        }}
+                      >
+                        {aar.ready ? (
+                          <>⚡ Auto-assign ready</>
+                        ) : (
+                          <>
+                            Auto-assign not ready: {aar.reason.trim() ? aar.reason : '—'}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}

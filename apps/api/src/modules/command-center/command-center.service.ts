@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { BookingStatus, PaymentStatus, Prisma, PropertyStatus, UnifiedRequestStatus } from '@prisma/client';
 import type {
+  CommandCenterBrainAutoAssignReadiness,
   CommandCenterBrainProviderIntelligence,
   CommandCenterBrainProviderSuitability,
+  CommandCenterBrainProviderSuitabilityCandidate,
   CommandCenterBrainReadModel,
 } from '@quickrent/shared-types';
 import type { CommandCenterRequestSlaSnapshot } from './dto/command-center-request-sla.dto';
@@ -421,11 +423,110 @@ function scoreProviderSuitabilityFromMetrics(m: ProviderSuitabilityMetricsIntern
   return { score: Math.max(0, Math.min(100, Math.round(score))), reasons };
 }
 
+const V81_CITY_FILTER_FALLBACK_REASON = 'No providers in same city — fallback applied';
+
+const V82_DISTANCE_NA_REASON = 'Distance not available';
+
+/** Earth mean radius (km) for haversine. */
+const V82_EARTH_RADIUS_KM = 6371;
+
+function haversineDistanceKm(lat1: unknown, lng1: unknown, lat2: unknown, lng2: unknown): number | null {
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return null;
+  if (typeof lat1 !== 'number' || typeof lng1 !== 'number' || typeof lat2 !== 'number' || typeof lng2 !== 'number') {
+    return null;
+  }
+  if (!Number.isFinite(lat1) || !Number.isFinite(lng1) || !Number.isFinite(lat2) || !Number.isFinite(lng2)) {
+    return null;
+  }
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+  return V82_EARTH_RADIUS_KM * c;
+}
+
+function resolveSuitabilityTargetCityForRow(
+  row: { city: string; propertyIds: string[] },
+  propertyCityById: ReadonlyMap<string, string>,
+): string | null {
+  const fromRequest = typeof row.city === 'string' ? row.city.trim() : '';
+  if (fromRequest) return fromRequest;
+  const firstPid = row.propertyIds?.[0];
+  if (typeof firstPid !== 'string' || !firstPid.trim()) return null;
+  const fromProperty = propertyCityById.get(firstPid.trim());
+  return typeof fromProperty === 'string' && fromProperty.trim() ? fromProperty.trim() : null;
+}
+
+function resolveSuitabilityTargetCoordsForRow(
+  row: { targetLat: number | null; targetLng: number | null; propertyIds: string[] },
+  propertyLatLngById: ReadonlyMap<string, { lat: number; lng: number }>,
+): { lat: number; lng: number } | null {
+  const tl = row.targetLat;
+  const tln = row.targetLng;
+  if (typeof tl === 'number' && Number.isFinite(tl) && typeof tln === 'number' && Number.isFinite(tln)) {
+    return { lat: tl, lng: tln };
+  }
+  const firstPid = row.propertyIds?.[0];
+  if (typeof firstPid !== 'string' || !firstPid.trim()) return null;
+  return propertyLatLngById.get(firstPid.trim()) ?? null;
+}
+
+/** V9 Step 1 — read-model preview only; never triggers assignment. */
+function computeProviderSuitabilityAutoAssignReadiness(input: {
+  status: string;
+  vendorId: string | null;
+  escalationLevelDb: number;
+  suitability: Pick<CommandCenterBrainProviderSuitability, 'candidates' | 'recommendedProviderId'>;
+}): CommandCenterBrainAutoAssignReadiness {
+  const { status, vendorId, escalationLevelDb, suitability } = input;
+  if (TERMINAL_ATTENTION_STATUSES.has(status)) {
+    return { ready: false, reason: 'Terminal request' };
+  }
+  const vid = typeof vendorId === 'string' ? vendorId.trim() : '';
+  if (vid) {
+    return { ready: false, reason: 'Request already assigned' };
+  }
+  if ((escalationLevelDb ?? 0) >= 2) {
+    return { ready: false, reason: 'High escalation requires manual review' };
+  }
+  const recId = suitability.recommendedProviderId?.trim() ?? '';
+  const top = suitability.candidates[0];
+  if (!recId || !top || top.providerId !== recId) {
+    return { ready: false, reason: 'No recommended provider' };
+  }
+  const confidenceOk =
+    top.score >= 80 ||
+    (typeof top.finalScore === 'number' && Number.isFinite(top.finalScore) && top.finalScore >= 80);
+  if (!confidenceOk) {
+    return { ready: false, reason: 'Confidence below auto-assign threshold' };
+  }
+  if (typeof top.distanceKm !== 'number' || !Number.isFinite(top.distanceKm) || top.distanceKm > 5) {
+    return { ready: false, reason: 'Provider is too far' };
+  }
+  return { ready: true, reason: '' };
+}
+
 function buildProviderSuitabilityReadModel(
   metricsByProvider: Map<string, ProviderSuitabilityMetricsInternal>,
   poolIds: readonly string[],
   currentVendorId: string | null,
   stuckExecution: boolean,
+  cityFilter?: {
+    targetCity: string | null;
+    providerCityById: ReadonlyMap<string, string | null>;
+  },
+  distanceContext?: {
+    target: { lat: number; lng: number } | null;
+    providerLocationById: ReadonlyMap<string, { lat: number; lng: number }>;
+  },
+  readinessRow?: {
+    status: string;
+    vendorId: string | null;
+    escalationLevelDb: number;
+  },
 ): CommandCenterBrainProviderSuitability | undefined {
   if (poolIds.length === 0 && !(currentVendorId?.trim())) {
     return undefined;
@@ -442,12 +543,83 @@ function buildProviderSuitabilityReadModel(
     return { id, ...scoreProviderSuitabilityFromMetrics(m) };
   };
 
-  const ranked = [...poolIds].map((id) => scoreOne(id)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-  const candidates = ranked.slice(0, 3).map((r) => ({
-    providerId: r.id,
-    score: r.score,
-    reasons: r.reasons,
-  }));
+  let poolForRanking = [...poolIds];
+  let cityFallbackApplied = false;
+  const tc = cityFilter?.targetCity?.trim() ?? '';
+  if (tc && cityFilter?.providerCityById) {
+    const filtered = poolIds.filter((id) => {
+      const pc = cityFilter.providerCityById.get(id);
+      return typeof pc === 'string' && pc.trim() !== '' && pc.trim() === tc;
+    });
+    if (filtered.length > 0) {
+      poolForRanking = [...filtered];
+    } else {
+      cityFallbackApplied = true;
+    }
+  }
+
+  const targetCoords = distanceContext?.target ?? null;
+  const providerLocationById = distanceContext?.providerLocationById;
+
+  const ranked = poolForRanking
+    .map((id) => {
+      const base = scoreOne(id);
+      const reasons = [...base.reasons];
+      let rankScore = base.score;
+      let distanceKm: number | undefined;
+      let distanceScore: number | undefined;
+      let finalScore: number | undefined;
+
+      if (!targetCoords) {
+        reasons.push(V82_DISTANCE_NA_REASON);
+      } else {
+        const loc = providerLocationById?.get(id);
+        if (!loc) {
+          reasons.push(V82_DISTANCE_NA_REASON);
+        } else {
+          const dKm = haversineDistanceKm(targetCoords.lat, targetCoords.lng, loc.lat, loc.lng);
+          if (dKm == null || !Number.isFinite(dKm)) {
+            reasons.push(V82_DISTANCE_NA_REASON);
+          } else {
+            distanceKm = dKm;
+            distanceScore = Math.max(0, 100 - dKm * 10);
+            rankScore = Math.round(base.score * 0.5 + distanceScore * 0.5);
+            finalScore = rankScore;
+            reasons.push(`Near property (${dKm.toFixed(1)} km)`);
+          }
+        }
+      }
+
+      return { id: base.id, score: base.score, reasons, rankScore, distanceKm, distanceScore, finalScore };
+    })
+    .sort((a, b) => b.rankScore - a.rankScore || a.id.localeCompare(b.id));
+
+  let candidates: CommandCenterBrainProviderSuitabilityCandidate[] = ranked.slice(0, 3).map((r) => {
+    const c: CommandCenterBrainProviderSuitabilityCandidate = {
+      providerId: r.id,
+      score: r.score,
+      reasons: r.reasons,
+    };
+    if (
+      typeof r.distanceKm === 'number' &&
+      Number.isFinite(r.distanceKm) &&
+      r.distanceScore !== undefined &&
+      r.finalScore !== undefined
+    ) {
+      c.distanceKm = r.distanceKm;
+      c.distanceScore = r.distanceScore;
+      c.finalScore = r.finalScore;
+    }
+    return c;
+  });
+  if (cityFallbackApplied) {
+    candidates = candidates.map((c) => ({
+      ...c,
+      reasons: c.reasons.includes(V81_CITY_FILTER_FALLBACK_REASON)
+        ? c.reasons
+        : [...c.reasons, V81_CITY_FILTER_FALLBACK_REASON],
+    }));
+  }
   const recommendedProviderId = candidates[0]?.providerId ?? null;
 
   const vid = currentVendorId?.trim() ?? '';
@@ -461,7 +633,19 @@ function buildProviderSuitabilityReadModel(
     currentProvider = { providerId: vid, score: base.score, reasons: cr };
   }
 
-  return { currentProvider, candidates, recommendedProviderId };
+  const core: Pick<CommandCenterBrainProviderSuitability, 'currentProvider' | 'candidates' | 'recommendedProviderId'> =
+    { currentProvider, candidates, recommendedProviderId };
+  const autoAssignReadiness =
+    readinessRow != null
+      ? computeProviderSuitabilityAutoAssignReadiness({
+          status: readinessRow.status,
+          vendorId: readinessRow.vendorId,
+          escalationLevelDb: readinessRow.escalationLevelDb,
+          suitability: core,
+        })
+      : { ready: false, reason: 'No recommended provider' };
+
+  return { ...core, autoAssignReadiness };
 }
 
 /**
@@ -1616,6 +1800,73 @@ export class CommandCenterService {
         const metricsIds = [...new Set([...poolIds, ...rowVendorIds])];
         const metricsMap = await this.buildProviderSuitabilityMetricsMap(metricsIds);
 
+        const propertyIdsForCityFallback = rows
+          .filter((r) => !(typeof r.city === 'string' && r.city.trim()) && r.propertyIds?.length)
+          .map((r) => String(r.propertyIds![0]).trim())
+          .filter((id) => id.length > 0);
+        const propertyIdsForGeoFallback = rows
+          .filter((r) => {
+            const tl = r.targetLat;
+            const tln = r.targetLng;
+            const hasTarget =
+              typeof tl === 'number' &&
+              Number.isFinite(tl) &&
+              typeof tln === 'number' &&
+              Number.isFinite(tln);
+            if (hasTarget) return false;
+            const pid = r.propertyIds?.[0];
+            return typeof pid === 'string' && pid.trim().length > 0;
+          })
+          .map((r) => String(r.propertyIds![0]).trim());
+        const propertyBatchIds = [
+          ...new Set([...propertyIdsForCityFallback, ...propertyIdsForGeoFallback]),
+        ];
+        const propertyRows =
+          propertyBatchIds.length > 0
+            ? await this.prisma.property.findMany({
+                where: { id: { in: propertyBatchIds } },
+                select: { id: true, city: true, lat: true, lng: true },
+              })
+            : [];
+        const propertyCityById = new Map<string, string>();
+        const propertyLatLngById = new Map<string, { lat: number; lng: number }>();
+        for (const p of propertyRows) {
+          const c = typeof p.city === 'string' ? p.city.trim() : '';
+          if (c) propertyCityById.set(p.id, c);
+          if (typeof p.lat === 'number' && Number.isFinite(p.lat) && typeof p.lng === 'number' && Number.isFinite(p.lng)) {
+            propertyLatLngById.set(p.id, { lat: p.lat, lng: p.lng });
+          }
+        }
+
+        const providerRows =
+          metricsIds.length > 0
+            ? await this.prisma.provider.findMany({
+                where: { id: { in: metricsIds } },
+                select: { id: true, city: true },
+              })
+            : [];
+        const providerCityById = new Map<string, string | null>();
+        for (const p of providerRows) {
+          providerCityById.set(p.id, p.city);
+        }
+
+        const providerProfileRows =
+          metricsIds.length > 0
+            ? await this.prisma.providerProfile.findMany({
+                where: { providerId: { in: metricsIds } },
+                select: { providerId: true, currentLat: true, currentLng: true, isPrimaryContact: true },
+                orderBy: [{ isPrimaryContact: 'desc' }, { id: 'asc' }],
+              })
+            : [];
+        const providerLocationById = new Map<string, { lat: number; lng: number }>();
+        for (const pf of providerProfileRows) {
+          if (providerLocationById.has(pf.providerId)) continue;
+          const la = pf.currentLat;
+          const ln = pf.currentLng;
+          if (la == null || ln == null || !Number.isFinite(la) || !Number.isFinite(ln)) continue;
+          providerLocationById.set(pf.providerId, { lat: la, lng: ln });
+        }
+
         return rows.map((row) => {
           const escRow = escalationInsights.get(row.id) ?? { lastEscalation: null, escalationHistoryCount: 0 };
           const attention = computeVendorAttentionReadModel({
@@ -1646,11 +1897,30 @@ export class CommandCenterService {
             createdAt: row.createdAt,
             firstResponseAt: row.firstResponseAt,
           });
+          const targetCity = resolveSuitabilityTargetCityForRow(
+            { city: row.city, propertyIds: row.propertyIds ?? [] },
+            propertyCityById,
+          );
+          const targetCoords = resolveSuitabilityTargetCoordsForRow(
+            {
+              targetLat: row.targetLat ?? null,
+              targetLng: row.targetLng ?? null,
+              propertyIds: row.propertyIds ?? [],
+            },
+            propertyLatLngById,
+          );
           const providerSuitability = buildProviderSuitabilityReadModel(
             metricsMap,
             poolIds,
             row.vendorId,
             stuckExecution,
+            { targetCity, providerCityById },
+            { target: targetCoords, providerLocationById },
+            {
+              status: row.status,
+              vendorId: row.vendorId,
+              escalationLevelDb: row.escalationLevel ?? 0,
+            },
           );
           const brain: CommandCenterBrainReadModel = providerSuitability
             ? { ...brainBase, providerSuitability }

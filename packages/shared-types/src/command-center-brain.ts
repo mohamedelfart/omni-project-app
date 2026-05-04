@@ -36,14 +36,27 @@ export type CommandCenterBrainProviderSuitabilityCurrent = {
 
 export type CommandCenterBrainProviderSuitabilityCandidate = {
   providerId: string;
+  /** Base suitability score (load, SLA, etc.) — unchanged by V8.2 distance blend. */
   score: number;
   reasons: string[];
+  /** Present when target + provider coordinates yield a haversine distance (V8.2). */
+  distanceKm?: number;
+  distanceScore?: number;
+  /** Rank key when distance applies: `0.5 * score + 0.5 * distanceScore`; otherwise omitted (sort uses `score`). */
+  finalScore?: number;
+};
+
+/** V9 Step 1 — preview only; does not trigger assignment. */
+export type CommandCenterBrainAutoAssignReadiness = {
+  ready: boolean;
+  reason: string;
 };
 
 export type CommandCenterBrainProviderSuitability = {
   currentProvider: CommandCenterBrainProviderSuitabilityCurrent | null;
   candidates: CommandCenterBrainProviderSuitabilityCandidate[];
   recommendedProviderId: string | null;
+  autoAssignReadiness: CommandCenterBrainAutoAssignReadiness;
 };
 
 export type CommandCenterBrainReadModel = {
