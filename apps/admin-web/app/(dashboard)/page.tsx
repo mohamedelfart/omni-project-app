@@ -15,6 +15,7 @@ import {
   type DashboardRequestStatus,
 } from '../lib/request-status-ui';
 import type {
+  CommandCenterBrainAutoAssignReadiness,
   CommandCenterBrainProviderSuitability,
   CommandCenterBrainProviderSuitabilityCandidate,
   CommandCenterBrainReadModel,
@@ -32,8 +33,15 @@ type DashboardLastEscalation = {
   source: string;
 };
 
-/** Command Center Brain — same contract as API list read-model (`CommandCenterBrainReadModel`). */
-type DashboardBrain = CommandCenterBrainReadModel;
+/** API may omit `autoAssignReadiness` on older payloads — UI treats absence as “no preview”. */
+type DashboardProviderSuitability = Omit<CommandCenterBrainProviderSuitability, 'autoAssignReadiness'> & {
+  autoAssignReadiness?: CommandCenterBrainAutoAssignReadiness;
+};
+
+/** Command Center Brain — aligned with API read-model; dashboard allows optional readiness for back-compat. */
+type DashboardBrain = Omit<CommandCenterBrainReadModel, 'providerSuitability'> & {
+  providerSuitability?: DashboardProviderSuitability;
+};
 type DashboardBrainPriority = CommandCenterBrainReadModel['priority'];
 
 type DashboardRequest = {
@@ -304,18 +312,23 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
           ? rec.trim()
           : null;
     const aarRaw = ps.autoAssignReadiness;
-    let autoAssignReadiness: CommandCenterBrainProviderSuitability['autoAssignReadiness'] = {
-      ready: false,
-      reason: 'No recommended provider',
+    const basePs: Omit<DashboardProviderSuitability, 'autoAssignReadiness'> = {
+      currentProvider,
+      candidates,
+      recommendedProviderId,
     };
     if (aarRaw && typeof aarRaw === 'object' && !Array.isArray(aarRaw)) {
       const ar = aarRaw as Record<string, unknown>;
-      autoAssignReadiness = {
-        ready: Boolean(ar.ready),
-        reason: typeof ar.reason === 'string' ? ar.reason : '',
+      providerSuitability = {
+        ...basePs,
+        autoAssignReadiness: {
+          ready: Boolean(ar.ready),
+          reason: typeof ar.reason === 'string' ? ar.reason : '',
+        },
       };
+    } else {
+      providerSuitability = { ...basePs };
     }
-    providerSuitability = { currentProvider, candidates, recommendedProviderId, autoAssignReadiness };
   }
 
   const base: DashboardBrain = {
@@ -1768,24 +1781,55 @@ export default function AdminOverviewPage() {
                   ) : null}
                   {(() => {
                     const aar = request.brain?.providerSuitability?.autoAssignReadiness;
-                    if (!aar) return null;
+                    if (aar === undefined) return null;
+                    if (aar.ready) {
+                      return (
+                        <div style={{ marginTop: 6 }}>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: '#15803D',
+                              lineHeight: 1.35,
+                            }}
+                          >
+                            ⚡ Auto-assign ready
+                          </div>
+                          <button
+                            type="button"
+                            title="System readiness passed. Opens assign flow for operator confirmation."
+                            onClick={() => openAssignVendor(request.id)}
+                            style={{
+                              marginTop: 6,
+                              width: 'fit-content',
+                              padding: '6px 10px',
+                              borderRadius: 6,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              lineHeight: 1.35,
+                              cursor: 'pointer',
+                              border: '1px solid #86EFAC',
+                              background: '#F0FDF4',
+                              color: '#166534',
+                            }}
+                          >
+                            Auto Assign (Recommended)
+                          </button>
+                        </div>
+                      );
+                    }
+                    const notReadyMsg = aar.reason.trim() ? aar.reason : 'Readiness checks not passed';
                     return (
                       <div
                         style={{
                           fontSize: 11,
                           fontWeight: 600,
-                          marginTop: 8,
-                          color: aar.ready ? '#15803D' : '#92400E',
-                          lineHeight: 1.45,
+                          marginTop: 6,
+                          color: '#92400E',
+                          lineHeight: 1.35,
                         }}
                       >
-                        {aar.ready ? (
-                          <>⚡ Auto-assign ready</>
-                        ) : (
-                          <>
-                            Auto-assign not ready: {aar.reason.trim() ? aar.reason : '—'}
-                          </>
-                        )}
+                        Auto-assign not ready: {notReadyMsg}
                       </div>
                     );
                   })()}
