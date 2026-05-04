@@ -33,8 +33,17 @@ type DashboardLastEscalation = {
   source: string;
 };
 
+/** Optional decision explanation from API read-model (not yet on shared-types). */
+type ProviderSuitabilityCandidateUi = CommandCenterBrainProviderSuitabilityCandidate & {
+  explanation?: {
+    factors: string[];
+    weights: { baseScore: number; distanceScore?: number };
+  };
+};
+
 /** API may omit `autoAssignReadiness` on older payloads — UI treats absence as “no preview”. */
-type DashboardProviderSuitability = Omit<CommandCenterBrainProviderSuitability, 'autoAssignReadiness'> & {
+type DashboardProviderSuitability = Omit<CommandCenterBrainProviderSuitability, 'autoAssignReadiness' | 'candidates'> & {
+  candidates: ProviderSuitabilityCandidateUi[];
   autoAssignReadiness?: CommandCenterBrainAutoAssignReadiness;
 };
 
@@ -272,7 +281,7 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
   let providerSuitability: DashboardBrain['providerSuitability'] | undefined;
   if (psRaw && typeof psRaw === 'object' && !Array.isArray(psRaw)) {
     const ps = psRaw as Record<string, unknown>;
-    const parseCand = (x: unknown): CommandCenterBrainProviderSuitabilityCandidate | null => {
+    const parseCand = (x: unknown): ProviderSuitabilityCandidateUi | null => {
       if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
       const c = x as Record<string, unknown>;
       const providerId = typeof c.providerId === 'string' ? c.providerId.trim() : '';
@@ -280,18 +289,37 @@ function parseBrainFromRecord(rec: Record<string, unknown>): DashboardBrain | un
         typeof c.score === 'number' && Number.isFinite(c.score) ? Math.max(0, Math.min(100, Math.round(c.score))) : 0;
       const reasons = Array.isArray(c.reasons) ? c.reasons.filter((r): r is string => typeof r === 'string') : [];
       if (!providerId) return null;
-      const cand: CommandCenterBrainProviderSuitabilityCandidate = { providerId, score, reasons };
+      const cand: ProviderSuitabilityCandidateUi = { providerId, score, reasons };
       const fs = c.finalScore;
       if (typeof fs === 'number' && Number.isFinite(fs)) cand.finalScore = Math.round(fs);
       const dk = c.distanceKm;
       if (typeof dk === 'number' && Number.isFinite(dk)) cand.distanceKm = dk;
       const dscore = c.distanceScore;
       if (typeof dscore === 'number' && Number.isFinite(dscore)) cand.distanceScore = dscore;
+      const exRaw = c.explanation;
+      if (exRaw && typeof exRaw === 'object' && !Array.isArray(exRaw)) {
+        const er = exRaw as Record<string, unknown>;
+        const factors = Array.isArray(er.factors)
+          ? er.factors.filter((f): f is string => typeof f === 'string')
+          : [];
+        const wRaw = er.weights;
+        let weights: { baseScore: number; distanceScore?: number } | undefined;
+        if (wRaw && typeof wRaw === 'object' && !Array.isArray(wRaw)) {
+          const wr = wRaw as Record<string, unknown>;
+          if (typeof wr.baseScore === 'number' && Number.isFinite(wr.baseScore)) {
+            weights = { baseScore: wr.baseScore };
+            if (typeof wr.distanceScore === 'number' && Number.isFinite(wr.distanceScore)) {
+              weights.distanceScore = wr.distanceScore;
+            }
+          }
+        }
+        cand.explanation = { factors, weights: weights ?? { baseScore: score } };
+      }
       return cand;
     };
     const candidates = (Array.isArray(ps.candidates) ? ps.candidates : [])
       .map(parseCand)
-      .filter((x): x is CommandCenterBrainProviderSuitabilityCandidate => x != null);
+      .filter((x): x is ProviderSuitabilityCandidateUi => x != null);
     let currentProvider: CommandCenterBrainProviderSuitability['currentProvider'] = null;
     const cur = ps.currentProvider;
     if (cur && typeof cur === 'object' && !Array.isArray(cur)) {
@@ -687,6 +715,8 @@ export default function AdminOverviewPage() {
   const [assignForId, setAssignForId] = useState<string | null>(null);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>([]);
   const [assignVendorSelection, setAssignVendorSelection] = useState<string>('');
+  /** When assign opens with a valid readiness preselect, tracks id for UI hint (cleared on close / submit). */
+  const [assignUiRecommendedId, setAssignUiRecommendedId] = useState<string | null>(null);
   const [assignSubmittingRequestId, setAssignSubmittingRequestId] = useState<string | null>(null);
   const [reassignForId, setReassignForId] = useState<string | null>(null);
   const [reassignVendorSelection, setReassignVendorSelection] = useState<string>('');
@@ -1209,18 +1239,30 @@ export default function AdminOverviewPage() {
     }
   };
 
-  const openAssignVendor = (requestId: string) => {
+  const openAssignVendor = (requestId: string, preselectedProviderId?: string) => {
     if (assignForId === requestId) {
       setAssignForId(null);
+      setAssignUiRecommendedId(null);
       return;
     }
     setReassignForId(null);
     setReassignReason('');
     setAssignForId(requestId);
-    setAssignVendorSelection((prev) => {
-      if (prev && providerOptions.some((p) => p.id === prev)) return prev;
-      return providerOptions[0]?.id ?? '';
-    });
+    const pre =
+      typeof preselectedProviderId === 'string' && preselectedProviderId.trim()
+        ? preselectedProviderId.trim()
+        : '';
+    const preInList = pre && providerOptions.some((p) => p.id === pre);
+    if (preInList) {
+      setAssignVendorSelection(pre);
+      setAssignUiRecommendedId(pre);
+    } else {
+      setAssignUiRecommendedId(null);
+      setAssignVendorSelection((prev) => {
+        if (prev && providerOptions.some((p) => p.id === prev)) return prev;
+        return providerOptions[0]?.id ?? '';
+      });
+    }
   };
 
   const openReassignVendor = (requestId: string, currentVendorId?: string) => {
@@ -1229,6 +1271,7 @@ export default function AdminOverviewPage() {
       return;
     }
     setAssignForId(null);
+    setAssignUiRecommendedId(null);
     setReassignForId(requestId);
     setReassignReason('');
     setReassignVendorSelection((prev) => {
@@ -1266,6 +1309,7 @@ export default function AdminOverviewPage() {
       }
       await refreshRequestList();
       setAssignForId(null);
+      setAssignUiRecommendedId(null);
       setError(null);
     } finally {
       setAssignSubmittingRequestId(null);
@@ -1718,6 +1762,7 @@ export default function AdminOverviewPage() {
                         const n = rank + 1;
                         const isRec = Boolean(recId && c.providerId === recId);
                         const summary = formatProviderSuitabilityReasonSummary(c.reasons);
+                        const explanation = c.explanation;
                         return (
                           <li
                             key={`${c.providerId}-${n}`}
@@ -1729,12 +1774,222 @@ export default function AdminOverviewPage() {
                               paddingLeft: isRec ? 8 : 0,
                             }}
                           >
-                            {n}) {c.providerId} — {c.score} — {summary}
+                            <div>
+                              {n}) {c.providerId} — {c.score} — {summary}
+                            </div>
+                            {explanation ? (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: '#6B7280',
+                                  marginTop: 4,
+                                  paddingLeft: 12,
+                                  fontWeight: 500,
+                                }}
+                              >
+                                <div style={{ fontWeight: 600, marginBottom: 2 }}>Why this provider?</div>
+                                {explanation.factors.length > 0
+                                  ? explanation.factors.map((f, fi) => (
+                                      <div key={`${c.providerId}-why-${fi}`} style={{ lineHeight: 1.45 }}>
+                                        • {f}
+                                      </div>
+                                    ))
+                                  : null}
+                                {explanation.weights &&
+                                (typeof explanation.weights.baseScore === 'number' ||
+                                  typeof explanation.weights.distanceScore === 'number') ? (
+                                  <div
+                                    style={{
+                                      fontSize: 10,
+                                      color: '#9CA3AF',
+                                      marginTop: 2,
+                                      lineHeight: 1.45,
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 600 }}>Decision impact</div>
+                                    {typeof explanation.weights.baseScore === 'number' &&
+                                    Number.isFinite(explanation.weights.baseScore) ? (
+                                      <div>Score: {Math.round(explanation.weights.baseScore)}</div>
+                                    ) : null}
+                                    {typeof explanation.weights.distanceScore === 'number' &&
+                                    Number.isFinite(explanation.weights.distanceScore) ? (
+                                      <div>Distance: {Math.round(explanation.weights.distanceScore)}</div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </li>
                         );
                       })}
                     </ul>
                   ) : null}
+                  {(() => {
+                    const top3 = ps.candidates.slice(0, 3);
+                    const withDist = top3.filter(
+                      (c) => typeof c.distanceKm === 'number' && Number.isFinite(c.distanceKm),
+                    );
+                    const withoutDist = top3.filter(
+                      (c) => !(typeof c.distanceKm === 'number' && Number.isFinite(c.distanceKm)),
+                    );
+                    const hasAnyKm = withDist.length > 0;
+                    const bandRadiusPx = (km: number) => (km <= 1 ? 22 : km <= 5 ? 38 : 54);
+
+                    return (
+                      <div style={{ marginTop: 4 }}>
+                        <div
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: '#64748B',
+                            marginBottom: 4,
+                            letterSpacing: 0.01,
+                          }}
+                        >
+                          Geo Dispatch View
+                        </div>
+                        <div
+                          style={{
+                            height: 120,
+                            background: '#F8FAFC',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: 8,
+                            position: 'relative',
+                            overflow: 'hidden',
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          {!hasAnyKm ? (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                inset: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 10,
+                                color: '#94A3B8',
+                                padding: '0 12px',
+                                textAlign: 'center',
+                              }}
+                            >
+                              Geo data not available yet
+                            </div>
+                          ) : (
+                            <>
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  left: '50%',
+                                  top: '50%',
+                                  transform: 'translate(-50%, -50%)',
+                                  textAlign: 'center',
+                                  zIndex: 2,
+                                  pointerEvents: 'none',
+                                }}
+                              >
+                                <div style={{ fontSize: 16, lineHeight: 1 }} aria-hidden>
+                                  📍
+                                </div>
+                                <div style={{ fontSize: 9, fontWeight: 600, color: '#475569', marginTop: 2 }}>
+                                  Property
+                                </div>
+                              </div>
+                              {withDist.map((c, i) => {
+                                const d = c.distanceKm as number;
+                                const r = bandRadiusPx(d);
+                                const n = withDist.length;
+                                const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+                                const dx = Math.cos(angle) * r;
+                                const dy = Math.sin(angle) * r;
+                                const isRec = Boolean(recId && c.providerId === recId);
+                                const fs =
+                                  typeof c.finalScore === 'number' && Number.isFinite(c.finalScore)
+                                    ? Math.round(c.finalScore)
+                                    : Math.round(c.score);
+                                return (
+                                  <div
+                                    key={`geo-dispatch-${c.providerId}`}
+                                    style={{
+                                      position: 'absolute',
+                                      left: `calc(50% + ${dx}px)`,
+                                      top: `calc(50% + ${dy}px)`,
+                                      transform: 'translate(-50%, -50%)',
+                                      textAlign: 'center',
+                                      zIndex: isRec ? 3 : 1,
+                                      maxWidth: 72,
+                                    }}
+                                    title={`${c.providerId} · score ${fs}`}
+                                  >
+                                    {isRec ? (
+                                      <div
+                                        style={{
+                                          fontSize: 8,
+                                          fontWeight: 700,
+                                          color: '#15803D',
+                                          marginBottom: 2,
+                                          lineHeight: 1.1,
+                                        }}
+                                      >
+                                        Recommended
+                                      </div>
+                                    ) : null}
+                                    <div
+                                      style={{
+                                        width: isRec ? 11 : 8,
+                                        height: isRec ? 11 : 8,
+                                        borderRadius: '50%',
+                                        background: isRec ? '#22C55E' : '#94A3B8',
+                                        margin: '0 auto 2px',
+                                        border: isRec ? '2px solid #FFFFFF' : '2px solid #FFFFFF',
+                                        boxShadow: isRec
+                                          ? '0 0 0 2px rgba(34,197,94,0.35)'
+                                          : '0 0 0 1px #E2E8F0',
+                                      }}
+                                    />
+                                    <div
+                                      style={{
+                                        fontSize: 8,
+                                        fontWeight: 600,
+                                        color: '#64748B',
+                                        lineHeight: 1.2,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                      }}
+                                    >
+                                      {d.toFixed(1)} km
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </>
+                          )}
+                        </div>
+                        {withoutDist.length > 0 ? (
+                          <div style={{ marginTop: 6, paddingLeft: 2 }}>
+                            <div style={{ fontSize: 9, fontWeight: 600, color: '#94A3B8', marginBottom: 4 }}>
+                              Distance unavailable
+                            </div>
+                            <ul
+                              style={{
+                                margin: 0,
+                                paddingLeft: 14,
+                                fontSize: 9,
+                                color: '#64748B',
+                                lineHeight: 1.45,
+                              }}
+                            >
+                              {withoutDist.map((c) => (
+                                <li key={`geo-no-km-${c.providerId}`} style={{ wordBreak: 'break-all' }}>
+                                  {c.providerId}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
@@ -1798,7 +2053,12 @@ export default function AdminOverviewPage() {
                           <button
                             type="button"
                             title="System readiness passed. Opens assign flow for operator confirmation."
-                            onClick={() => openAssignVendor(request.id)}
+                            onClick={() => {
+                              const recRaw = request.brain?.providerSuitability?.recommendedProviderId;
+                              const rec =
+                                typeof recRaw === 'string' && recRaw.trim() ? recRaw.trim() : undefined;
+                              openAssignVendor(request.id, rec);
+                            }}
                             style={{
                               marginTop: 6,
                               width: 'fit-content',
@@ -2388,7 +2648,16 @@ export default function AdminOverviewPage() {
               <select
                 value={assignVendorSelection}
                 onChange={(e) => setAssignVendorSelection(e.target.value)}
-                style={{ padding: 6, border: '1px solid #ddd', borderRadius: 4, maxWidth: 280 }}
+                style={{
+                  padding: 6,
+                  border:
+                    assignUiRecommendedId && assignVendorSelection === assignUiRecommendedId
+                      ? '2px solid #22C55E'
+                      : '1px solid #ddd',
+                  borderRadius: 4,
+                  maxWidth: 280,
+                  outline: 'none',
+                }}
               >
                 {providerOptions.map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -2397,6 +2666,11 @@ export default function AdminOverviewPage() {
                 ))}
               </select>
             </label>
+            {assignUiRecommendedId && assignVendorSelection === assignUiRecommendedId ? (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#15803D', lineHeight: 1.35 }}>
+                Recommended by system
+              </span>
+            ) : null}
             <button
               type="button"
               disabled={assignSubmittingRequestId === request.id || !assignVendorSelection}

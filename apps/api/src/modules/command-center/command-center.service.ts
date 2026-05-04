@@ -474,6 +474,41 @@ function resolveSuitabilityTargetCoordsForRow(
   return propertyLatLngById.get(firstPid.trim()) ?? null;
 }
 
+/** Read-model only: structured “why recommended” (not in shared-types yet). */
+type SuitabilityCandidateDecisionExplanation = {
+  factors: string[];
+  weights: { baseScore: number; distanceScore?: number };
+};
+
+function buildSuitabilityCandidateDecisionExplanation(input: {
+  reasons: readonly string[];
+  baseScore: number;
+  distanceKm?: number;
+  distanceScore?: number;
+}): SuitabilityCandidateDecisionExplanation {
+  const factors: string[] = [];
+  if (input.reasons.includes('Lower active load')) {
+    factors.push('Low load');
+  }
+  if (input.reasons.includes('Slow initial response')) {
+    factors.push('Response latency risk');
+  }
+  if (typeof input.distanceKm === 'number' && Number.isFinite(input.distanceKm)) {
+    if (input.distanceKm < 1) {
+      factors.push('Very close to property');
+    } else if (input.distanceKm < 5) {
+      factors.push('Near property');
+    } else {
+      factors.push('Far from property');
+    }
+  }
+  const weights: { baseScore: number; distanceScore?: number } = { baseScore: input.baseScore };
+  if (typeof input.distanceScore === 'number' && Number.isFinite(input.distanceScore)) {
+    weights.distanceScore = input.distanceScore;
+  }
+  return { factors, weights };
+}
+
 /** V9 Step 1 — read-model preview only; never triggers assignment. */
 function computeProviderSuitabilityAutoAssignReadiness(input: {
   status: string;
@@ -594,11 +629,22 @@ function buildProviderSuitabilityReadModel(
     })
     .sort((a, b) => b.rankScore - a.rankScore || a.id.localeCompare(b.id));
 
-  let candidates: CommandCenterBrainProviderSuitabilityCandidate[] = ranked.slice(0, 3).map((r) => {
-    const c: CommandCenterBrainProviderSuitabilityCandidate = {
+  type CandidateWithExplanation = CommandCenterBrainProviderSuitabilityCandidate & {
+    explanation: SuitabilityCandidateDecisionExplanation;
+  };
+
+  let candidates: CandidateWithExplanation[] = ranked.slice(0, 3).map((r) => {
+    const explanation = buildSuitabilityCandidateDecisionExplanation({
+      reasons: r.reasons,
+      baseScore: r.score,
+      distanceKm: r.distanceKm,
+      distanceScore: r.distanceScore,
+    });
+    const c: CandidateWithExplanation = {
       providerId: r.id,
       score: r.score,
       reasons: r.reasons,
+      explanation,
     };
     if (
       typeof r.distanceKm === 'number' &&
@@ -613,12 +659,21 @@ function buildProviderSuitabilityReadModel(
     return c;
   });
   if (cityFallbackApplied) {
-    candidates = candidates.map((c) => ({
-      ...c,
-      reasons: c.reasons.includes(V81_CITY_FILTER_FALLBACK_REASON)
+    candidates = candidates.map((c) => {
+      const reasons = c.reasons.includes(V81_CITY_FILTER_FALLBACK_REASON)
         ? c.reasons
-        : [...c.reasons, V81_CITY_FILTER_FALLBACK_REASON],
-    }));
+        : [...c.reasons, V81_CITY_FILTER_FALLBACK_REASON];
+      return {
+        ...c,
+        reasons,
+        explanation: buildSuitabilityCandidateDecisionExplanation({
+          reasons,
+          baseScore: c.score,
+          distanceKm: c.distanceKm,
+          distanceScore: c.distanceScore,
+        }),
+      };
+    });
   }
   const recommendedProviderId = candidates[0]?.providerId ?? null;
 
@@ -634,7 +689,11 @@ function buildProviderSuitabilityReadModel(
   }
 
   const core: Pick<CommandCenterBrainProviderSuitability, 'currentProvider' | 'candidates' | 'recommendedProviderId'> =
-    { currentProvider, candidates, recommendedProviderId };
+    {
+      currentProvider,
+      candidates: candidates as CommandCenterBrainProviderSuitability['candidates'],
+      recommendedProviderId,
+    };
   const autoAssignReadiness =
     readinessRow != null
       ? computeProviderSuitabilityAutoAssignReadiness({
