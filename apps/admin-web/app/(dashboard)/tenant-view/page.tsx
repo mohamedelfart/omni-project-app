@@ -6,7 +6,7 @@ import {
   setAdminRequestsRealtimeGetAccessToken,
   setAdminRequestsRealtimeHandlers,
 } from '../../lib/admin-requests-socket';
-import { apiFetch, getAuthSession, getSocketAccessToken } from '../../lib/auth';
+import { apiFetch, getSocketAccessToken } from '../../lib/auth';
 import { normalizeDashboardRequestStatus, type DashboardRequestStatus } from '../../lib/request-status-ui';
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000/api/v1';

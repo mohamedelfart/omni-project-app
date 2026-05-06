@@ -14,6 +14,7 @@ type CommandCenterLastEscalation = {
 type CommandCenterRequest = {
   id: string;
   serviceType: string;
+  status?: string;
   country: string;
   city: string;
   vendorId: string | null;
@@ -126,6 +127,7 @@ export default function EscalationsPage() {
           return {
             id: `ESC-${r.id.slice(-6).toUpperCase()}`,
             requestId: r.id,
+            requestStatus: typeof r.status === 'string' ? r.status : '',
             tenant: r.user?.fullName || r.id,
             service: r.serviceType,
             severity,
@@ -224,7 +226,7 @@ export default function EscalationsPage() {
   );
 
   const onReassign = useCallback(
-    async (requestId: string, currentVendorId: string | null) => {
+    async (requestId: string, currentVendorId: string | null, requestStatus: string) => {
       const providerSuggestion = providers.find((p) => p.id !== currentVendorId)?.id ?? '';
       const providerId = window.prompt('Provider ID to reassign', providerSuggestion) ?? '';
       if (!providerId.trim()) return;
@@ -232,8 +234,13 @@ export default function EscalationsPage() {
       setActionRequestId(requestId);
       setError(null);
       try {
+        const statusNormalized = requestStatus.trim().toUpperCase();
+        const endpoint =
+          statusNormalized === 'ASSIGNED' && currentVendorId
+            ? 'reassign-provider'
+            : 'assign-provider';
         await postAction(
-          `${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/reassign-provider`,
+          `${apiBase.replace(/\/$/, '')}/command-center/requests/${encodeURIComponent(requestId)}/${endpoint}`,
           { providerId: providerId.trim(), reason: reason.trim() || undefined },
         );
         await loadData();
@@ -374,7 +381,7 @@ export default function EscalationsPage() {
                     </button>
                     <button
                       disabled={actionRequestId === e.requestId}
-                      onClick={() => void onReassign(e.requestId, e.assignedTo)}
+                      onClick={() => void onReassign(e.requestId, e.assignedTo, e.requestStatus)}
                       style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#374151', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
                     >
                       Reassign

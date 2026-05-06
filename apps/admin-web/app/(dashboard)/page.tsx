@@ -1,14 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   ensureAdminRequestsRealtimeSocket,
   setAdminRequestsRealtimeGetAccessToken,
   setAdminRequestsRealtimeHandlers,
 } from '../lib/admin-requests-socket';
-import { apiFetch, getAuthSession, getSocketAccessToken } from '../lib/auth';
+import { apiFetch, getSocketAccessToken } from '../lib/auth';
 import { extractSocketRequestId } from '../lib/extract-socket-request-id';
 import {
   normalizeDashboardRequestStatus,
@@ -487,16 +486,6 @@ function brainPriorityChipStyle(p: DashboardBrainPriority): { background: string
   }
 }
 
-type RequestSectionGroup = 'attention' | 'in_progress' | 'completed';
-
-/** Uses `status`, `priority`, and SLA helpers on `createdAt` (same rules as row badges). */
-function getRequestSectionGroup(request: DashboardRequest): RequestSectionGroup {
-  if (request.status === 'completed') return 'completed';
-  const aging = getAgingTier(request.createdAt, request.status);
-  if (aging === 'overdue' || getPrioritySlaTier(request.priority) === 'critical') return 'attention';
-  return 'in_progress';
-}
-
 function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
   let list: unknown = raw;
   if (raw && typeof raw === 'object' && 'data' in raw) {
@@ -708,12 +697,14 @@ async function fetchTimelineHistory(requestId: string): Promise<TimelineAction[]
 }
 
 export default function AdminOverviewPage() {
-  const router = useRouter();
   const [requests, setRequests] = useState<DashboardRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [assignForId, setAssignForId] = useState<string | null>(null);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [providersError, setProvidersError] = useState<string | null>(null);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [assignVendorSelection, setAssignVendorSelection] = useState<string>('');
   /** When assign opens with a valid readiness preselect, tracks id for UI hint (cleared on close / submit). */
   const [assignUiRecommendedId, setAssignUiRecommendedId] = useState<string | null>(null);
@@ -745,9 +736,12 @@ export default function AdminOverviewPage() {
   const requestsRef = useRef<DashboardRequest[]>([]);
   const arrivalFlashIdsRef = useRef<Set<string>>(new Set());
   const timelineForIdRef = useRef<string | null>(null);
+  const assignUiRecommendedIdRef = useRef<string | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
   const bulkFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const providerLoadRequestIdRef = useRef(0);
   timelineForIdRef.current = timelineForId;
+  assignUiRecommendedIdRef.current = assignUiRecommendedId;
 
   useEffect(() => {
     requestsRef.current = requests;
@@ -851,47 +845,59 @@ export default function AdminOverviewPage() {
     return () => window.removeEventListener('pointerdown', onPointerDown);
   }, []);
 
+  const loadProviderOptions = useCallback(async (): Promise<ProviderOption[]> => {
+    const requestId = providerLoadRequestIdRef.current + 1;
+    providerLoadRequestIdRef.current = requestId;
+    setProvidersLoading(true);
+    setProvidersError(null);
+    try {
+      const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/command-center/providers`, {
+        cache: 'no-store',
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getLoadErrorMessage(payload));
+      }
+      const listRaw = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data: unknown }).data : payload;
+      const list = Array.isArray(listRaw)
+        ? listRaw
+          .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+          .map((row) => ({
+            id: typeof row.id === 'string' ? row.id : '',
+            name: typeof row.name === 'string' ? row.name : '',
+          }))
+          .filter((p) => p.id.length > 0)
+        : [];
+      if (providerLoadRequestIdRef.current === requestId) {
+        setProviderOptions(list);
+        setProvidersLoaded(true);
+        setAssignVendorSelection((prev) => {
+          const recommended = assignUiRecommendedIdRef.current;
+          if (recommended && list.some((p) => p.id === recommended)) return recommended;
+          if (prev && list.some((p) => p.id === prev)) return prev;
+          return list[0]?.id ?? '';
+        });
+      }
+      return list;
+    } catch (providersLoadError) {
+      if (providerLoadRequestIdRef.current === requestId) {
+        setProviderOptions([]);
+        setProvidersError(providersLoadError instanceof Error ? providersLoadError.message : 'Could not load providers');
+        setAssignVendorSelection('');
+      }
+      return [];
+    } finally {
+      if (providerLoadRequestIdRef.current === requestId) {
+        setProvidersLoading(false);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    const authSession = getAuthSession();
     const socketAccessToken = getSocketAccessToken();
     let arrivalFlashTimers: Map<string, ReturnType<typeof setTimeout>> | null = null;
     let loadAbortController: AbortController | null = null;
-
-    const loadProviders = async (): Promise<void> => {
-      try {
-        const response = await apiFetch(`${apiBase.replace(/\/$/, '')}/command-center/providers`, {
-          cache: 'no-store',
-        });
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) {
-          throw new Error(getLoadErrorMessage(payload));
-        }
-        const listRaw = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data: unknown }).data : payload;
-        const list = Array.isArray(listRaw)
-          ? listRaw
-            .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
-            .map((row) => ({
-              id: typeof row.id === 'string' ? row.id : '',
-              name: typeof row.name === 'string' ? row.name : '',
-            }))
-            .filter((p) => p.id.length > 0)
-          : [];
-        if (!cancelled) {
-          setProviderOptions(list);
-          setAssignVendorSelection((prev) => {
-            if (prev && list.some((p) => p.id === prev)) return prev;
-            return list[0]?.id ?? '';
-          });
-        }
-      } catch (providersError) {
-        if (!cancelled) {
-          setProviderOptions([]);
-          setAssignVendorSelection('');
-          setError(providersError instanceof Error ? providersError.message : 'Failed to load providers');
-        }
-      }
-    };
 
     const load = async () => {
       loadAbortController?.abort();
@@ -948,7 +954,7 @@ export default function AdminOverviewPage() {
       }, 80);
     };
 
-    void Promise.all([load(), loadProviders()]);
+    void Promise.all([load(), loadProviderOptions()]);
     if (!socketAccessToken) {
       const socketError = 'Missing auth token for socket connection';
       if (process.env.NODE_ENV === 'development') {
@@ -1067,7 +1073,7 @@ export default function AdminOverviewPage() {
         arrivalFlashTimers.clear();
       }
     };
-  }, []);
+  }, [loadProviderOptions]);
 
   const loadTimeline = async (requestId: string) => {
     setTimelineForId(requestId);
@@ -1077,7 +1083,8 @@ export default function AdminOverviewPage() {
     try {
       setTimelineActions(await fetchTimelineHistory(requestId));
     } catch (e) {
-      setTimelineError(e instanceof Error ? e.message : 'Failed to load timeline');
+      void e;
+      setTimelineError('Timeline not available yet');
     } finally {
       setTimelineLoading(false);
     }
@@ -1243,6 +1250,7 @@ export default function AdminOverviewPage() {
     if (assignForId === requestId) {
       setAssignForId(null);
       setAssignUiRecommendedId(null);
+      setAssignVendorSelection('');
       return;
     }
     setReassignForId(null);
@@ -1258,10 +1266,10 @@ export default function AdminOverviewPage() {
       setAssignUiRecommendedId(pre);
     } else {
       setAssignUiRecommendedId(null);
-      setAssignVendorSelection((prev) => {
-        if (prev && providerOptions.some((p) => p.id === prev)) return prev;
-        return providerOptions[0]?.id ?? '';
-      });
+      setAssignVendorSelection(providerOptions[0]?.id ?? '');
+    }
+    if (providerOptions.length === 0 || providersError) {
+      void loadProviderOptions();
     }
   };
 
@@ -1285,6 +1293,7 @@ export default function AdminOverviewPage() {
     const line = `tenant:${request.tenantId} · request:${request.id}${request.vendorId ? ` · vendor:${request.vendorId}` : ''}`;
     try {
       await navigator.clipboard?.writeText(line);
+      window.alert('Provider contact reference copied.');
     } catch {
       window.prompt('Copy reference', line);
     }
@@ -2225,7 +2234,7 @@ export default function AdminOverviewPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => router.push(`/requests/${encodeURIComponent(request.id)}/timeline`)}
+                    onClick={() => void loadTimeline(request.id)}
                     style={{
                       width: 'fit-content',
                       padding: '6px 10px',
@@ -2502,7 +2511,7 @@ export default function AdminOverviewPage() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             type="button"
-            onClick={() => router.push(`/requests/${encodeURIComponent(request.id)}/timeline`)}
+            onClick={() => void loadTimeline(request.id)}
             style={{ padding: '6px 10px' }}
           >
             Timeline
@@ -2601,6 +2610,48 @@ export default function AdminOverviewPage() {
             <span style={{ fontSize: 11, color: '#64748B', fontStyle: 'italic' }}>Processing...</span>
           ) : null}
         </div>
+        {timelineForId === request.id ? (
+          <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <strong style={{ color: '#0F172A' }}>Timeline — {timelineForId}</strong>
+              <button
+                type="button"
+                onClick={() => { setTimelineForId(null); setTimelineActions([]); setTimelineError(null); }}
+                style={{ padding: '4px 8px', fontSize: 12 }}
+              >
+                Close
+              </button>
+            </div>
+            {timelineLoading ? <p style={{ color: '#64748B', margin: 0 }}>Loading…</p> : null}
+            {timelineError ? (
+              <div style={{ padding: 10, borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', color: '#7F1D1D' }}>
+                <div style={{ fontWeight: 600 }}>Request: {timelineForId}</div>
+                <div>Timeline not available yet</div>
+              </div>
+            ) : null}
+            {!timelineLoading && !timelineError ? (
+              <ul style={{ margin: 0, paddingLeft: 18, color: '#334155', fontSize: 14 }}>
+                {timelineActions.length === 0 ? (
+                  <li style={{ listStyle: 'none', marginLeft: -18, color: '#64748B' }}>No actions</li>
+                ) : (
+                  timelineActions.map((action, index) => {
+                    const summary = timelinePayloadSummary(action);
+                    return (
+                      <li key={`${action.type}-${action.createdAt}-${index}`} style={{ marginBottom: 8 }}>
+                        <div>
+                          <strong>{action.type}</strong> · by {action.createdBy.type} · {action.createdAt ? formatDate(action.createdAt) : ''}
+                        </div>
+                        {summary ? (
+                          <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{summary}</div>
+                        ) : null}
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
         {escalateForId === request.id ? (
           <div style={{ display: 'grid', gap: 6, borderTop: '1px solid #E5EDF5', paddingTop: 8 }}>
             <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
@@ -2648,6 +2699,7 @@ export default function AdminOverviewPage() {
               <select
                 value={assignVendorSelection}
                 onChange={(e) => setAssignVendorSelection(e.target.value)}
+                disabled={providersLoading || providerOptions.length === 0}
                 style={{
                   padding: 6,
                   border:
@@ -2666,6 +2718,24 @@ export default function AdminOverviewPage() {
                 ))}
               </select>
             </label>
+            {providersLoading ? (
+              <span style={{ fontSize: 12, color: '#64748B' }}>Loading providers…</span>
+            ) : null}
+            {!providersLoading && providersError ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: '#991B1B' }}>Could not load providers</span>
+                <button
+                  type="button"
+                  onClick={() => void loadProviderOptions()}
+                  style={{ padding: '4px 8px', fontSize: 12 }}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
+            {!providersLoading && !providersError && providersLoaded && providerOptions.length === 0 ? (
+              <span style={{ fontSize: 12, color: '#92400E' }}>No providers available</span>
+            ) : null}
             {assignUiRecommendedId && assignVendorSelection === assignUiRecommendedId ? (
               <span style={{ fontSize: 11, fontWeight: 600, color: '#15803D', lineHeight: 1.35 }}>
                 Recommended by system
@@ -2673,7 +2743,7 @@ export default function AdminOverviewPage() {
             ) : null}
             <button
               type="button"
-              disabled={assignSubmittingRequestId === request.id || !assignVendorSelection}
+              disabled={assignSubmittingRequestId === request.id || providersLoading || !assignVendorSelection}
               onClick={() => void assignVendor(request.id, assignVendorSelection)}
               style={{ padding: '6px 12px', width: 'fit-content' }}
             >
@@ -2906,41 +2976,6 @@ export default function AdminOverviewPage() {
         </div>
       </article>
 
-      {timelineForId ? (
-        <article style={{ background: '#FFF', border: '1px solid #ddd', borderRadius: 8, padding: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <h2 style={{ margin: 0 }}>Timeline — {timelineForId}</h2>
-            <button type="button" onClick={() => { setTimelineForId(null); setTimelineActions([]); setTimelineError(null); }} style={{ padding: '6px 10px' }}>
-              Close
-            </button>
-          </div>
-          {timelineLoading ? <p style={{ color: '#64748B', marginTop: 8 }}>Loading…</p> : null}
-          {timelineError ? (
-            <p style={{ color: '#991B1B', marginTop: 8 }}>{timelineError}</p>
-          ) : null}
-          {!timelineLoading && !timelineError ? (
-            <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: '#334155', fontSize: 14 }}>
-              {timelineActions.length === 0 ? (
-                <li style={{ listStyle: 'none', marginLeft: -18, color: '#64748B' }}>No actions</li>
-              ) : (
-                timelineActions.map((action, index) => {
-                  const summary = timelinePayloadSummary(action);
-                  return (
-                    <li key={`${action.type}-${action.createdAt}-${index}`} style={{ marginBottom: 8 }}>
-                      <div>
-                        <strong>{action.type}</strong> · by {action.createdBy.type} · {action.createdAt ? formatDate(action.createdAt) : ''}
-                      </div>
-                      {summary ? (
-                        <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{summary}</div>
-                      ) : null}
-                    </li>
-                  );
-                })
-              )}
-            </ul>
-          ) : null}
-        </article>
-      ) : null}
     </section>
   );
 }
