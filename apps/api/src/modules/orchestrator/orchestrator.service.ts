@@ -314,6 +314,11 @@ export class OrchestratorService {
       propertyLatLngById,
     });
 
+    const executionSiteCityTrimmed =
+      typeof executionSite.city === 'string' ? executionSite.city.trim() : '';
+    const routingCityForProviderSelection =
+      executionSiteCityTrimmed !== '' ? executionSiteCityTrimmed : unifiedRequest.city;
+
     let selected: {
       provider: Provider | null;
       routingDecisionContext: Record<string, unknown>;
@@ -342,10 +347,12 @@ export class OrchestratorService {
         },
       };
     } else {
+      // Prefer execution-site city (aligned with Command Center suitability filter) for provider.city matching;
+      // falls back to raw UnifiedRequest.city when resolver yields no city string.
       const sp = await this.selectProvider(
         unifiedRequest.serviceType,
         unifiedRequest.country,
-        unifiedRequest.city,
+        routingCityForProviderSelection,
       );
       selected = {
         provider: sp.provider,
