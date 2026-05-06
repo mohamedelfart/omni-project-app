@@ -5,7 +5,10 @@ import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { IntegrationHubService } from '../integration-hub/integration-hub.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { toOperationalReadModelStatus } from '../unified-requests/unified-request-operational-status';
-import { resolveUnifiedRequestExecutionSite } from '../unified-requests/execution-site.resolver';
+import {
+  resolveUnifiedRequestExecutionSite,
+  type UnifiedRequestExecutionSite,
+} from '../unified-requests/execution-site.resolver';
 
 @Injectable()
 export class OrchestratorService {
@@ -274,6 +277,130 @@ export class OrchestratorService {
     };
   }
 
+  /** Earth mean radius (km) — shadow observability only; matches Command Center haversine constant. */
+  private static readonly GEO_SHADOW_EARTH_RADIUS_KM = 6371;
+
+  /** Pure distance helper for shadow metadata only; does not affect routing. */
+  private haversineDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number | null {
+    if (
+      !Number.isFinite(lat1)
+      || !Number.isFinite(lng1)
+      || !Number.isFinite(lat2)
+      || !Number.isFinite(lng2)
+    ) {
+      return null;
+    }
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2)
+      + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+    return OrchestratorService.GEO_SHADOW_EARTH_RADIUS_KM * c;
+  }
+
+  private extractShadowCandidateVendorIds(routingDecisionContext: Record<string, unknown>): string[] {
+    const strategy = routingDecisionContext.strategy;
+    if (strategy === 'pre-assigned') {
+      const vid =
+        typeof routingDecisionContext.chosenVendorId === 'string'
+          ? routingDecisionContext.chosenVendorId.trim()
+          : '';
+      return vid ? [vid] : [];
+    }
+    const raw = routingDecisionContext.topCandidates;
+    if (!Array.isArray(raw)) return [];
+    const ids: string[] = [];
+    for (const row of raw) {
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        const id = (row as Record<string, unknown>).vendorId;
+        if (typeof id === 'string' && id.trim()) ids.push(id.trim());
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Step 2C-S — observability only: distances never influence provider selection.
+   */
+  private async buildGeoDistanceShadow(
+    executionSite: UnifiedRequestExecutionSite,
+    routingDecisionContext: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const hasExecCoords =
+      typeof executionSite.lat === 'number'
+      && Number.isFinite(executionSite.lat)
+      && typeof executionSite.lng === 'number'
+      && Number.isFinite(executionSite.lng);
+
+    const candidateVendorIds = this.extractShadowCandidateVendorIds(routingDecisionContext);
+
+    let skippedReason: string | undefined;
+    if (candidateVendorIds.length === 0) {
+      skippedReason = 'No shadow candidates (empty smart-lite topCandidates or missing pre-assigned vendor id).';
+    }
+
+    const locationByVendor = new Map<string, { lat: number; lng: number }>();
+    if (candidateVendorIds.length > 0) {
+      const profiles = await this.prisma.providerProfile.findMany({
+        where: { providerId: { in: candidateVendorIds } },
+        select: { providerId: true, currentLat: true, currentLng: true, isPrimaryContact: true },
+        orderBy: [{ providerId: 'asc' }, { isPrimaryContact: 'desc' }, { id: 'asc' }],
+      });
+      for (const pf of profiles) {
+        if (locationByVendor.has(pf.providerId)) continue;
+        const la = pf.currentLat;
+        const ln = pf.currentLng;
+        if (typeof la === 'number' && Number.isFinite(la) && typeof ln === 'number' && Number.isFinite(ln)) {
+          locationByVendor.set(pf.providerId, { lat: la, lng: ln });
+        }
+      }
+    }
+
+    const candidates = candidateVendorIds.map((providerId) => {
+      const loc = locationByVendor.get(providerId);
+      const hasProviderCoords = Boolean(loc);
+      let distanceKm: number | null = null;
+      if (hasExecCoords && loc) {
+        const d = this.haversineDistanceKm(
+          executionSite.lat as number,
+          executionSite.lng as number,
+          loc.lat,
+          loc.lng,
+        );
+        distanceKm = d != null ? Math.round(d * 1000) / 1000 : null;
+      }
+      return { providerId, distanceKm, hasProviderCoords };
+    });
+
+    if (!skippedReason && !hasExecCoords) {
+      skippedReason = 'Execution site coordinates unavailable for shadow distance.';
+    }
+    if (!skippedReason && candidateVendorIds.length > 0) {
+      const anyComputed = candidates.some((c) => c.distanceKm != null);
+      if (!anyComputed) {
+        skippedReason = 'Provider profile coordinates missing for all shadow candidates.';
+      }
+    }
+
+    const base: Record<string, unknown> = {
+      enabled: false,
+      mode: 'shadow-only',
+      appliedToSelection: false,
+      executionSite: {
+        source: executionSite.source,
+        city: executionSite.city,
+        hasCoords: hasExecCoords,
+      },
+      candidates,
+    };
+    if (skippedReason) {
+      base.skippedReason = skippedReason;
+    }
+    return base;
+  }
+
   async routeRequest(unifiedRequestId: string) {
     const unifiedRequest = await this.prisma.unifiedRequest.findUniqueOrThrow({ where: { id: unifiedRequestId } });
     const routingPolicy = this.operatorPolicyService.getRoutingPolicy(unifiedRequest.country);
@@ -364,10 +491,12 @@ export class OrchestratorService {
     }
 
     const provider = selected.provider;
+    const geoDistanceShadow = await this.buildGeoDistanceShadow(executionSite, selected.routingDecisionContext);
     const existingMetadata = this.toRecord(unifiedRequest.metadata);
     const serviceDispatchContext = {
       ...this.toRecord(existingMetadata.serviceDispatchContext),
       ...selected.routingDecisionContext,
+      geoDistanceShadow,
     };
 
     if (!unifiedRequest.vendorId) {
