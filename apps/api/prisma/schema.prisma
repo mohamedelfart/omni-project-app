@@ -903,6 +903,12 @@ model Provider {
   supportPhone          String?
   createdAt             DateTime               @default(now())
   updatedAt             DateTime               @updatedAt
+  dispatchBaseLat       Float?
+  dispatchBaseLng       Float?
+  dispatchBaseLabel     String?
+  dispatchBaseSource    String?
+  dispatchBaseUpdatedAt DateTime?
+  dispatchBaseSetByUserId String?
   providerProfiles      ProviderProfile[]
   tripAssignments       ViewingTripAssignment[]
   movingRequests        MovingRequest[]

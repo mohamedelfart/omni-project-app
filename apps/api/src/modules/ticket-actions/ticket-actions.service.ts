@@ -39,7 +39,7 @@ export class TicketActionsService {
         ticketId: input.ticketId,
         actionType: input.actionType,
         actorType: input.actorType,
-        actorId: input.actorId ?? null,
+        actorId: input.actorId?.trim() ? input.actorId.trim() : 'system',
         payload: input.payload,
       },
     });
