@@ -1,10 +1,11 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { CommandCenterStatus, Prisma, ServiceRequestStatus, UnifiedRequestStatus } from '@prisma/client';
+import { CommandCenterStatus, Prisma, Provider, ServiceRequestStatus, UnifiedRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
 import { IntegrationHubService } from '../integration-hub/integration-hub.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { toOperationalReadModelStatus } from '../unified-requests/unified-request-operational-status';
+import { resolveUnifiedRequestExecutionSite } from '../unified-requests/execution-site.resolver';
 
 @Injectable()
 export class OrchestratorService {
@@ -276,8 +277,50 @@ export class OrchestratorService {
   async routeRequest(unifiedRequestId: string) {
     const unifiedRequest = await this.prisma.unifiedRequest.findUniqueOrThrow({ where: { id: unifiedRequestId } });
     const routingPolicy = this.operatorPolicyService.getRoutingPolicy(unifiedRequest.country);
-    const selected = unifiedRequest.vendorId
-      ? {
+
+    const propertyCityById = new Map<string, string>();
+    const propertyLatLngById = new Map<string, { lat: number; lng: number }>();
+    const firstPropertyId = unifiedRequest.propertyIds?.[0]?.trim();
+    if (firstPropertyId) {
+      const prop = await this.prisma.property.findUnique({
+        where: { id: firstPropertyId },
+        select: { id: true, city: true, lat: true, lng: true },
+      });
+      if (prop) {
+        const pc = typeof prop.city === 'string' ? prop.city.trim() : '';
+        if (pc) propertyCityById.set(prop.id, pc);
+        if (
+          typeof prop.lat === 'number'
+          && Number.isFinite(prop.lat)
+          && typeof prop.lng === 'number'
+          && Number.isFinite(prop.lng)
+        ) {
+          propertyLatLngById.set(prop.id, { lat: prop.lat, lng: prop.lng });
+        }
+      }
+    }
+
+    const executionSite = resolveUnifiedRequestExecutionSite({
+      city: unifiedRequest.city,
+      propertyIds: unifiedRequest.propertyIds ?? [],
+      targetLat: unifiedRequest.targetLat ?? null,
+      targetLng: unifiedRequest.targetLng ?? null,
+      pickupLat: unifiedRequest.pickupLat ?? null,
+      pickupLng: unifiedRequest.pickupLng ?? null,
+      dropoffLat: unifiedRequest.dropoffLat ?? null,
+      dropoffLng: unifiedRequest.dropoffLng ?? null,
+      serviceType: unifiedRequest.serviceType,
+      propertyCityById,
+      propertyLatLngById,
+    });
+
+    let selected: {
+      provider: Provider | null;
+      routingDecisionContext: Record<string, unknown>;
+    };
+
+    if (unifiedRequest.vendorId) {
+      selected = {
         provider: await this.prisma.provider.findUnique({ where: { id: unifiedRequest.vendorId } }),
         routingDecisionContext: {
           strategy: 'pre-assigned',
@@ -295,13 +338,23 @@ export class OrchestratorService {
           },
           scoreBreakdown: null,
           topCandidates: [],
+          executionSite,
         },
-      }
-      : await this.selectProvider(
+      };
+    } else {
+      const sp = await this.selectProvider(
         unifiedRequest.serviceType,
         unifiedRequest.country,
         unifiedRequest.city,
       );
+      selected = {
+        provider: sp.provider,
+        routingDecisionContext: {
+          ...sp.routingDecisionContext,
+          executionSite,
+        },
+      };
+    }
 
     const provider = selected.provider;
     const existingMetadata = this.toRecord(unifiedRequest.metadata);
