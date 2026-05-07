@@ -9,6 +9,7 @@ import {
   resolveUnifiedRequestExecutionSite,
   type UnifiedRequestExecutionSite,
 } from '../unified-requests/execution-site.resolver';
+import { resolveProviderOperationalLocation } from '../providers/provider-operational-location';
 
 @Injectable()
 export class OrchestratorService {
@@ -342,18 +343,42 @@ export class OrchestratorService {
     }
 
     const locationByVendor = new Map<string, { lat: number; lng: number }>();
+    const operationalLocationSourceByVendor = new Map<string, 'dispatch-base' | 'provider-profile-fallback' | 'none'>();
     if (candidateVendorIds.length > 0) {
-      const profiles = await this.prisma.providerProfile.findMany({
-        where: { providerId: { in: candidateVendorIds } },
-        select: { providerId: true, currentLat: true, currentLng: true, isPrimaryContact: true },
-        orderBy: [{ providerId: 'asc' }, { isPrimaryContact: 'desc' }, { id: 'asc' }],
-      });
+      const [providers, profiles] = await Promise.all([
+        this.prisma.provider.findMany({
+          where: { id: { in: candidateVendorIds } },
+          select: { id: true, dispatchBaseLat: true, dispatchBaseLng: true },
+        }),
+        this.prisma.providerProfile.findMany({
+          where: { providerId: { in: candidateVendorIds } },
+          select: { providerId: true, currentLat: true, currentLng: true, isPrimaryContact: true },
+          orderBy: [{ providerId: 'asc' }, { isPrimaryContact: 'desc' }, { id: 'asc' }],
+        }),
+      ]);
+      const providerRowById = new Map(providers.map((p) => [p.id, p]));
+      const firstProfileCoordsByVendor = new Map<string, { la: number; ln: number }>();
       for (const pf of profiles) {
-        if (locationByVendor.has(pf.providerId)) continue;
+        if (firstProfileCoordsByVendor.has(pf.providerId)) continue;
         const la = pf.currentLat;
         const ln = pf.currentLng;
         if (typeof la === 'number' && Number.isFinite(la) && typeof ln === 'number' && Number.isFinite(ln)) {
-          locationByVendor.set(pf.providerId, { lat: la, lng: ln });
+          firstProfileCoordsByVendor.set(pf.providerId, { la, ln });
+        }
+      }
+      for (const providerId of candidateVendorIds) {
+        if (locationByVendor.has(providerId)) continue;
+        const row = providerRowById.get(providerId);
+        const pf = firstProfileCoordsByVendor.get(providerId);
+        const resolved = resolveProviderOperationalLocation({
+          dispatchBaseLat: row?.dispatchBaseLat,
+          dispatchBaseLng: row?.dispatchBaseLng,
+          profileCurrentLat: pf?.la,
+          profileCurrentLng: pf?.ln,
+        });
+        operationalLocationSourceByVendor.set(providerId, resolved.source);
+        if (resolved.coords) {
+          locationByVendor.set(providerId, resolved.coords);
         }
       }
     }
@@ -371,7 +396,12 @@ export class OrchestratorService {
         );
         distanceKm = d != null ? Math.round(d * 1000) / 1000 : null;
       }
-      return { providerId, distanceKm, hasProviderCoords };
+      return {
+        providerId,
+        distanceKm,
+        hasProviderCoords,
+        operationalLocationSource: operationalLocationSourceByVendor.get(providerId) ?? 'none',
+      };
     });
 
     if (!skippedReason && !hasExecCoords) {
@@ -380,7 +410,8 @@ export class OrchestratorService {
     if (!skippedReason && candidateVendorIds.length > 0) {
       const anyComputed = candidates.some((c) => c.distanceKm != null);
       if (!anyComputed) {
-        skippedReason = 'Provider profile coordinates missing for all shadow candidates.';
+        skippedReason =
+          'Provider operational coordinates missing for all shadow candidates (no valid dispatch base or profile fallback).';
       }
     }
 

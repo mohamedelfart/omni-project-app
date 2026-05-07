@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '../../common/decorators/current-user.dec
 import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import { resolveUnifiedRequestExecutionSite } from '../unified-requests/execution-site.resolver';
+import { resolveProviderOperationalLocation } from '../providers/provider-operational-location';
 import { DecisionSupportService } from './decision-support.service';
 
 type DashboardFilters = {
@@ -1876,12 +1877,14 @@ export class CommandCenterService {
           metricsIds.length > 0
             ? await this.prisma.provider.findMany({
                 where: { id: { in: metricsIds } },
-                select: { id: true, city: true },
+                select: { id: true, city: true, dispatchBaseLat: true, dispatchBaseLng: true },
               })
             : [];
         const providerCityById = new Map<string, string | null>();
+        const providerDispatchBaseById = new Map<string, { lat: unknown; lng: unknown }>();
         for (const p of providerRows) {
           providerCityById.set(p.id, p.city);
+          providerDispatchBaseById.set(p.id, { lat: p.dispatchBaseLat, lng: p.dispatchBaseLng });
         }
 
         const providerProfileRows =
@@ -1892,13 +1895,27 @@ export class CommandCenterService {
                 orderBy: [{ isPrimaryContact: 'desc' }, { id: 'asc' }],
               })
             : [];
-        const providerLocationById = new Map<string, { lat: number; lng: number }>();
+        const firstProfileCoordsByProviderId = new Map<string, { la: number; ln: number }>();
         for (const pf of providerProfileRows) {
-          if (providerLocationById.has(pf.providerId)) continue;
+          if (firstProfileCoordsByProviderId.has(pf.providerId)) continue;
           const la = pf.currentLat;
           const ln = pf.currentLng;
           if (la == null || ln == null || !Number.isFinite(la) || !Number.isFinite(ln)) continue;
-          providerLocationById.set(pf.providerId, { lat: la, lng: ln });
+          firstProfileCoordsByProviderId.set(pf.providerId, { la, ln });
+        }
+        const providerLocationById = new Map<string, { lat: number; lng: number }>();
+        for (const providerId of metricsIds) {
+          const dispatch = providerDispatchBaseById.get(providerId);
+          const pf = firstProfileCoordsByProviderId.get(providerId);
+          const resolved = resolveProviderOperationalLocation({
+            dispatchBaseLat: dispatch?.lat,
+            dispatchBaseLng: dispatch?.lng,
+            profileCurrentLat: pf?.la,
+            profileCurrentLng: pf?.ln,
+          });
+          if (resolved.coords) {
+            providerLocationById.set(providerId, resolved.coords);
+          }
         }
 
         return rows.map((row) => {
