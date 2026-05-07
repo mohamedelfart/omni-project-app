@@ -81,6 +81,13 @@ type DashboardRequest = {
   };
   /** Backend-derived Brain read-model (`GET .../command-center/requests`, Step 9). */
   brain?: DashboardBrain;
+  /** Latest provider advisory operational signal (`GET .../command-center/requests`). */
+  providerOperationalSignal?: {
+    latest: string;
+    latestAt: string;
+    note: string | null;
+    advisory: true;
+  };
 };
 
 const DASHBOARD_STATUSES: Exclude<DashboardRequestStatus, 'unknown'>[] = ['pending', 'assigned', 'in_progress', 'completed'];
@@ -520,6 +527,22 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
       const escalationHistoryCount =
         typeof ehRaw === 'number' && Number.isFinite(ehRaw) && ehRaw >= 0 ? Math.floor(ehRaw) : undefined;
       const brain = parseBrainFromRecord(rec);
+      const posRaw = rec.providerOperationalSignal;
+      const providerOperationalSignal =
+        posRaw && typeof posRaw === 'object' && posRaw !== null
+          && typeof (posRaw as { latest?: unknown }).latest === 'string'
+          && typeof (posRaw as { latestAt?: unknown }).latestAt === 'string'
+          && (posRaw as { advisory?: unknown }).advisory === true
+          ? {
+              latest: String((posRaw as { latest: string }).latest).trim(),
+              latestAt: String((posRaw as { latestAt: string }).latestAt).trim(),
+              note:
+                typeof (posRaw as { note?: unknown }).note === 'string'
+                  ? (posRaw as { note: string }).note
+                  : null,
+              advisory: true as const,
+            }
+          : undefined;
       return {
         ...(row as unknown as DashboardRequest),
         id,
@@ -535,6 +558,7 @@ function normalizeRequestsResponseBody(raw: unknown): DashboardRequest[] {
         lastEscalation: lastEscalation ?? null,
         escalationHistoryCount,
         ...(brain ? { brain } : {}),
+        ...(providerOperationalSignal ? { providerOperationalSignal } : {}),
       };
     })
     .filter((row) => row.id.length > 0);
@@ -601,6 +625,28 @@ function timelinePayloadSummary(action: TimelineAction): string | null {
     if (typeof reason === 'string' && reason.trim()) {
       return reason.length > 96 ? `${reason.slice(0, 96)}…` : reason;
     }
+  }
+  if (type === 'PROVIDER_OPERATIONAL_INTENT') {
+    const intent = typeof payload.intent === 'string' ? payload.intent.trim() : '';
+    const note = typeof payload.note === 'string' ? payload.note.trim() : '';
+    const label =
+      intent === 'ARRIVED_ON_SITE'
+        ? 'Arrived on site'
+        : intent === 'RUNNING_LATE'
+          ? 'Running late'
+          : intent === 'TENANT_UNREACHABLE'
+            ? 'Tenant unreachable'
+            : intent === 'BLOCKED_ACCESS'
+              ? 'Blocked access'
+              : intent === 'REQUEST_SUPPORT'
+                ? 'Request support'
+                : intent === 'VIEWING_STARTED'
+                  ? 'Viewing started'
+                  : intent === 'VIEWING_COMPLETED'
+                    ? 'Viewing completed'
+                    : intent || 'Provider signal';
+    if (note) return `${label}: ${note.length > 80 ? `${note.slice(0, 80)}…` : note}`;
+    return label;
   }
   return null;
 }
@@ -1554,6 +1600,26 @@ export default function AdminOverviewPage() {
         <div>
           <strong>{request.id}</strong> - {request.type} - {request.status}
         </div>
+        {request.providerOperationalSignal ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: '#0F766E',
+              background: '#F0FDFA',
+              border: '1px solid #99F6E4',
+              borderRadius: 6,
+              padding: '6px 10px',
+              lineHeight: 1.4,
+            }}
+            title={`Advisory signal · ${request.providerOperationalSignal.latestAt}`}
+          >
+            <span style={{ fontWeight: 700 }}>Provider signal</span>
+            {' · '}
+            {request.providerOperationalSignal.latest.replace(/_/g, ' ')}
+            {request.providerOperationalSignal.note ? ` — ${request.providerOperationalSignal.note}` : ''}
+            <span style={{ fontWeight: 600, marginLeft: 6, opacity: 0.85 }}>(advisory)</span>
+          </div>
+        ) : null}
         {request.brain ? (
           <div
             role="region"

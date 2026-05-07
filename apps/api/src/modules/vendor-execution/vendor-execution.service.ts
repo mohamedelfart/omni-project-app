@@ -1,10 +1,12 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { isProviderOperationalIntentCode } from '../orchestrator/provider-operational-intents';
 import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { TenantPerksService } from '../notifications/tenant-perks.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
+import type { AppendProviderOperationalIntentDto } from './dto/append-provider-operational-intent.dto';
 
 @Injectable()
 export class VendorExecutionService {
@@ -93,6 +95,39 @@ export class VendorExecutionService {
       createdAt: request.createdAt,
       etaMinutes: request.viewingRequest?.assignment?.etaMinutes ?? null,
     }));
+  }
+
+  async appendOperationalIntent(user: AuthenticatedUser, ticketId: string, dto: AppendProviderOperationalIntentDto) {
+    const providerIds = await this.providerIdsForUser(user.id);
+    if (!providerIds.length) {
+      throw new ForbiddenException('No provider profile attached to current user');
+    }
+
+    const scopedProviderIds = this.scopeProviderIds(providerIds, user);
+
+    const ticket = await this.prisma.unifiedRequest.findUnique({ where: { id: ticketId } });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+
+    if (!ticket.vendorId || !scopedProviderIds.includes(ticket.vendorId)) {
+      throw new ForbiddenException('Ticket is not assigned to your provider account');
+    }
+
+    if (!isProviderOperationalIntentCode(dto.intent)) {
+      throw new BadRequestException('Invalid operational intent');
+    }
+
+    const out = await this.orchestratorService.appendProviderOperationalIntent({
+      requestId: ticket.id,
+      actorUserId: user.id,
+      expectedVendorId: ticket.vendorId,
+      intent: dto.intent,
+      note: dto.note,
+      source: 'vendor_execution',
+    });
+    await this.unifiedRequestsService.emitProviderOperationalSignalSockets(ticket.id);
+    return out;
   }
 
   async updateTicketStatus(user: AuthenticatedUser, ticketId: string, status: string, note?: string) {

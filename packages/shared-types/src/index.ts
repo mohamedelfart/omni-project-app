@@ -13,6 +13,11 @@ export type {
 } from './ticket-action';
 
 export type {
+  ProviderOperationalSignalReadModel,
+  TenantOperationalJourneyStep,
+} from './operational-experience';
+
+export type {
   CommandCenterBrainAutoAssignReadiness,
   CommandCenterBrainNextBestAction,
   CommandCenterBrainPriority,

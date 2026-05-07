@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '../../common/decorators/current-user.dec
 import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import { resolveUnifiedRequestExecutionSite } from '../unified-requests/execution-site.resolver';
+import { parseProviderOperationalSignalFromMetadata } from '../unified-requests/provider-operational-signal.read-model';
 import { parseValidDispatchBaseForWrite, resolveProviderOperationalLocation } from '../providers/provider-operational-location';
 import { DecisionSupportService } from './decision-support.service';
 import type { UpdateProviderDispatchBaseDto } from './dto/update-provider-dispatch-base.dto';
@@ -1983,6 +1984,7 @@ export class CommandCenterService {
           const brain: CommandCenterBrainReadModel = providerSuitability
             ? { ...brainBase, providerSuitability }
             : brainBase;
+          const providerOperationalSignal = parseProviderOperationalSignalFromMetadata(row.metadata);
           return {
             ...row,
             sla: this.pickSlaSnapshot(row),
@@ -1990,6 +1992,7 @@ export class CommandCenterService {
             escalationHistoryCount: escRow.escalationHistoryCount,
             ...attention,
             brain,
+            ...(providerOperationalSignal ? { providerOperationalSignal } : {}),
           };
         });
       });

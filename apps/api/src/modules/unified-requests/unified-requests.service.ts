@@ -20,6 +20,8 @@ import {
 } from './dto/unified-request.dto';
 import { REQUEST_SOCKET_EVENTS } from './unified-requests.events';
 import { UnifiedRequestsGateway } from './unified-requests.gateway';
+import { parseProviderOperationalSignalFromMetadata } from './provider-operational-signal.read-model';
+import { buildTenantOperationalJourney } from './tenant-operational-journey';
 import { toOperationalReadModelStatus, withOperationalStatusReadModel } from './unified-request-operational-status';
 
 @Injectable()
@@ -165,15 +167,30 @@ export class UnifiedRequestsService {
     }).then((items) => items.map((item) => this.toMinimalRequest(item)));
   }
 
-  getById(requestId: string, viewer?: AuthenticatedUser) {
-    return this.prisma.unifiedRequest
-      .findUniqueOrThrow({ where: { id: requestId }, include: { trackingEvents: true } })
-      .then((row) => {
-        if (viewer && this.isTenantLikeViewer(viewer)) {
-          return withOperationalStatusReadModel(row);
-        }
-        return row;
-      });
+  async getById(requestId: string, viewer?: AuthenticatedUser) {
+    const row = await this.prisma.unifiedRequest.findUniqueOrThrow({
+      where: { id: requestId },
+      include: { trackingEvents: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    let result: typeof row | ReturnType<typeof withOperationalStatusReadModel> = row;
+    if (viewer && this.isTenantLikeViewer(viewer)) {
+      result = withOperationalStatusReadModel(row);
+    }
+
+    if (
+      viewer
+      && this.isTenantLikeViewer(viewer)
+      && (row.tenantId === viewer.id || row.userId === viewer.id)
+    ) {
+      const actions = await this.ticketActionsService.listHistoryByTicketId(requestId);
+      return {
+        ...result,
+        operationalJourney: buildTenantOperationalJourney(actions, row.trackingEvents),
+      };
+    }
+
+    return result;
   }
 
   async getTicketActionHistory(requestId: string, user: AuthenticatedUser): Promise<TicketAction[]> {
@@ -724,6 +741,31 @@ export class UnifiedRequestsService {
         'role:command-center',
       ],
       { requestId: minimal.id, status: minimal.status },
+    );
+  }
+
+  /**
+   * After provider operational intent: same rooms as status updates, with optional advisory signal payload.
+   */
+  async emitProviderOperationalSignalSockets(requestId: string): Promise<void> {
+    const row = await this.prisma.unifiedRequest.findUnique({
+      where: { id: requestId },
+      select: { tenantId: true, vendorId: true, status: true, metadata: true },
+    });
+    if (!row) {
+      return;
+    }
+    const signal = parseProviderOperationalSignalFromMetadata(row.metadata);
+    const minimalStatus = toOperationalReadModelStatus(row.status);
+    const providerRooms = await this.providerUserRoomsForProviderId(row.vendorId);
+    this.unifiedRequestsGateway.emitToRooms(
+      REQUEST_SOCKET_EVENTS.updated,
+      [`user:${row.tenantId}`, ...providerRooms, 'role:admin', 'role:command-center'],
+      {
+        requestId,
+        status: minimalStatus,
+        ...(signal ? { providerOperationalSignal: signal } : {}),
+      },
     );
   }
 

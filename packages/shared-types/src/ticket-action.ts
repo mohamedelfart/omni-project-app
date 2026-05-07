@@ -15,6 +15,7 @@ export type TicketActionType =
   | 'ESCALATE'
   | 'PRIORITY_CHANGE'
   | 'STATUS_UPDATE'
+  | 'PROVIDER_OPERATIONAL_INTENT'
   | (string & {});
 
 /** Who performed the action (user, system job, integration, etc.) — opaque to this model. */
