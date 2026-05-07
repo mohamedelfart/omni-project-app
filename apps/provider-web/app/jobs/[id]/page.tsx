@@ -4,7 +4,13 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 
-import { fetchVendorJobsList, postVendorJobStatus } from '../../../lib/vendor-jobs-client';
+import {
+  fetchVendorJobsList,
+  postVendorJobStatus,
+  postVendorOperationalSignal,
+  PROVIDER_OPERATIONAL_SIGNALS,
+  type ProviderOperationalSignal,
+} from '../../../lib/vendor-jobs-client';
 import { getAccessToken } from '../../../lib/vendor-session';
 import { useVendorRealtimeRefetch } from '../../../lib/useVendorRealtimeRefetch';
 import type { VendorJob } from '../../../lib/vendor-types';
@@ -20,6 +26,19 @@ export default function JobDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [signalBusy, setSignalBusy] = useState<ProviderOperationalSignal | null>(null);
+  const [signalError, setSignalError] = useState<string | null>(null);
+  const [signalSuccess, setSignalSuccess] = useState<string | null>(null);
+
+  const defaultSignalNotes: Record<ProviderOperationalSignal, string> = {
+    ARRIVED_ON_SITE: 'Provider arrived on site',
+    RUNNING_LATE: 'Traffic delay reported',
+    TENANT_UNREACHABLE: 'Tenant did not respond to contact attempt',
+    BLOCKED_ACCESS: 'Security gate closed',
+    REQUEST_SUPPORT: 'Provider requests command center support',
+    VIEWING_STARTED: 'Viewing started with tenant',
+    VIEWING_COMPLETED: 'Viewing completed',
+  };
 
   const resolveFromList = useCallback(async () => {
     if (!getAccessToken()) {
@@ -63,6 +82,22 @@ export default function JobDetailPage() {
       setError(err instanceof Error ? err.message : 'Update failed');
     } finally {
       setActionBusy(false);
+    }
+  };
+
+  const runSignal = async (intent: ProviderOperationalSignal) => {
+    if (!jobId) return;
+    setSignalBusy(intent);
+    setSignalError(null);
+    setSignalSuccess(null);
+    try {
+      await postVendorOperationalSignal(jobId, intent, defaultSignalNotes[intent]);
+      setSignalSuccess(`${intent.replace(/_/g, ' ')} sent`);
+      await resolveFromList();
+    } catch (err) {
+      setSignalError(err instanceof Error ? err.message : 'Signal failed');
+    } finally {
+      setSignalBusy(null);
     }
   };
 
@@ -169,6 +204,49 @@ export default function JobDetailPage() {
                 ) : null}
                 {job.status === 'completed' ? (
                   <p style={{ margin: 0, color: '#047857', fontSize: 14, fontWeight: 600 }}>Job completed.</p>
+                ) : null}
+              </div>
+
+              <div
+                style={{
+                  marginTop: 8,
+                  borderTop: '1px solid #E2E8F0',
+                  paddingTop: 12,
+                  display: 'grid',
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#334155' }}>
+                  Operational signals
+                  <span style={{ fontWeight: 500, color: '#64748B' }}> (advisory only)</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {PROVIDER_OPERATIONAL_SIGNALS.map((intent) => (
+                    <button
+                      key={intent}
+                      type="button"
+                      disabled={Boolean(signalBusy) || actionBusy}
+                      onClick={() => void runSignal(intent)}
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 7,
+                        border: '1px solid #CBD5E1',
+                        background: signalBusy === intent ? '#E2E8F0' : '#F8FAFC',
+                        color: '#0F172A',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: signalBusy || actionBusy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {signalBusy === intent ? 'Sending…' : intent.replace(/_/g, ' ')}
+                    </button>
+                  ))}
+                </div>
+                {signalSuccess ? (
+                  <div style={{ fontSize: 12, color: '#065F46', fontWeight: 600 }}>{signalSuccess}</div>
+                ) : null}
+                {signalError ? (
+                  <div style={{ fontSize: 12, color: '#991B1B', fontWeight: 600 }}>{signalError}</div>
                 ) : null}
               </div>
             </div>
