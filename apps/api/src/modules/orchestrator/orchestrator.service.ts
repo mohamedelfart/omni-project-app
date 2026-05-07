@@ -17,6 +17,7 @@ import {
 } from '../unified-requests/execution-site.resolver';
 import { resolveProviderOperationalLocation } from '../providers/provider-operational-location';
 import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
+import type { ProviderOperationalIntentCode } from './provider-operational-intents';
 
 @Injectable()
 export class OrchestratorService {
@@ -1090,6 +1091,123 @@ export class OrchestratorService {
       source: 'vendor_execution',
       vendorStatusString: status,
       note,
+    });
+  }
+
+  /**
+   * Advisory provider operational signal (no UnifiedRequest.status change, no SLA breach/escalation).
+   * Appends TicketAction + audit + tracking; merges lightweight Command Center visibility under metadata.providerOperationalAttention.
+   */
+  async appendProviderOperationalIntent(params: {
+    requestId: string;
+    actorUserId: string;
+    expectedVendorId: string;
+    intent: ProviderOperationalIntentCode;
+    note?: string;
+    source: 'vendor_execution';
+  }) {
+    const existingRequest = await this.prisma.unifiedRequest.findUnique({
+      where: { id: params.requestId },
+      select: {
+        id: true,
+        status: true,
+        vendorId: true,
+        country: true,
+        metadata: true,
+      },
+    });
+
+    if (!existingRequest) {
+      throw new BadRequestException('Request not found');
+    }
+
+    this.assertProviderAssignmentForMutation(existingRequest, params.expectedVendorId);
+
+    if (this.isTerminalRequestStatus(existingRequest.status)) {
+      throw new ConflictException({
+        code: 'PROVIDER_MUTATION_BLOCKED_TERMINAL',
+        message: `Provider cannot signal while request is in terminal state ${existingRequest.status}`,
+      });
+    }
+
+    const recordedAt = new Date().toISOString();
+    const trimmedNote = params.note?.trim();
+    const attentionSlice = {
+      lastIntent: params.intent,
+      lastIntentAt: recordedAt,
+      ...(trimmedNote ? { lastNote: trimmedNote } : {}),
+    };
+
+    const mergedMetadata = this.mergeProviderOperationalAttentionMetadata(existingRequest.metadata, attentionSlice);
+
+    await this.prisma.unifiedRequest.update({
+      where: { id: params.requestId },
+      data: { metadata: mergedMetadata },
+    });
+
+    await this.ticketActionsService.createAction({
+      ticketId: params.requestId,
+      actionType: 'PROVIDER_OPERATIONAL_INTENT',
+      actorType: 'provider',
+      actorId: params.actorUserId,
+      payload: this.toJson({
+        intent: params.intent,
+        note: trimmedNote ?? undefined,
+        source: params.source,
+        advisory: true,
+        recordedAt,
+      }),
+    });
+
+    await this.prisma.unifiedRequestTrackingEvent.create({
+      data: {
+        unifiedRequestId: params.requestId,
+        actorUserId: params.actorUserId,
+        actorType: 'provider',
+        title: `Provider operational intent: ${params.intent}`,
+        description: trimmedNote ?? undefined,
+        status: existingRequest.status as never,
+        metadata: this.toJson({
+          intent: params.intent,
+          source: params.source,
+          advisory: true,
+        }),
+      },
+    });
+
+    await this.auditTrailService.write({
+      actorUserId: params.actorUserId,
+      action: 'PROVIDER_OPERATIONAL_INTENT_SIGNALLED',
+      entity: 'UnifiedRequest',
+      entityId: params.requestId,
+      countryCode: existingRequest.country,
+      metadata: {
+        intent: params.intent,
+        ...(trimmedNote ? { note: trimmedNote } : {}),
+        source: params.source,
+      },
+    });
+
+    return {
+      ticketId: params.requestId,
+      intent: params.intent,
+      recordedAt,
+      providerOperationalAttention: attentionSlice,
+    };
+  }
+
+  private mergeProviderOperationalAttentionMetadata(
+    existingMetadata: unknown,
+    attentionPatch: Record<string, unknown>,
+  ): Prisma.InputJsonValue {
+    const base = this.toRecord(existingMetadata);
+    const prev = this.toRecord(base.providerOperationalAttention);
+    return this.toJson({
+      ...base,
+      providerOperationalAttention: {
+        ...prev,
+        ...attentionPatch,
+      },
     });
   }
 
