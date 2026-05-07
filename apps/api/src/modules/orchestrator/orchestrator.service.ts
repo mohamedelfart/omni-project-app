@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CommandCenterStatus, Prisma, Provider, ServiceRequestStatus, UnifiedRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditTrailService } from '../audit-trail/audit-trail.service';
@@ -10,6 +16,7 @@ import {
   type UnifiedRequestExecutionSite,
 } from '../unified-requests/execution-site.resolver';
 import { resolveProviderOperationalLocation } from '../providers/provider-operational-location';
+import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 
 @Injectable()
 export class OrchestratorService {
@@ -18,6 +25,7 @@ export class OrchestratorService {
     private readonly integrationHubService: IntegrationHubService,
     private readonly auditTrailService: AuditTrailService,
     private readonly operatorPolicyService: OperatorPolicyService,
+    private readonly ticketActionsService: TicketActionsService,
   ) {}
 
   private toJson(value: unknown): Prisma.InputJsonValue {
@@ -41,6 +49,65 @@ export class OrchestratorService {
 
   private isTerminalRequestStatus(status: UnifiedRequestStatus) {
     return ['COMPLETED', 'CANCELLED', 'REJECTED', 'FAILED'].includes(status);
+  }
+
+  private assertProviderAssignmentForMutation(
+    existing: { vendorId: string | null },
+    expectedVendorId: string,
+  ): void {
+    if (existing.vendorId !== expectedVendorId) {
+      throw new ForbiddenException('Request is not assigned to this provider');
+    }
+  }
+
+  /**
+   * Allowed provider-driven progress on assigned execution (vendor + realtime funnels).
+   * Idempotent same-status updates are allowed (e.g. vendor "ACCEPTED" while already ASSIGNED).
+   */
+  private isAllowedProviderUnifiedStatusTransition(from: UnifiedRequestStatus, to: UnifiedRequestStatus): boolean {
+    if (from === to) {
+      return true;
+    }
+    if (this.isTerminalRequestStatus(from)) {
+      return false;
+    }
+    if (this.isTerminalRequestStatus(to) && to !== 'COMPLETED') {
+      return false;
+    }
+    switch (from) {
+      case 'ASSIGNED':
+        return ['EN_ROUTE', 'IN_PROGRESS', 'COMPLETED'].includes(to);
+      case 'EN_ROUTE':
+        return ['IN_PROGRESS', 'COMPLETED'].includes(to);
+      case 'IN_PROGRESS':
+        return to === 'COMPLETED';
+      default:
+        return false;
+    }
+  }
+
+  private async appendProviderStatusTicketAction(params: {
+    ticketId: string;
+    actorUserId: string;
+    fromUnified: UnifiedRequestStatus;
+    toUnified: UnifiedRequestStatus;
+    source: 'vendor_execution' | 'realtime';
+  }): Promise<void> {
+    const fromOperational = toOperationalReadModelStatus(params.fromUnified);
+    const toOperational = toOperationalReadModelStatus(params.toUnified);
+    await this.ticketActionsService.createAction({
+      ticketId: params.ticketId,
+      actionType: 'STATUS_UPDATE',
+      actorType: 'provider',
+      actorId: params.actorUserId,
+      payload: this.toJson({
+        from: fromOperational,
+        to: toOperational,
+        fromUnified: params.fromUnified,
+        toUnified: params.toUnified,
+        source: params.source,
+      }),
+    });
   }
 
   private toCommandCenterStatus(status: string): CommandCenterStatus {
@@ -870,18 +937,31 @@ export class OrchestratorService {
     return { changed: didMutate, request };
   }
 
-  async updateRequestStatusFromVendor(requestId: string, actorUserId: string, status: string, note?: string) {
-    const mappedStatus = this.integrationHubService.normalizeInboundProviderStatus(status, note);
-    if (mappedStatus.coreStatus === 'UNDER_REVIEW') {
-      throw new BadRequestException('Unsupported vendor status transition');
-    }
-
-    const normalizedStatus = mappedStatus.coreStatus as UnifiedRequestStatus;
-    const requestStatus = this.toServiceRequestStatus(normalizedStatus);
-    const title = mappedStatus.actorEventTitle;
-    const description = mappedStatus.actorEventDescription;
+  /**
+   * Canonical provider-originated status mutation (vendor PATCH + realtime POST).
+   * Applies ownership checks, terminal guards, transition matrix, SLA + commandCenterStatus,
+   * viewing projections, tracking, audit, and STATUS_UPDATE TicketAction when status changes.
+   */
+  async mutateProviderRequestStatus(
+    input:
+      | {
+          requestId: string;
+          actorUserId: string;
+          expectedVendorId: string;
+          source: 'vendor_execution';
+          vendorStatusString: string;
+          note?: string;
+        }
+      | {
+          requestId: string;
+          actorUserId: string;
+          expectedVendorId: string;
+          source: 'realtime';
+          operationalTarget: 'in_progress' | 'completed';
+        },
+  ) {
     const existingRequest = await this.prisma.unifiedRequest.findUnique({
-      where: { id: requestId },
+      where: { id: input.requestId },
       include: { viewingRequest: { include: { assignment: true } } },
     });
 
@@ -889,13 +969,45 @@ export class OrchestratorService {
       throw new BadRequestException('Request not found');
     }
 
+    this.assertProviderAssignmentForMutation(existingRequest, input.expectedVendorId);
+
+    if (this.isTerminalRequestStatus(existingRequest.status)) {
+      throw new ConflictException({
+        code: 'PROVIDER_MUTATION_BLOCKED_TERMINAL',
+        message: `Provider cannot change status while request is in terminal state ${existingRequest.status}`,
+      });
+    }
+
+    const mappedStatus =
+      input.source === 'vendor_execution'
+        ? this.integrationHubService.normalizeInboundProviderStatus(input.vendorStatusString, input.note)
+        : this.integrationHubService.normalizeInboundProviderStatus(
+            input.operationalTarget === 'in_progress' ? 'IN_PROGRESS' : 'COMPLETED',
+          );
+
+    if (mappedStatus.coreStatus === 'UNDER_REVIEW') {
+      throw new BadRequestException('Unsupported vendor status transition');
+    }
+
+    const normalizedStatus = mappedStatus.coreStatus as UnifiedRequestStatus;
+
+    if (!this.isAllowedProviderUnifiedStatusTransition(existingRequest.status, normalizedStatus)) {
+      throw new BadRequestException(
+        `Invalid provider status transition: ${existingRequest.status} -> ${normalizedStatus}`,
+      );
+    }
+
+    const requestStatus = this.toServiceRequestStatus(normalizedStatus);
+    const title = mappedStatus.actorEventTitle;
+    const description = mappedStatus.actorEventDescription;
+
     const slaTruth = this.buildUnifiedRequestSlaTruthFields(normalizedStatus, {
       firstResponseAt: existingRequest.firstResponseAt,
       completedAt: existingRequest.completedAt,
     });
 
     const request = await this.prisma.unifiedRequest.update({
-      where: { id: requestId },
+      where: { id: input.requestId },
       data: {
         status: normalizedStatus as never,
         commandCenterStatus: this.toCommandCenterStatus(mappedStatus.commandCenterStatus),
@@ -916,10 +1028,12 @@ export class OrchestratorService {
           where: { viewingRequestId: existingRequest.viewingRequest.id },
           data: {
             status: requestStatus,
-            startedAt: requestStatus === 'IN_PROGRESS'
-              ? existingRequest.viewingRequest.assignment.startedAt ?? new Date()
-              : existingRequest.viewingRequest.assignment.startedAt,
-            completedAt: requestStatus === 'COMPLETED' ? new Date() : existingRequest.viewingRequest.assignment.completedAt,
+            startedAt:
+              requestStatus === 'IN_PROGRESS'
+                ? existingRequest.viewingRequest.assignment.startedAt ?? new Date()
+                : existingRequest.viewingRequest.assignment.startedAt,
+            completedAt:
+              requestStatus === 'COMPLETED' ? new Date() : existingRequest.viewingRequest.assignment.completedAt,
           },
         });
       }
@@ -927,8 +1041,8 @@ export class OrchestratorService {
 
     await this.prisma.unifiedRequestTrackingEvent.create({
       data: {
-        unifiedRequestId: requestId,
-        actorUserId,
+        unifiedRequestId: input.requestId,
+        actorUserId: input.actorUserId,
         actorType: 'provider',
         title,
         description,
@@ -937,15 +1051,46 @@ export class OrchestratorService {
     });
 
     await this.auditTrailService.write({
-      actorUserId,
+      actorUserId: input.actorUserId,
       action: 'VENDOR_TICKET_STATUS_UPDATED',
       entity: 'UnifiedRequest',
-      entityId: requestId,
+      entityId: input.requestId,
       countryCode: request.country,
-      metadata: { status: normalizedStatus, note },
+      metadata: {
+        status: normalizedStatus,
+        ...(input.source === 'vendor_execution' && input.note !== undefined ? { note: input.note } : {}),
+        source: input.source,
+      },
     });
 
+    if (existingRequest.status !== normalizedStatus) {
+      await this.appendProviderStatusTicketAction({
+        ticketId: input.requestId,
+        actorUserId: input.actorUserId,
+        fromUnified: existingRequest.status,
+        toUnified: normalizedStatus,
+        source: input.source,
+      });
+    }
+
     return request;
+  }
+
+  async updateRequestStatusFromVendor(
+    requestId: string,
+    actorUserId: string,
+    expectedVendorId: string,
+    status: string,
+    note?: string,
+  ) {
+    return this.mutateProviderRequestStatus({
+      requestId,
+      actorUserId,
+      expectedVendorId,
+      source: 'vendor_execution',
+      vendorStatusString: status,
+      note,
+    });
   }
 
   async moveRequestToAwaitingPayment(params: {

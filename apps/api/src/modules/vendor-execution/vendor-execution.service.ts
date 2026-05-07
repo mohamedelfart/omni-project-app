@@ -4,6 +4,7 @@ import { OrchestratorService } from '../orchestrator/orchestrator.service';
 import { TenantPerksService } from '../notifications/tenant-perks.service';
 import { OperatorPolicyService } from '../operator-policy/operator-policy.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 
 @Injectable()
 export class VendorExecutionService {
@@ -12,6 +13,7 @@ export class VendorExecutionService {
     private readonly orchestratorService: OrchestratorService,
     private readonly tenantPerksService: TenantPerksService,
     private readonly operatorPolicyService: OperatorPolicyService,
+    private readonly unifiedRequestsService: UnifiedRequestsService,
   ) {}
 
   private async providerIdsForUser(userId: string): Promise<string[]> {
@@ -110,7 +112,15 @@ export class VendorExecutionService {
       throw new ForbiddenException('Ticket is not assigned to your provider account');
     }
 
-    const updated = await this.orchestratorService.updateRequestStatusFromVendor(ticket.id, user.id, status, note);
+    const updated = await this.orchestratorService.updateRequestStatusFromVendor(
+      ticket.id,
+      user.id,
+      ticket.vendorId,
+      status,
+      note,
+    );
+
+    await this.unifiedRequestsService.emitProviderRealtimeSocketsAfterMutation(updated);
 
     if (updated.status === 'COMPLETED') {
       const perkPolicy = this.operatorPolicyService.getPerkPolicy(ticket.country);

@@ -676,35 +676,44 @@ export class UnifiedRequestsService {
 
     const existing = await this.prisma.unifiedRequest.findUniqueOrThrow({
       where: { id: requestId },
-      select: { id: true, vendorId: true, status: true, firstResponseAt: true, completedAt: true },
+      select: { id: true, vendorId: true, status: true },
     });
 
     if (!existing.vendorId || !scopedProviderIds.includes(existing.vendorId)) {
       throw new ForbiddenException('Request is not assigned to this vendor');
     }
 
-    const current = toOperationalReadModelStatus(existing.status);
-    const isValidTransition = (
-      (current === 'assigned' && dto.status === 'in_progress')
-      || (current === 'in_progress' && dto.status === 'completed')
-    );
-    if (!isValidTransition) {
-      throw new BadRequestException(`Invalid status transition: ${current} -> ${dto.status}`);
+    if (dto.status !== 'in_progress' && dto.status !== 'completed') {
+      throw new BadRequestException('Invalid status for provider realtime update');
     }
 
-    const nextStatus = this.fromMinimalStatus(dto.status);
-    const updated = await this.prisma.unifiedRequest.update({
-      where: { id: requestId },
-      data: {
-        status: nextStatus,
-        ...this.buildUnifiedRequestSlaTruthFields(nextStatus, {
-          firstResponseAt: existing.firstResponseAt,
-          completedAt: existing.completedAt,
-        }),
-      },
+    const updated = await this.orchestratorService.mutateProviderRequestStatus({
+      requestId,
+      actorUserId: user.id,
+      expectedVendorId: existing.vendorId,
+      source: 'realtime',
+      operationalTarget: dto.status,
     });
 
-    const minimal = this.toMinimalRequest(updated);
+    await this.emitProviderRealtimeSocketsAfterMutation(updated);
+    return this.toMinimalRequest(updated);
+  }
+
+  /**
+   * Emits `request.updated` to tenant, provider rooms, admin, and command-center after a provider status mutation.
+   */
+  async emitProviderRealtimeSocketsAfterMutation(request: {
+    id: string;
+    tenantId: string;
+    vendorId: string | null;
+    requestType: string;
+    status: UnifiedRequestStatus;
+    priority: RequestPriority;
+    propertyIds: string[];
+    createdAt: Date;
+    updatedAt: Date;
+  }): Promise<void> {
+    const minimal = this.toMinimalRequest(request);
     const providerRooms = await this.providerUserRoomsForProviderId(minimal.vendorId);
     this.unifiedRequestsGateway.emitToRooms(
       REQUEST_SOCKET_EVENTS.updated,
@@ -716,31 +725,6 @@ export class UnifiedRequestsService {
       ],
       { requestId: minimal.id, status: minimal.status },
     );
-    this.logTicketActionNoThrow({
-      ticketId: requestId,
-      actionType: 'CHANGE_STATUS',
-      actorType: 'provider',
-      actorId: user.id,
-      payload: {
-        fromStatus: current,
-        toStatus: dto.status,
-        providerId: existing.vendorId,
-      },
-    });
-    return minimal;
-  }
-
-  private logTicketActionNoThrow(input: {
-    ticketId: string;
-    actionType: string;
-    actorType: string;
-    actorId: string;
-    payload?: Prisma.InputJsonValue;
-  }) {
-    void this.ticketActionsService.createAction(input).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown logging error';
-      console.warn(`TicketAction logging failed: ${message}`);
-    });
   }
 
   /**

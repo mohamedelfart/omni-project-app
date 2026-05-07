@@ -9,6 +9,7 @@ export function toOperationalReadModelStatus(status: UnifiedRequestStatus): Requ
   switch (status) {
     case UnifiedRequestStatus.ASSIGNED:
       return 'assigned';
+    case UnifiedRequestStatus.EN_ROUTE:
     case UnifiedRequestStatus.IN_PROGRESS:
       return 'in_progress';
     case UnifiedRequestStatus.COMPLETED:
