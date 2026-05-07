@@ -27,3 +27,15 @@ export function resolveProviderOperationalLocation(input: {
   }
   return { coords: null, source: 'none' };
 }
+
+/**
+ * Canonical dispatch-base write validation (A1.7 Step 3C).
+ * Rejects non-finite pairs, out-of-range coordinates, and (0,0) null-island sentinel.
+ */
+export function parseValidDispatchBaseForWrite(lat: unknown, lng: unknown): { lat: number; lng: number } | null {
+  const p = parseFiniteCoordPair(lat, lng);
+  if (!p) return null;
+  if (p.lat < -90 || p.lat > 90 || p.lng < -180 || p.lng > 180) return null;
+  if (p.lat === 0 && p.lng === 0) return null;
+  return p;
+}

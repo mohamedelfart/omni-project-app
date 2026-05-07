@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { BookingStatus, PaymentStatus, Prisma, PropertyStatus, UnifiedRequestStatus } from '@prisma/client';
 import type {
   CommandCenterBrainAutoAssignReadiness,
@@ -17,8 +17,9 @@ import type { AuthenticatedUser } from '../../common/decorators/current-user.dec
 import { TicketActionsService } from '../ticket-actions/ticket-actions.service';
 import { UnifiedRequestsService } from '../unified-requests/unified-requests.service';
 import { resolveUnifiedRequestExecutionSite } from '../unified-requests/execution-site.resolver';
-import { resolveProviderOperationalLocation } from '../providers/provider-operational-location';
+import { parseValidDispatchBaseForWrite, resolveProviderOperationalLocation } from '../providers/provider-operational-location';
 import { DecisionSupportService } from './decision-support.service';
+import type { UpdateProviderDispatchBaseDto } from './dto/update-provider-dispatch-base.dto';
 
 type DashboardFilters = {
   countryCode?: string;
@@ -2165,6 +2166,103 @@ export class CommandCenterService {
 
   listProviders() {
     return this.prisma.provider.findMany({ include: { adapterConfigs: true, providerProfiles: true } });
+  }
+
+  /**
+   * A1.7 Step 3C — admin/command-center only: set canonical Provider dispatch base (no routing impact).
+   */
+  async updateProviderDispatchBase(
+    user: AuthenticatedUser,
+    providerIdRaw: string,
+    body: UpdateProviderDispatchBaseDto,
+  ) {
+    const providerId = typeof providerIdRaw === 'string' ? providerIdRaw.trim() : '';
+    if (!providerId) {
+      throw new BadRequestException('providerId is required');
+    }
+
+    const coords = parseValidDispatchBaseForWrite(body.lat, body.lng);
+    if (!coords) {
+      throw new BadRequestException(
+        'Invalid dispatch base coordinates: require finite lat/lng within [-90,90] and [-180,180], and not (0,0).',
+      );
+    }
+
+    const existing = await this.prisma.provider.findUnique({
+      where: { id: providerId },
+      select: {
+        id: true,
+        countryCode: true,
+        dispatchBaseLat: true,
+        dispatchBaseLng: true,
+        dispatchBaseLabel: true,
+        dispatchBaseSource: true,
+        dispatchBaseUpdatedAt: true,
+        dispatchBaseSetByUserId: true,
+      },
+    });
+    if (!existing) {
+      throw new NotFoundException('Provider not found');
+    }
+
+    const labelRaw = typeof body.label === 'string' ? body.label.trim() : '';
+    const label = labelRaw.length > 0 ? labelRaw.slice(0, 256) : null;
+
+    const sourceRaw = typeof body.source === 'string' ? body.source.trim() : '';
+    const dispatchBaseSource =
+      sourceRaw.length > 0 ? sourceRaw.slice(0, 128) : 'command-center-manual';
+
+    const previous = {
+      dispatchBaseLat: existing.dispatchBaseLat,
+      dispatchBaseLng: existing.dispatchBaseLng,
+      dispatchBaseLabel: existing.dispatchBaseLabel,
+      dispatchBaseSource: existing.dispatchBaseSource,
+      dispatchBaseUpdatedAt: existing.dispatchBaseUpdatedAt?.toISOString() ?? null,
+      dispatchBaseSetByUserId: existing.dispatchBaseSetByUserId,
+    };
+
+    const now = new Date();
+    const updated = await this.prisma.provider.update({
+      where: { id: providerId },
+      data: {
+        dispatchBaseLat: coords.lat,
+        dispatchBaseLng: coords.lng,
+        dispatchBaseLabel: label,
+        dispatchBaseSource,
+        dispatchBaseUpdatedAt: now,
+        dispatchBaseSetByUserId: user.id,
+      },
+      select: {
+        id: true,
+        dispatchBaseLat: true,
+        dispatchBaseLng: true,
+        dispatchBaseLabel: true,
+        dispatchBaseSource: true,
+        dispatchBaseUpdatedAt: true,
+        dispatchBaseSetByUserId: true,
+      },
+    });
+
+    await this.auditTrailService.write({
+      actorUserId: user.id,
+      action: 'PROVIDER_DISPATCH_BASE_UPDATED',
+      entity: 'Provider',
+      entityId: providerId,
+      countryCode: existing.countryCode,
+      metadata: {
+        previous,
+        next: {
+          dispatchBaseLat: updated.dispatchBaseLat,
+          dispatchBaseLng: updated.dispatchBaseLng,
+          dispatchBaseLabel: updated.dispatchBaseLabel,
+          dispatchBaseSource: updated.dispatchBaseSource,
+          dispatchBaseUpdatedAt: updated.dispatchBaseUpdatedAt?.toISOString() ?? null,
+          dispatchBaseSetByUserId: updated.dispatchBaseSetByUserId,
+        },
+      },
+    });
+
+    return updated;
   }
 
   listAuditLogs(query?: { action?: string; entity?: string; countryCode?: string; severity?: 'INFO' | 'WARNING' | 'HIGH' | 'CRITICAL' }) {

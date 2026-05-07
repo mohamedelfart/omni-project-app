@@ -7,6 +7,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { BookingCommandService } from '../booking/booking-command.service';
 import { PropertyCommandService } from '../properties/property-command.service';
 import { CommandCenterService } from './command-center.service';
+import { UpdateProviderDispatchBaseDto } from './dto/update-provider-dispatch-base.dto';
 
 @ApiTags('command-center')
 @ApiBearerAuth()
@@ -108,6 +109,15 @@ export class CommandCenterController {
   @Get('providers')
   listProviders() {
     return this.commandCenterService.listProviders();
+  }
+
+  @Post('providers/:providerId/dispatch-base')
+  updateProviderDispatchBase(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('providerId') providerId: string,
+    @Body() body: UpdateProviderDispatchBaseDto,
+  ) {
+    return this.commandCenterService.updateProviderDispatchBase(user, providerId, body);
   }
 
   @Get('audit-logs')
